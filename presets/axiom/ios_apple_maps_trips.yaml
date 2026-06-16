@@ -1,0 +1,82 @@
+name: AXIOM iOS - Apple Maps Trips
+version: "1.0"
+parser:
+  name: axiom_ios_apple_maps_trips
+  version: "1.0"
+
+source_tier: secondary
+
+selectors:
+  - source_type: csv
+    file_name: "Apple Maps Trips.csv"
+
+extract:
+  csv:
+    delimiter: ","
+    encoding: "utf-8-sig"
+
+expected_columns:
+  - Record
+  - "Origin Address"
+  - "Destination Address"
+  - "Search Term"
+  - "Origin Latitude"
+  - "Origin Longitude"
+  - "Destination Latitude"
+  - "Destination Longitude"
+  - "Trip ID"
+  - "Record Date/Time - UTC+00:00 (dd.MM.yyyy)"
+  - "Start Date/Time - UTC+00:00 (dd.MM.yyyy)"
+  - "End Date/Time - UTC+00:00 (dd.MM.yyyy)"
+  - Source
+  - Location
+  - "Item ID"
+
+source_row_id:
+  from: "Item ID"
+
+common:
+  entity: {value: device}
+  entity_type: {value: device}
+  linked_entity: {from: "Trip ID"}
+  tool_label: {value: ZRTLEARNEDLOCATIONOFINTERESTTRANSITIONMO}
+  record_locator: {from: "Location"}
+  source_file_path: {from: "Source"}
+
+# Searches, not observed travel: origin/destination are referenced places and the
+# Start/End are the planned (intended) trip times. Record is the row's DB write/update
+# time (recorded_at), not a search action. Three assertions per source row, shared id.
+# Timestamp columns use wildcards because the header embeds the export timezone.
+assertions:
+  # Planned origin.
+  - latitude_wgs84: {from: "Origin Latitude", pipe: [{cast: float}]}
+    longitude_wgs84: {from: "Origin Longitude", pipe: [{cast: float}]}
+    raw_position: {from: "Origin Address"}
+    position_type: {value: origin}
+    entity_position_link: references
+    temporal:
+      - instant: "Start Date/Time - * (dd.MM.yyyy)"
+        pipe: [{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}]
+        entity_time_link: intended_for
+        spatial_temporal_link: instant
+
+  # Planned destination.
+  - latitude_wgs84: {from: "Destination Latitude", pipe: [{cast: float}]}
+    longitude_wgs84: {from: "Destination Longitude", pipe: [{cast: float}]}
+    raw_position: {from: "Destination Address"}
+    position_type: {value: destination}
+    entity_position_link: references
+    temporal:
+      - instant: "End Date/Time - * (dd.MM.yyyy)"
+        pipe: [{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}]
+        entity_time_link: intended_for
+        spatial_temporal_link: instant
+
+  # The DB record write/update time — provenance, not an action or a presence.
+  - position_type: {value: record}
+    entity_position_link: unknown
+    temporal:
+      - instant: "Record Date/Time - * (dd.MM.yyyy)"
+        pipe: [{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}]
+        entity_time_link: recorded_at
+        spatial_temporal_link: instant

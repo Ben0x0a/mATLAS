@@ -1,0 +1,64 @@
+name: AXIOM iOS - Significant Locations Visits
+version: "1.0"
+parser:
+  name: axiom_ios_significant_locations_visits
+  version: "1.0"
+
+source_tier: secondary
+
+selectors:
+  - source_type: csv
+    file_name: "Significant Locations Visits.csv"
+
+extract:
+  csv:
+    delimiter: ","
+    encoding: "utf-8-sig"
+
+expected_columns:
+  - Record
+  - Address
+  - City
+  - Country
+  - "Vicinity Entry Date/Time"
+  - "Vicinity Exit Date/Time"
+  - "Created Date/Time - UTC+00:00 (dd.MM.yyyy)"
+  - Latitude
+  - Longitude
+  - Accuracy
+  - Source
+  - Location
+  - "Deleted source"
+  - "Recovery method"
+  - "Item ID"
+
+source_row_id:
+  from: "Item ID"
+
+common:
+  entity: {value: device}
+  entity_type: {value: device}
+  tool_label: {value: ZRTLEARNEDLOCATIONOFINTERESTVISITMO}
+  position_source: {value: significant_location}
+  record_locator: {from: "Location"}
+  source_file_path: {from: "Source"}
+  raw_position: {from: "Address"}
+
+# One source row -> a visit interval AND the record-creation instant (the
+# entry/exit/created case). Spatial declared once; two temporal specs.
+assertions:
+  - latitude_wgs84: {from: Latitude, pipe: [{cast: float}]}
+    longitude_wgs84: {from: Longitude, pipe: [{cast: float}]}
+    horizontal_accuracy_m: {from: Accuracy, pipe: [{cast: float}]}
+    entity_position_link: at
+    temporal:
+      - interval:
+          lower: "Vicinity Entry Date/Time"
+          upper: "Vicinity Exit Date/Time"
+        pipe: [{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}]
+        entity_time_link: observed_at
+        spatial_temporal_link: continuous_during_interval
+      - instant: "Created Date/Time - * (dd.MM.yyyy)"
+        pipe: [{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}]
+        entity_time_link: recorded_at
+        spatial_temporal_link: instant

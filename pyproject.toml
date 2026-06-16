@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "model-atlas"
+version = "0.1.0"
+description = "Declarative spatio-temporal forensic data processing from CSV, Excel, and SQLite sources into a 40-column assertion model."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
+    "Topic :: System :: Recovery Tools",
+]
+dependencies = [
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+gui = [
+    "PySide6>=6.7",
+]
+
+[project.scripts]
+matlas = "launcher.cli:run"
+matlas-gui = "launcher.gui:run"
+
+# Explicit package list: the repo uses a flat layout with three top-level
+# packages. Auto-discovery refuses flat-layout multi-package projects, so we
+# list them here.
+[tool.setuptools]
+packages = [
+    "gui",
+    "gui.widgets",
+    "launcher",
+    "model_atlas",
+    "model_atlas.model",
+    "model_atlas.presets",
+    "model_atlas.sources",
+    "model_atlas.sqlite",
+    "model_atlas.transforms",
+]
+
+[tool.setuptools.package-data]
+gui = ["*.ui", "assets/*"]
