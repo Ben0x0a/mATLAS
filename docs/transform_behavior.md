@@ -72,7 +72,15 @@ All built-ins treat `None` as a no-op so empty cells stay empty unless an
 authoring choice explicitly raises an error.
 
 `parse_datetime` writes Unix nanoseconds. A naive datetime is interpreted using
-`tz_offset_hours`, defaulting to UTC.
+`tz_offset_hours` (a number of hours or an offset string like `"UTC+02:00"`),
+defaulting to UTC; a format containing `%z` is honoured as parsed.
+
+When a temporal spec captures `time_zone` (for example via `from_name` +
+`regex_extract` on a header, or a constant), the engine feeds that offset into the
+spec's `parse_datetime` step automatically — so a zone embedded in a column header
+is *applied*, not merely recorded. An explicit `tz_offset_hours` or a `%z` in the
+format takes precedence, and an unparseable captured zone is ignored (the value
+still parses as UTC).
 
 ## Temporal Expansion
 

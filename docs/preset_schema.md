@@ -205,7 +205,7 @@ Pipes run in order and treat `None` as a no-op.
 | Pipe | Example | Description |
 | --- | --- | --- |
 | `cast` | `{cast: float}` | Convert to `int`, `float`, `str`, or `bool`. |
-| `parse_datetime` | `{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}` | Parse with `datetime.strptime` and write Unix nanoseconds. |
+| `parse_datetime` | `{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}` | Parse with `datetime.strptime` and write Unix nanoseconds. A naive value uses `tz_offset_hours` (number or string like `"UTC+02:00"`); a temporal spec's captured `time_zone` is auto-applied. |
 | `arithmetic` | `{arithmetic: "value * 3.6"}` | Restricted expression with `value` bound. |
 | `lookup` | `{lookup: {1: GNSS, 4: WiFi}, on_unknown: raw}` | Map encoded values. |
 | `regex_extract` | `{regex_extract: "(UTC[+-][0-9]{2}:[0-9]{2})"}` | Return one regex group. |

@@ -242,6 +242,12 @@ Formatted string (most AXIOM/CSV exports):
 pipe: [{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}]
 ```
 
+For a non-UTC export, declare the offset — either statically
+(`{parse_datetime: "...", tz_offset_hours: "UTC+02:00"}`), with `%z` in the format,
+or by capturing `time_zone` in the same temporal spec (e.g. from the header via
+`from_name` + `regex_extract`): a captured zone is fed into `parse_datetime`
+automatically, so the normalized `*_unix_ns` is correct.
+
 Unix epoch **seconds** (numeric column):
 
 ```yaml

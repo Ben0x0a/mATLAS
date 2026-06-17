@@ -51,14 +51,15 @@ def _matches_sqlite(selector: dict[str, Any], element: DiscoveredElement) -> boo
 
     # Context-aware criterion: a selector may declare BOTH file_name and db_relpath,
     # and the one relevant to the source's origin is applied.
-    #   - Container source (SQLite inside a ZIP): the discovered element carries the
-    #     internal acquisition path, so db_relpath is the discriminator. Matching on a
-    #     bare file name would be unsafe — an iOS dump holds many unrelated
-    #     "Cache.sqlite" files at different paths.
+    #   - Container source (SQLite inside an archive, e.g. a ZIP): the discovered
+    #     element carries the internal acquisition path, so db_relpath is the
+    #     discriminator. Matching on a bare file name would be unsafe — an iOS dump
+    #     holds many unrelated "Cache.sqlite" files at different paths.
     #   - Direct file/folder source: there is no internal path, so file_name is the
     #     discriminator.
     # A container element is recognised by its original path differing from the
-    # on-disk path of the archive it was discovered in.
+    # on-disk path of the archive it was discovered in. The check is archive-format
+    # agnostic; ZIP is the only container format supported today.
     is_container = element.source_original_path != str(element.path)
     if is_container:
         return _relpath_matches(selector, element) if db_relpath else _matches_element_filename(selector, element)

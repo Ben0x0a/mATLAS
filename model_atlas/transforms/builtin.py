@@ -102,23 +102,57 @@ def split(value: Any, *, separator: str, index: int | None = None) -> Any:
 
 _UNIX_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
 
+# Accepts: a number (hours), "UTC"/"GMT"/"Z"/empty (=0), or an offset string such as
+# "UTC+02:00", "+02:00", "-0200", "+02" — case-insensitive, optional UTC/GMT prefix.
+_TZ_OFFSET_RE = re.compile(r"^([+-])(\d{2}):?(\d{2})?$")
+
+
+def tz_offset_to_hours(value: Any) -> float:
+    """Normalise a timezone offset (number or string) to signed decimal hours.
+
+    Raises ``ValueError`` on an unrecognised string so the caller can decide whether
+    to surface it (a malformed declared zone) or fall back to UTC.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    token = str(value).strip().upper()
+    if token in ("", "UTC", "GMT", "Z"):
+        return 0.0
+    for prefix in ("UTC", "GMT"):
+        if token.startswith(prefix):
+            token = token[len(prefix):]
+            break
+    match = _TZ_OFFSET_RE.match(token)
+    if match is None:
+        raise ValueError(f"Unrecognised timezone offset {value!r}")
+    sign = 1 if match.group(1) == "+" else -1
+    hours = int(match.group(2))
+    minutes = int(match.group(3) or 0)
+    return sign * (hours + minutes / 60)
+
 
 @register_transform("parse_datetime", primary="format")
-def parse_datetime(value: Any, *, format: str, tz_offset_hours: float = 0.0) -> int | None:
+def parse_datetime(value: Any, *, format: str, tz_offset_hours: float | str = 0.0) -> int | None:
     """Parse a formatted datetime string to Unix nanoseconds.
 
     ``format`` is a strptime pattern (e.g. ``"%d.%m.%Y %H:%M:%S.%f"``). A value with
-    no zone is assumed to be at ``tz_offset_hours`` (default 0 = UTC); a pattern with
-    ``%z`` is honoured as parsed. Many forensic exports give formatted strings rather
-    than epochs, so this is the temporal counterpart of ``arithmetic``.
+    no zone is interpreted at ``tz_offset_hours``, which may be a number of hours or an
+    offset string such as ``"UTC+02:00"`` / ``"+02:00"`` (default 0 = UTC); a pattern
+    with ``%z`` is honoured as parsed. The engine auto-feeds a temporal spec's captured
+    ``time_zone`` here (see ``transforms.assemble``), so a zone embedded in a column
+    header is applied, not merely recorded. Many forensic exports give formatted strings
+    rather than epochs, so this is the temporal counterpart of ``arithmetic``.
     """
     if value is None:
         return None
     parsed = dt.datetime.strptime(str(value), format)
     if parsed.tzinfo is None:
-        # WHY: a naive timestamp is meaningless without a zone; the preset declares it,
-        # defaulting to UTC, rather than the engine silently assuming local time.
-        parsed = parsed.replace(tzinfo=dt.timezone(dt.timedelta(hours=tz_offset_hours)))
+        # WHY: a naive timestamp is meaningless without a zone; the preset declares it
+        # (or the engine feeds the captured one), defaulting to UTC, rather than the
+        # engine silently assuming local time.
+        parsed = parsed.replace(tzinfo=dt.timezone(dt.timedelta(hours=tz_offset_to_hours(tz_offset_hours))))
     # Integer nanoseconds, exact: datetime resolves to microseconds, so ns = us * 1000
     # (avoids the float error of multiplying timestamp() by 1e9).
     delta = parsed - _UNIX_EPOCH

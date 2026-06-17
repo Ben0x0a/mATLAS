@@ -23,6 +23,7 @@ import pandas as pd
 import model_atlas.transforms.builtin  # noqa: F401 - registers builtins
 from model_atlas.model.families import OUTPUT_COLUMNS
 from model_atlas.presets.spec import FieldSpec, PresetSpec, TemporalSpec
+from model_atlas.transforms.builtin import tz_offset_to_hours
 from model_atlas.transforms.registry import apply_pipe
 
 # Fixed namespace so deterministic source_row_ids are stable across runs/machines.
@@ -126,13 +127,42 @@ def _source_row_id(preset: PresetSpec, base: dict[str, Any], row: dict[str, Any]
     return str(uuid.uuid5(_SOURCE_ROW_NAMESPACE, identity))
 
 
+def _inject_tz_offset(pipe: list[dict[str, Any]], tz_value: Any) -> list[dict[str, Any]]:
+    """Feed a captured ``time_zone`` into the spec's ``parse_datetime`` step.
+
+    Closes the loop on timezone capture: a zone read from a column header (or set as a
+    constant) is applied during parsing, not just recorded. Only a ``parse_datetime``
+    step that does not already pin its own offset (explicit ``tz_offset_hours`` or a
+    ``%z`` in the format) is touched, so an author override always wins. An
+    unparseable captured zone is left alone, so the timestamp still parses as UTC
+    rather than being dropped.
+    """
+    if not tz_value:
+        return pipe
+    try:
+        tz_offset_to_hours(tz_value)
+    except ValueError:
+        return pipe
+    injected: list[dict[str, Any]] = []
+    for step in pipe:
+        fmt = step.get("parse_datetime")
+        if fmt is not None and "tz_offset_hours" not in step and "%z" not in str(fmt):
+            step = {**step, "tz_offset_hours": tz_value}
+        injected.append(step)
+    return injected
+
+
 def _apply_temporal(flat: dict[str, Any], spec: TemporalSpec, row: dict[str, Any], warnings: list[str], resolve: Callable[[str | None], str | None], file_values: dict[str, Any]) -> None:
     lower_col = resolve(spec.lower_column)
     upper_col = resolve(spec.upper_column)
     lower_raw = row.get(lower_col) if lower_col is not None else None
     upper_raw = row.get(upper_col) if upper_col is not None else None
-    lower_ns, w1 = apply_pipe(lower_raw, list(spec.pipe))
-    upper_ns, w2 = apply_pipe(upper_raw, list(spec.pipe))
+    # Resolve overrides first so a captured time_zone is available to drive parsing.
+    for override in spec.overrides:
+        flat[override.model_field] = _resolve_field(override, row, warnings, resolve, file_values)
+    pipe = _inject_tz_offset(list(spec.pipe), flat.get("time_zone"))
+    lower_ns, w1 = apply_pipe(lower_raw, pipe)
+    upper_ns, w2 = apply_pipe(upper_raw, pipe)
     warnings.extend(w1 + w2)
     flat["time_lower_raw"] = lower_raw
     # Record the resolved column name, not the pattern, for auditability.
@@ -141,8 +171,6 @@ def _apply_temporal(flat: dict[str, Any], spec: TemporalSpec, row: dict[str, Any
     flat["time_upper_raw"] = upper_raw
     flat["time_upper_source_field"] = upper_col or spec.upper_column
     flat["time_upper_unix_ns"] = upper_ns
-    for override in spec.overrides:
-        flat[override.model_field] = _resolve_field(override, row, warnings, resolve, file_values)
 
 
 def build_rows(
