@@ -50,7 +50,11 @@ def _connect(db_path: Path, *, immutable: bool = False) -> sqlite3.Connection:
 
 def _read_table(db_path: Path, table: str, *, immutable: bool = False) -> pd.DataFrame:
     quoted = _quote_identifier(table)
-    with _connect(db_path, immutable=immutable) as conn:
+    # contextlib.closing (not a bare `with`): sqlite3's own context manager only
+    # commits/rolls back the transaction, it never closes the connection. A leaked
+    # handle keeps the (temp) db file locked on Windows, which blocks TemporaryDirectory
+    # cleanup and any later reopen ("file used by someone else"). Close it explicitly.
+    with contextlib.closing(_connect(db_path, immutable=immutable)) as conn:
         if not _table_exists(conn, table):
             raise ValueError(f"Table {table!r} not found in {db_path}")
         df = pd.read_sql_query(f"SELECT * FROM {quoted}", conn)
@@ -64,7 +68,9 @@ def _read_query(db_path: Path, sql: str, *, immutable: bool = False) -> pd.DataF
     names) before the query runs, so a query that somehow slipped past the
     syntactic gate still cannot mutate the working copy. Join columns come back
     as ``table.column`` (see ``model_atlas.sqlite.sql_query.harden_connection``)."""
-    with _connect(db_path, immutable=immutable) as conn:
+    # See _read_table: close the connection explicitly so the temp db is released
+    # (a bare sqlite3 `with` does not close it — a Windows file-lock hazard).
+    with contextlib.closing(_connect(db_path, immutable=immutable)) as conn:
         harden_connection(conn)
         df = pd.read_sql_query(sql, conn)
     return df
