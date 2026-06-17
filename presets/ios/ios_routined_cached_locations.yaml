@@ -1,0 +1,74 @@
+name: iOS Routined - Cached Locations (CLLocation)
+version: "1.0"
+parser:
+  name: ios_routined_cll
+  version: "1.0"
+
+source_tier: primary
+
+# SQLite source, read straight out of a full-filesystem ZIP or as a direct file.
+# Context-aware matching applies the relevant criterion: inside a ZIP the internal
+# db_relpath is used (an iOS dump holds many unrelated "Cache.sqlite" files, so the
+# full path is the only precise identifier); for a direct Cache.sqlite file the
+# file_name is used.
+selectors:
+  - source_type: sqlite
+    file_name: "Cache.sqlite"
+    db_relpath: "/private/var/mobile/Library/Caches/com.apple.routined/Cache.sqlite"
+
+extract:
+  sqlite:
+    table: ZRTCLLOCATIONMO
+
+# Full Core Data column inventory of ZRTCLLOCATIONMO. Columns present here but unmapped
+# below (Z_ENT/Z_OPT, ZINTEGRITY, ZSIGNALENVIRONMENTTYPE, ZTYPE, ZCOURSEACCURACY,
+# ZSPEEDACCURACY) are the research frontier.
+expected_columns:
+  - Z_PK
+  - Z_ENT
+  - Z_OPT
+  - ZINTEGRITY
+  - ZSIGNALENVIRONMENTTYPE
+  - ZTYPE
+  - ZALTITUDE
+  - ZCOURSE
+  - ZCOURSEACCURACY
+  - ZHORIZONTALACCURACY
+  - ZLATITUDE
+  - ZLONGITUDE
+  - ZSPEED
+  - ZSPEEDACCURACY
+  - ZTIMESTAMP
+  - ZVERTICALACCURACY
+
+source_row_id:
+  from: Z_PK
+
+common:
+  entity: {value: device}
+  entity_type: {value: device}
+  tool_label: {value: ZRTCLLOCATIONMO}
+  position_source: {value: GNSS}
+  # The source file name (e.g. "Cache.sqlite") for at-a-glance provenance in review.
+  record_locator: {from_file: name}
+
+assertions:
+  - latitude_wgs84: {from: ZLATITUDE, pipe: [{cast: float}]}
+    longitude_wgs84: {from: ZLONGITUDE, pipe: [{cast: float}]}
+    altitude_m: {from: ZALTITUDE, pipe: [{cast: float}]}
+    horizontal_accuracy_m: {from: ZHORIZONTALACCURACY, pipe: [{cast: float}]}
+    vertical_accuracy_m: {from: ZVERTICALACCURACY, pipe: [{cast: float}]}
+    horizontal_speed_kmh: {from: ZSPEED, pipe: [{cast: float}, {arithmetic: "value * 3.6"}]}
+    heading_deg: {from: ZCOURSE, pipe: [{cast: float}]}
+    entity_position_link: at
+    temporal:
+      # ZTIMESTAMP is a Cocoa / Core Data timestamp: seconds since 2001-01-01 UTC.
+      # Convert to Unix nanoseconds: (value + 978307200) * 1e9. The 978307200 offset
+      # is the seconds between the Unix epoch (1970) and the Cocoa epoch (2001).
+      - instant: ZTIMESTAMP
+        pipe:
+          - cast: float
+          - arithmetic: "int((value + 978307200) * 1000000000)"
+        time_zone: {value: UTC}
+        entity_time_link: observed_at
+        spatial_temporal_link: instant
