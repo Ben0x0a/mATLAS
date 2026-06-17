@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "model-atlas"
 version = "0.1.0"
-description = "Declarative spatio-temporal forensic data processing from CSV, Excel, and SQLite sources into a 40-column assertion model."
+description = "Declarative spatio-temporal forensic data processing from CSV, Excel, and SQLite sources into a canonical assertion model."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

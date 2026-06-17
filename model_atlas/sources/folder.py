@@ -1,6 +1,7 @@
 """Discover supported source elements from files or folders."""
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import zipfile
 import logging
@@ -62,7 +63,11 @@ def _discover_file(path: Path) -> list[DiscoveredElement]:
         ]
     if _is_sqlite(path):
         try:
-            with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+            # contextlib.closing: a bare sqlite3 `with` does not close the connection
+            # (it only manages the transaction), leaving an open read handle on the
+            # ORIGINAL evidence file. On Windows that lock then blocks extraction's
+            # copy/open ("file used by someone else"); close the probe handle here.
+            with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
                 conn.execute("SELECT 1").fetchone()
         except sqlite3.Error:
             log.debug("SQLite read-only open failed during discovery: %s", path, exc_info=True)

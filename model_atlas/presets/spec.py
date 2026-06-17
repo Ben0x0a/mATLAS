@@ -70,6 +70,11 @@ _ENUM_FIELDS: dict[str, frozenset[str]] = {
 
 _TEMPORAL_STRUCTURAL_KEYS = frozenset({"instant", "interval", "pipe"})
 
+# Accepted `from_file` tokens (consumed by transforms.assemble): which part of the
+# source file identity a field reads. name = file name, stem = name without suffix,
+# path = original/internal source path.
+_FILE_TOKENS: frozenset[str] = frozenset({"name", "stem", "path"})
+
 
 @dataclass(frozen=True)
 class ParserInfo:
@@ -84,12 +89,14 @@ class FieldSpec:
     Exactly one source: ``column`` (read a source column's value; the name may be a
     glob, e.g. ``"Timestamp Date/Time - * (dd.MM.yyyy)"``), ``from_name_pattern``
     (yield the matched column's *name* as the value — pipe it to extract, say, the
-    timezone embedded in the header), or a constant ``value``.
+    timezone embedded in the header), ``file_token`` (yield part of the source file
+    identity: ``name`` | ``stem`` | ``path``), or a constant ``value``.
     """
 
     model_field: str
     column: str | None = None
     from_name_pattern: str | None = None
+    file_token: str | None = None
     value: Any = None
     is_constant: bool = False
     pipe: tuple[dict[str, Any], ...] = ()
@@ -165,10 +172,12 @@ def _parse_field(model_field: str, raw_value: Any, path: Path, *, assignable: bo
     if isinstance(raw_value, dict):
         has_from = "from" in raw_value
         has_name = "from_name" in raw_value
+        has_file = "from_file" in raw_value
         has_value = "value" in raw_value
-        if has_from + has_name + has_value != 1:
+        if has_from + has_name + has_file + has_value != 1:
             raise ValueError(
-                f"{path}: {model_field!r} mapping must set exactly one of 'from', 'from_name', 'value'"
+                f"{path}: {model_field!r} mapping must set exactly one of "
+                f"'from', 'from_name', 'from_file', 'value'"
             )
         pipe = _parse_pipe(raw_value.get("pipe"), path, model_field)
         if has_from:
@@ -181,6 +190,13 @@ def _parse_field(model_field: str, raw_value: Any, path: Path, *, assignable: bo
             if not isinstance(pattern, str):
                 raise ValueError(f"{path}: {model_field!r} 'from_name' must be a column-name pattern")
             return FieldSpec(model_field=model_field, from_name_pattern=pattern, pipe=pipe)
+        if has_file:
+            token = raw_value["from_file"]
+            if token not in _FILE_TOKENS:
+                raise ValueError(
+                    f"{path}: {model_field!r} 'from_file' must be one of {sorted(_FILE_TOKENS)}"
+                )
+            return FieldSpec(model_field=model_field, file_token=token, pipe=pipe)
         value = raw_value["value"]
         _validate_enum(model_field, value, path)
         return FieldSpec(model_field=model_field, value=value, is_constant=True, pipe=pipe)

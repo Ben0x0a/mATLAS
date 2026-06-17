@@ -1,0 +1,221 @@
+"""Tests for the feature batch: temp staging, force-preset, from_file mapping,
+entity/linked_entity run-level defaults, selector OR-matching, and a synthetic
+SQLite round-trip (regression guard for the Windows connection-close fix).
+
+Used by:    pytest.
+Depends on: pipeline, presets.matcher, models, sqlite (via the adapter), pandas.
+"""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from model_atlas.models import DiscoveredElement, ElementType
+from model_atlas.presets.matcher import _matches_sqlite
+from model_atlas.pipeline import process
+
+# A CSV preset whose selector intentionally points at a DIFFERENT file name, so it
+# only runs under force-preset mode.
+_PRESET_OTHER_NAME = """
+name: T
+parser: {name: t, version: "1.0"}
+selectors: [{source_type: csv, file_name: "does-not-match.csv"}]
+source_row_id: {from: Item}
+common:
+  record_locator: {from_file: name}
+  tool_label: {from_file: stem}
+  source_file_path: {from_file: path}
+assertions:
+  - latitude_wgs84: {from: Lat, pipe: [{cast: float}]}
+    longitude_wgs84: {from: Lon, pipe: [{cast: float}]}
+    entity_position_link: at
+    temporal:
+      - instant: TS
+        pipe: [{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}]
+        entity_time_link: observed_at
+        spatial_temporal_link: instant
+"""
+
+_CSV = "Lat,Lon,TS,Item\n1.5,2.5,06.12.2025 13:00:00.000,A\n"
+
+
+def _write_csv(tmp_path: Path) -> Path:
+    source = tmp_path / "data.csv"
+    source.write_text(_CSV, encoding="utf-8")
+    return source
+
+
+def _read_rows(csv_path: Path) -> list[dict[str, str]]:
+    import csv
+
+    with csv_path.open(encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def test_force_preset_applies_despite_selector_mismatch(tmp_path: Path) -> None:
+    """One input file + one preset YAML => preset applied even though its selector
+    file_name does not match the source name."""
+    source = _write_csv(tmp_path)
+    preset = tmp_path / "p.yaml"
+    preset.write_text(_PRESET_OTHER_NAME, encoding="utf-8")
+    output = tmp_path / "out.csv"
+
+    result = process(source, preset, output, linked_entity="subject")
+
+    assert result.row_counts["rows"] == 1
+    assert result.matched and "-> T" in result.matched[0]
+
+
+def test_from_file_tokens_populate_fields(tmp_path: Path) -> None:
+    source = _write_csv(tmp_path)
+    preset = tmp_path / "p.yaml"
+    preset.write_text(_PRESET_OTHER_NAME, encoding="utf-8")
+    output = tmp_path / "out.csv"
+
+    process(source, preset, output, linked_entity="subject")
+    row = _read_rows(output)[0]
+
+    assert row["record_locator"] == "data.csv"   # from_file: name
+    assert row["tool_label"] == "data"            # from_file: stem
+    assert row["source_file_path"].endswith("data.csv")  # from_file: path
+
+
+def test_entity_and_linked_entity_defaults_fill_when_preset_omits(tmp_path: Path) -> None:
+    source = _write_csv(tmp_path)
+    preset = tmp_path / "p.yaml"
+    preset.write_text(_PRESET_OTHER_NAME, encoding="utf-8")  # sets neither entity nor linked_entity
+    output = tmp_path / "out.csv"
+
+    process(source, preset, output, entity="device-7", linked_entity="Daphne")
+    row = _read_rows(output)[0]
+
+    assert row["entity"] == "device-7"
+    assert row["linked_entity"] == "Daphne"
+
+
+_PRESET_WITH_ENTITY = _PRESET_OTHER_NAME.replace(
+    "common:\n", "common:\n  entity: {value: preset-entity}\n"
+)
+
+
+def test_preset_entity_wins_over_run_level_default(tmp_path: Path) -> None:
+    source = _write_csv(tmp_path)
+    preset = tmp_path / "p.yaml"
+    preset.write_text(_PRESET_WITH_ENTITY, encoding="utf-8")
+    output = tmp_path / "out.csv"
+
+    process(source, preset, output, entity="run-level", linked_entity="Daphne")
+    row = _read_rows(output)[0]
+
+    assert row["entity"] == "preset-entity"
+
+
+def _zip_element(archive: str, internal_path: str) -> DiscoveredElement:
+    """SQLite discovered inside a ZIP: path is the archive, original path is internal."""
+    name = Path(internal_path).name
+    return DiscoveredElement(
+        source_type=ElementType.SQLITE,
+        path=Path(archive),
+        source_file=f"{Path(archive).name}::{internal_path.lstrip('/')}",
+        source_original_path=internal_path,
+        logical_name=name,
+        preview_supported=False,
+    )
+
+
+def _direct_element(db_path: str) -> DiscoveredElement:
+    """SQLite discovered as a direct file: original path equals the on-disk path."""
+    return DiscoveredElement(
+        source_type=ElementType.SQLITE,
+        path=Path(db_path),
+        source_file=Path(db_path).name,
+        source_original_path=db_path,
+        logical_name=Path(db_path).name,
+    )
+
+
+_BOTH_SELECTOR = {
+    "source_type": "sqlite",
+    "file_name": "Cache.sqlite",
+    "db_relpath": "/private/var/mobile/Library/Caches/com.apple.routined/Cache.sqlite",
+}
+
+
+def test_zip_source_matches_on_db_relpath() -> None:
+    element = _zip_element(
+        "/evidence/dump.zip",
+        "/private/var/mobile/Library/Caches/com.apple.routined/Cache.sqlite",
+    )
+    assert _matches_sqlite(_BOTH_SELECTOR, element) is True
+
+
+def test_zip_source_does_not_match_other_cache_sqlite() -> None:
+    """The collision guard: a different app's Cache.sqlite inside the ZIP must NOT
+    match, even though the bare file name is identical."""
+    element = _zip_element(
+        "/evidence/dump.zip",
+        "/private/var/mobile/Containers/Data/Application/XYZ/Library/Caches/Cache.sqlite",
+    )
+    assert _matches_sqlite(_BOTH_SELECTOR, element) is False
+
+
+def test_direct_file_matches_on_filename() -> None:
+    element = _direct_element("/tmp/Cache.sqlite")
+    assert _matches_sqlite(_BOTH_SELECTOR, element) is True
+
+
+_SQLITE_PRESET = """
+name: S
+parser: {name: s, version: "1.0"}
+selectors: [{source_type: sqlite, file_name: "loc.sqlite"}]
+extract: {sqlite: {table: LOCATIONS}}
+source_row_id: {from: id}
+common:
+  entity: {value: device}
+assertions:
+  - latitude_wgs84: {from: lat, pipe: [{cast: float}]}
+    longitude_wgs84: {from: lon, pipe: [{cast: float}]}
+    entity_position_link: at
+    temporal:
+      - instant: ts
+        pipe: [{cast: float}, {arithmetic: "int(value * 1000000000)"}]
+        entity_time_link: observed_at
+        spatial_temporal_link: instant
+"""
+
+
+def test_cli_requires_linked_entity() -> None:
+    from launcher.cli import build_parser
+
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["process", "--input", "x", "--output", "y"])
+    # With --linked-entity it parses fine.
+    args = parser.parse_args(["process", "--input", "x", "--output", "y", "--linked-entity", "s"])
+    assert args.linked_entity == "s"
+    assert args.entity is None
+
+
+def test_sqlite_roundtrip_releases_file(tmp_path: Path) -> None:
+    """Synthetic SQLite source extracts cleanly (regression guard for the
+    connection-close fix: a leaked handle would block temp cleanup on Windows)."""
+    db = tmp_path / "loc.sqlite"
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("CREATE TABLE LOCATIONS (id INTEGER, lat REAL, lon REAL, ts REAL)")
+        conn.execute("INSERT INTO LOCATIONS VALUES (1, 1.5, 2.5, 1700000000.0)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    preset = tmp_path / "s.yaml"
+    preset.write_text(_SQLITE_PRESET, encoding="utf-8")
+    output = tmp_path / "out.csv"
+
+    result = process(db, preset, output, linked_entity="subject")
+    assert result.row_counts["rows"] == 1
+    row = _read_rows(output)[0]
+    assert row["latitude_wgs84"] == "1.5"
+    assert row["time_lower_unix_ns"] == "1700000000000000000"

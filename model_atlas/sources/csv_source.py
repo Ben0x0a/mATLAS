@@ -10,6 +10,7 @@ from model_atlas.models import DiscoveredElement, ElementType
 from model_atlas.presets.spec import PresetSpec
 from model_atlas.sources.base import ExtractedData
 from model_atlas.sources.registry import register_adapter
+from model_atlas.sources.staging import stage_file
 
 log = logging.getLogger(__name__)
 
@@ -30,14 +31,18 @@ def extract_csv(element: DiscoveredElement, preset: PresetSpec) -> ExtractedData
         header_row,
         preset.name,
     )
-    hash_before = sha256_file(element.path)
-    df = pd.read_csv(
-        element.path,
-        sep=delimiter,
-        encoding=encoding,
-        skiprows=skip_rows,
-        header=header_row,
-    )
+    # Read a temp copy, never the original (forensic integrity). hash_before is the
+    # original's digest taken before copying; hash_after re-hashes the original to
+    # prove it was not modified during the run.
+    with stage_file(element.path) as staged:
+        hash_before = staged.sha256
+        df = pd.read_csv(
+            staged.staged,
+            sep=delimiter,
+            encoding=encoding,
+            skiprows=skip_rows,
+            header=header_row,
+        )
     hash_after = sha256_file(element.path)
     log.debug(
         "CSV extraction complete: path=%s rows=%d columns=%s integrity_ok=%s",

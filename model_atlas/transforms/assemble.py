@@ -15,6 +15,7 @@ from __future__ import annotations
 import fnmatch
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 import pandas as pd
@@ -32,13 +33,16 @@ _PROVENANCE_DEFAULT_FIELDS = ("acquisition_path", "source_file_path", "input_fil
 
 @dataclass(frozen=True)
 class BuildEnv:
-    """Provenance known to the pipeline, not the preset. Each value fills the matching
-    model field only when the preset did not set it."""
+    """Pipeline/operator defaults. Values fill matching model fields only when
+    the preset did not set them."""
 
     acquisition_path: str | None = None
     source_file_path: str | None = None
     input_file: str | None = None
     source_tier: str | None = None
+    entity: str | None = None
+    linked_entity: str | None = None
+    source_file_name: str | None = None  # used by `from_file` field mappings
 
 
 def _is_missing(value: Any) -> bool:
@@ -89,12 +93,22 @@ def make_resolver(columns: list[str]) -> Callable[[str | None], str | None]:
     return resolve
 
 
-def _resolve_field(spec: FieldSpec, row: dict[str, Any], warnings: list[str], resolve: Callable[[str | None], str | None]) -> Any:
+def _resolve_field(
+    spec: FieldSpec,
+    row: dict[str, Any],
+    warnings: list[str],
+    resolve: Callable[[str | None], str | None],
+    file_values: dict[str, Any],
+) -> Any:
     if spec.is_constant:
         value: Any = spec.value
     elif spec.from_name_pattern is not None:
         # The value IS the matched column's name (e.g. to extract the timezone from it).
         value = resolve(spec.from_name_pattern)
+    elif spec.file_token is not None:
+        # The value comes from the source FILE identity, not a column — lets a preset
+        # combine filename-derived and column-derived fields on the same row.
+        value = file_values.get(spec.file_token)
     else:
         actual = resolve(spec.column)
         value = row.get(actual) if actual is not None else None
@@ -103,16 +117,16 @@ def _resolve_field(spec: FieldSpec, row: dict[str, Any], warnings: list[str], re
     return result
 
 
-def _source_row_id(preset: PresetSpec, base: dict[str, Any], row: dict[str, Any], warnings: list[str], resolve: Callable[[str | None], str | None]) -> str:
+def _source_row_id(preset: PresetSpec, base: dict[str, Any], row: dict[str, Any], warnings: list[str], resolve: Callable[[str | None], str | None], file_values: dict[str, Any]) -> str:
     if preset.source_row_id is not None:
-        resolved = _resolve_field(preset.source_row_id, row, warnings, resolve)
+        resolved = _resolve_field(preset.source_row_id, row, warnings, resolve, file_values)
         return str(resolved)
     # Deterministic over the source identity, so re-processing yields identical ids.
     identity = f"{base.get('acquisition_path')}|{base.get('source_file_path')}|{base.get('record_locator')}"
     return str(uuid.uuid5(_SOURCE_ROW_NAMESPACE, identity))
 
 
-def _apply_temporal(flat: dict[str, Any], spec: TemporalSpec, row: dict[str, Any], warnings: list[str], resolve: Callable[[str | None], str | None]) -> None:
+def _apply_temporal(flat: dict[str, Any], spec: TemporalSpec, row: dict[str, Any], warnings: list[str], resolve: Callable[[str | None], str | None], file_values: dict[str, Any]) -> None:
     lower_col = resolve(spec.lower_column)
     upper_col = resolve(spec.upper_column)
     lower_raw = row.get(lower_col) if lower_col is not None else None
@@ -128,7 +142,7 @@ def _apply_temporal(flat: dict[str, Any], spec: TemporalSpec, row: dict[str, Any
     flat["time_upper_source_field"] = upper_col or spec.upper_column
     flat["time_upper_unix_ns"] = upper_ns
     for override in spec.overrides:
-        flat[override.model_field] = _resolve_field(override, row, warnings, resolve)
+        flat[override.model_field] = _resolve_field(override, row, warnings, resolve, file_values)
 
 
 def build_rows(
@@ -144,10 +158,26 @@ def build_rows(
     seen_ids: dict[str, int] = {}
     resolve = make_resolver(columns if columns is not None else (list(records[0].keys()) if records else []))
 
+    # Source-file identity tokens for `from_file` mappings. ``name`` is the source's
+    # display name (e.g. "Cache.sqlite" or "export.xlsx::sheet=Locations"); ``path`` is
+    # the original/internal source path; ``stem`` drops the suffix from ``name``.
+    file_name = env.source_file_name or env.input_file
+    file_values: dict[str, Any] = {
+        "name": file_name,
+        "stem": Path(file_name).stem if file_name else None,
+        "path": env.source_file_path,
+    }
+
     for position, record in enumerate(records):
         base = dict.fromkeys(OUTPUT_COLUMNS)
         for field_spec in preset.common:
-            base[field_spec.model_field] = _resolve_field(field_spec, record, warnings, resolve)
+            base[field_spec.model_field] = _resolve_field(field_spec, record, warnings, resolve, file_values)
+        # Run-level entity/linked_entity fill only what the preset left unset, so a
+        # preset that already maps these wins over the operator-supplied defaults.
+        if base.get("entity") is None and env.entity:
+            base["entity"] = env.entity
+        if base.get("linked_entity") is None and env.linked_entity:
+            base["linked_entity"] = env.linked_entity
         # Pipeline-known provenance fills only what the preset left unset.
         for field_name, env_value in zip(
             _PROVENANCE_DEFAULT_FIELDS,
@@ -156,7 +186,7 @@ def build_rows(
             if base.get(field_name) is None:
                 base[field_name] = env_value
 
-        row_id = _source_row_id(preset, base, record, warnings, resolve)
+        row_id = _source_row_id(preset, base, record, warnings, resolve, file_values)
         previous = seen_ids.get(row_id)
         if previous is not None and previous != position:
             # Distinct source rows must not share an id; if they do, record_locator is
@@ -171,10 +201,10 @@ def build_rows(
         for template in preset.assertions:
             shared = dict(base)
             for field_spec in template.fields:
-                shared[field_spec.model_field] = _resolve_field(field_spec, record, warnings, resolve)
+                shared[field_spec.model_field] = _resolve_field(field_spec, record, warnings, resolve, file_values)
             for temporal_spec in template.temporal:
                 flat = dict(shared)
-                _apply_temporal(flat, temporal_spec, record, warnings, resolve)
+                _apply_temporal(flat, temporal_spec, record, warnings, resolve, file_values)
                 rows.append(flat)
 
     frame = pd.DataFrame(rows, columns=list(OUTPUT_COLUMNS))

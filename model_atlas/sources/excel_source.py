@@ -10,6 +10,7 @@ from model_atlas.models import DiscoveredElement, ElementType
 from model_atlas.presets.spec import PresetSpec
 from model_atlas.sources.base import ExtractedData
 from model_atlas.sources.registry import register_adapter
+from model_atlas.sources.staging import stage_file
 
 log = logging.getLogger(__name__)
 
@@ -28,14 +29,17 @@ def extract_excel(element: DiscoveredElement, preset: PresetSpec) -> ExtractedDa
         header_row,
         preset.name,
     )
-    hash_before = sha256_file(element.path)
-    df = pd.read_excel(
-        element.path,
-        sheet_name=sheet_name,
-        skiprows=skip_rows,
-        header=header_row,
-        engine="openpyxl",
-    )
+    # Read a temp copy, never the original (forensic integrity). See csv_source for
+    # the hash_before/hash_after contract.
+    with stage_file(element.path) as staged:
+        hash_before = staged.sha256
+        df = pd.read_excel(
+            staged.staged,
+            sheet_name=sheet_name,
+            skiprows=skip_rows,
+            header=header_row,
+            engine="openpyxl",
+        )
     hash_after = sha256_file(element.path)
     source_file = f"{element.path.name}::sheet={sheet_name}"
     log.debug(
