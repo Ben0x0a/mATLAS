@@ -26,14 +26,89 @@
      <number>14</number>
     </property>
     <item>
-     <widget class="QLabel" name="appTitleLabel">
-      <property name="text">
-       <string>mATLAS Transformer</string>
+     <layout class="QHBoxLayout" name="appHeaderLayout">
+      <property name="spacing">
+       <number>8</number>
       </property>
-      <property name="alignment">
-       <set>Qt::AlignHCenter|Qt::AlignVCenter</set>
-      </property>
-     </widget>
+      <item>
+       <spacer name="headerLeftSpacer">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QLabel" name="headerImage2">
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="headerImage3">
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="headerImage4">
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="appTitleLabel">
+        <property name="text">
+         <string>mATLAS Transformer</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignHCenter|Qt::AlignVCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="headerImage5">
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="headerImage6">
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="headerImage7">
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="headerRightSpacer">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+     </layout>
     </item>
     <item>
      <widget class="QGroupBox" name="inputGroup">
@@ -100,19 +175,63 @@
        <item row="2" column="0">
         <widget class="QLabel" name="outputModeLabel">
          <property name="text">
-          <string>Merge outputs</string>
+          <string>Output settings</string>
          </property>
         </widget>
        </item>
-       <item row="2" column="1">
-        <widget class="QCheckBox" name="mergeOutputsCheck">
-         <property name="text">
-          <string/>
+       <item row="2" column="1" colspan="3">
+        <layout class="QHBoxLayout" name="extractSettingsLayout">
+         <property name="spacing">
+          <number>18</number>
          </property>
-         <property name="checked">
-          <bool>true</bool>
-         </property>
-        </widget>
+         <item>
+         <widget class="QCheckBox" name="mergeOutputsCheck">
+           <property name="text">
+            <string/>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="mergeOutputLabel">
+           <property name="text">
+            <string>Merge output</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="dumpFullUfdrCheck">
+           <property name="text">
+            <string/>
+           </property>
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="dumpFullUfdrLabel">
+           <property name="text">
+            <string>Dump full UFDR</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="extractSettingsSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+        </layout>
        </item>
        <item row="3" column="0">
         <widget class="QLabel" name="outputLabel">
@@ -138,54 +257,78 @@
        <item row="4" column="0">
         <widget class="QLabel" name="traceabilityLabel">
          <property name="text">
-          <string>Traceability</string>
+          <string>Logging options</string>
          </property>
         </widget>
        </item>
-       <item row="4" column="1">
-        <widget class="QComboBox" name="traceabilityCombo">
+       <item row="4" column="1" colspan="3">
+        <layout class="QHBoxLayout" name="loggingOptionsLayout">
          <item>
-          <property name="text">
-           <string>readable</string>
-          </property>
+          <widget class="QLabel" name="traceabilityOptionLabel">
+           <property name="text">
+            <string>Traceability</string>
+           </property>
+          </widget>
          </item>
          <item>
-          <property name="text">
-           <string>prov</string>
-          </property>
-         </item>
-        </widget>
-       </item>
-       <item row="4" column="2">
-        <widget class="QLabel" name="logLevelLabel">
-         <property name="text">
-          <string>Log level</string>
-         </property>
-        </widget>
-       </item>
-       <item row="4" column="3">
-        <widget class="QComboBox" name="logLevelCombo">
-         <item>
-          <property name="text">
-           <string>INFO</string>
-          </property>
+          <widget class="QComboBox" name="traceabilityCombo">
+           <item>
+            <property name="text">
+             <string>readable</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>prov</string>
+            </property>
+           </item>
+          </widget>
          </item>
          <item>
-          <property name="text">
-           <string>DEBUG</string>
-          </property>
+          <widget class="QLabel" name="logLevelLabel">
+           <property name="text">
+            <string>Log level</string>
+           </property>
+          </widget>
          </item>
          <item>
-          <property name="text">
-           <string>WARNING</string>
-          </property>
+          <widget class="QComboBox" name="logLevelCombo">
+           <item>
+            <property name="text">
+             <string>INFO</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>DEBUG</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>WARNING</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>ERROR</string>
+            </property>
+           </item>
+          </widget>
          </item>
          <item>
-          <property name="text">
-           <string>ERROR</string>
-          </property>
+          <spacer name="loggingOptionsSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
          </item>
-        </widget>
+        </layout>
        </item>
       </layout>
      </widget>
@@ -193,7 +336,7 @@
     <item>
      <widget class="QGroupBox" name="presetGroup">
      <property name="title">
-      <string>Preset Selection</string>
+      <string>Presets Selection</string>
      </property>
       <property name="minimumSize">
        <size>
@@ -325,16 +468,6 @@
     <item>
      <layout class="QHBoxLayout" name="actionsLayout">
       <item>
-       <widget class="QLabel" name="statusLabel">
-        <property name="text">
-         <string>Idle</string>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignLeft|Qt::AlignVCenter</set>
-        </property>
-       </widget>
-      </item>
-      <item>
        <widget class="QPushButton" name="clearLogButton">
         <property name="text">
          <string>Clear log</string>
@@ -345,6 +478,22 @@
        <widget class="QPushButton" name="clearFormButton">
         <property name="text">
          <string>Clear form</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="statusLabel">
+        <property name="text">
+         <string>Idle</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignLeft|Qt::AlignVCenter</set>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>80</width>
+          <height>0</height>
+         </size>
         </property>
        </widget>
       </item>

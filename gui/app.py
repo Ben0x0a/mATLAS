@@ -13,8 +13,9 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import QFile, QObject, QThread, QTimer, QUrl, Qt, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QIcon
+from PySide6.QtCore import QFile, QObject, QRectF, QThread, QTimer, QUrl, Qt, Signal, Slot
+from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import (
     QApplication,
@@ -32,13 +33,28 @@ from PySide6.QtWidgets import (
     QTextEdit,
 )
 
+from gui import accessibility
 from gui.widgets.drag_drop_line_edit import DragDropLineEdit
-from gui.theme import build_stylesheet
+from gui.theme import build_stylesheet, configure_application_font
 from launcher.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
 from model_atlas.pipeline import ProcessResult, process
 from model_atlas.presets.spec_loader import load_preset_specs
 
 log = logging.getLogger("model_atlas.gui")
+
+DESKTOP_ICON_ASSET = "matlas_transformer_desktop_icon.svg"
+TRANSITION_ASSETS = {
+    2: "matlas_transition_01_standby.svg",
+    3: "matlas_transition_02_activate.svg",
+    4: "matlas_transition_03_compact.svg",
+    5: "matlas_transition_04_reform.svg",
+    6: "matlas_transition_05_bed_form.svg",
+    7: "matlas_transition_06_complete.svg",
+}
+
+
+def _asset_path(name: str) -> Path:
+    return Path(files("gui").joinpath("assets", name))
 
 
 @dataclass(frozen=True)
@@ -96,11 +112,13 @@ class MainController(QObject):
         app = QApplication.instance()
         if app is not None:
             app.setStyle("Fusion")
+            configure_application_font(app)
         self.window = self._load_ui()
         self._threads: list[QThread] = []
         self._workers: list[_TaskWorker] = []
         self._presets: list[PresetItem] = []
         self._last_output_folder: Path | None = None
+        self._status_text = "Idle"
         self._log_bridge: _LogBridge | None = None
         self._log_handler: _GuiLogHandler | None = None
 
@@ -161,6 +179,7 @@ class MainController(QObject):
         self.save_profile_button: QPushButton = child(QPushButton, "saveProfileButton")
         self.auto_preset_check: QCheckBox = child(QCheckBox, "autoPresetCheck")
         self.merge_outputs_check: QCheckBox = child(QCheckBox, "mergeOutputsCheck")
+        self.dump_full_ufdr_check: QCheckBox = child(QCheckBox, "dumpFullUfdrCheck")
 
         self.traceability_combo: QComboBox = child(QComboBox, "traceabilityCombo")
         self.log_level_combo: QComboBox = child(QComboBox, "logLevelCombo")
@@ -172,11 +191,15 @@ class MainController(QObject):
         self.log_edit.document().setMaximumBlockCount(5000)
         self.window.resize(1000, 860)
         self.window.setWindowTitle("Model ATLAS Transformer")
-        self.window.setWindowIcon(QIcon(str(files("gui").joinpath("assets", "app-icon.svg"))))
+        self.window.setWindowIcon(QIcon(str(_asset_path(DESKTOP_ICON_ASSET))))
         self.window.setStyleSheet(build_stylesheet())
+        self._configure_header_assets()
+        self._hide_unreleased_options()
+        accessibility.configure_status_label(self)
         self._stabilize_form_labels()
         self._stabilize_preset_mode_row()
         self._sync_output_mode()
+        accessibility.configure_accessibility(self)
 
     def _wire_signals(self) -> None:
         self.source_file_button.clicked.connect(self._browse_source_file)
@@ -211,6 +234,67 @@ class MainController(QObject):
             label = self.window.findChild(QLabel, name)
             if label is not None:
                 label.setMinimumWidth(125)
+
+    def _hide_unreleased_options(self) -> None:
+        self.dump_full_ufdr_check.setVisible(False)
+        if (label := self.window.findChild(QLabel, "dumpFullUfdrLabel")) is not None:
+            label.setVisible(False)
+
+    def eventFilter(self, watched: QObject, event: object) -> bool:
+        accessibility.handle_status_resize(self, watched, event)
+        return super().eventFilter(watched, event)
+
+    def _set_status(self, text: str) -> None:
+        accessibility.set_status(self, text)
+
+    def _configure_header_assets(self) -> None:
+        for number in range(2, 8):
+            label = self.window.findChild(QLabel, f"headerImage{number}")
+            if label is None:
+                continue
+            label.setFixedSize(80, 60)
+            label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            pixmap = self._render_svg_pixmap(_asset_path(TRANSITION_ASSETS[number]), label)
+            if not pixmap.isNull():
+                label.setPixmap(pixmap)
+
+    def _render_svg_pixmap(self, path: Path, label: QLabel) -> QPixmap:
+        renderer = QSvgRenderer(str(path))
+        if not renderer.isValid():
+            return QPixmap()
+
+        target = label.size()
+        default_size = renderer.defaultSize()
+        if default_size.isValid() and default_size.width() > 0 and default_size.height() > 0:
+            aspect = default_size.width() / default_size.height()
+            if target.width() / target.height() > aspect:
+                render_height = target.height()
+                render_width = int(render_height * aspect)
+            else:
+                render_width = target.width()
+                render_height = int(render_width / aspect)
+        else:
+            render_width = target.width()
+            render_height = target.height()
+
+        dpr = self._device_pixel_ratio()
+        pixmap = QPixmap(max(1, int(target.width() * dpr)), max(1, int(target.height() * dpr)))
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        x = (target.width() - render_width) / 2
+        y = (target.height() - render_height) / 2
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        renderer.render(painter, QRectF(x, y, render_width, render_height))
+        painter.end()
+        return pixmap
+
+    def _device_pixel_ratio(self) -> float:
+        app = QApplication.instance()
+        screen = app.primaryScreen() if app is not None else None
+        return float(screen.devicePixelRatio()) if screen is not None else 1.0
 
     def _stabilize_preset_mode_row(self) -> None:
         label = self.window.findChild(QLabel, "presetModeLabel")
@@ -337,12 +421,14 @@ class MainController(QObject):
             self.output_label.setText("Output folder")
             self.output_edit.setPlaceholderText("folder for per-preset CSV output")
             self.output_button.setText("Folder...")
+        accessibility.update_output_accessibility(self)
 
     def _load_presets_async(self) -> None:
         presets_path = self._preset_root()
         if not presets_path:
             return
         self.preset_status_label.setText("Loading presets...")
+        self.preset_status_label.setAccessibleDescription("Loading presets.")
         self._run_thread(
             lambda: [
                 PresetItem(spec.name, spec.path)
@@ -359,6 +445,7 @@ class MainController(QObject):
     def _on_presets_loaded(self, presets: list[PresetItem]) -> None:
         self._presets = sorted(presets, key=lambda item: item.name.casefold())
         self.preset_status_label.setText(f"{len(self._presets)} preset(s) loaded")
+        self.preset_status_label.setAccessibleDescription(f"{len(self._presets)} presets loaded.")
         self._render_available_presets()
         log.info("Loaded %d preset(s) for GUI selection", len(self._presets))
 
@@ -366,6 +453,7 @@ class MainController(QObject):
         self._presets = []
         self.available_preset_list.clear()
         self.preset_status_label.setText("Preset load failed")
+        self.preset_status_label.setAccessibleDescription("Preset loading failed.")
         log.error("Preset loading failed:\n%s", tb)
 
     def _render_available_presets(self) -> None:
@@ -531,7 +619,7 @@ class MainController(QObject):
         outputs = [result.output_csv] if result.output_csv is not None else list(result.output_csvs)
         outputs = [path for path in outputs if path is not None]
         if not outputs:
-            self.status_label.setText("Completed: no rows produced")
+            self._set_status("Completed: no rows produced")
             log.warning("No rows produced: no discovered source matched a preset.")
             return
         self._last_output_folder = outputs[0].parent
@@ -542,7 +630,7 @@ class MainController(QObject):
             f"matched={counts.get('matched', 0)} rows={counts.get('rows', 0)} "
             f"ranked={counts.get('ranked', 0)}"
         )
-        self.status_label.setText(summary)
+        self._set_status(summary)
         log.info(summary)
         for csv in outputs:
             log.info("CSV: %s", csv)
@@ -554,14 +642,14 @@ class MainController(QObject):
     def _on_process_failed(self, tb: str) -> None:
         self._set_running(False)
         last = tb.strip().splitlines()[-1] if tb.strip() else "Processing failed"
-        self.status_label.setText("Failed")
+        self._set_status("Failed")
         log.error("Processing failed:\n%s", tb)
         self._show_error(last)
 
     def _set_running(self, running: bool) -> None:
         self.run_button.setEnabled(not running)
         self.run_button.setText("Running..." if running else "Run")
-        self.status_label.setText("Running..." if running else "Idle")
+        self._set_status("Running..." if running else "Idle")
 
     def _open_output_folder(self) -> None:
         if self._last_output_folder is None:
@@ -579,7 +667,7 @@ class MainController(QObject):
         self.merge_outputs_check.setChecked(True)
         self._sync_output_mode()
         self.auto_preset_check.setChecked(True)
-        self.status_label.setText("Idle")
+        self._set_status("Idle")
         self._last_output_folder = None
         self.open_output_folder_button.setEnabled(False)
         self._render_available_presets()
@@ -594,6 +682,7 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication(sys.argv[:1] + (argv or []))
     app.setStyle("Fusion")
+    configure_application_font(app)
     _install_sigint_handler()
     controller = MainController()
     controller.window.show()

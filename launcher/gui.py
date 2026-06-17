@@ -22,11 +22,16 @@ def run(argv: list[str] | None = None) -> int:
         raise SystemExit(1) from exc
 
     from gui.app import MainController
+    from gui.theme import configure_application_font
 
     app = QApplication(sys.argv[:1] + (argv or []))
     app.setStyle("Fusion")
+    configure_application_font(app)
     app.setApplicationName("Model ATLAS Transformer")
-    app.setWindowIcon(QIcon(str(files("gui").joinpath("assets", "app-icon.svg"))))
+    app.setWindowIcon(QIcon(str(files("gui").joinpath(
+        "assets",
+        "matlas_transformer_desktop_icon.svg",
+    ))))
     _install_sigint_handler()
     controller = MainController()
     controller.window.show()

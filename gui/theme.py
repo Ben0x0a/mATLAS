@@ -1,17 +1,82 @@
 """Qt stylesheet for the Model Atlas GUI."""
 from __future__ import annotations
 
+import sys
 from importlib.resources import files
+
+from PySide6.QtGui import QFont, QFontDatabase
+
+
+def _system_font_family(kind: QFontDatabase.SystemFont, fallback: str) -> str:
+    """Return a QSS-safe system font family."""
+    family = QFontDatabase.systemFont(kind).family() or fallback
+    if family.lower() in {"sans serif", "sans-serif", "serif", "monospace"}:
+        family = fallback
+    return family.replace('"', r'\"')
+
+
+def _first_available_font(candidates: tuple[str, ...], fallback: str) -> str:
+    available = {family.casefold(): family for family in QFontDatabase.families()}
+    for candidate in candidates:
+        family = available.get(candidate.casefold())
+        if family:
+            return family
+    return fallback
+
+
+def _default_ui_font() -> str:
+    if sys.platform == "darwin":
+        return _first_available_font(
+            ("SF Pro Text", ".AppleSystemUIFont", "Helvetica Neue", "Arial"),
+            "Arial",
+        )
+    if sys.platform == "win32":
+        return _first_available_font(("Segoe UI", "Arial"), "Segoe UI")
+    return _first_available_font(
+        ("Noto Sans", "DejaVu Sans", "Liberation Sans", "Arial"),
+        "DejaVu Sans",
+    )
+
+
+def _default_mono_font() -> str:
+    if sys.platform == "darwin":
+        return _first_available_font(("SF Mono", "Menlo", "Monaco"), "Menlo")
+    if sys.platform == "win32":
+        return _first_available_font(
+            ("Cascadia Mono", "Consolas", "Courier New"),
+            "Consolas",
+        )
+    return _first_available_font(
+        ("Noto Sans Mono", "DejaVu Sans Mono", "Liberation Mono", "Courier New"),
+        "DejaVu Sans Mono",
+    )
+
+
+def configure_application_font(app: object) -> None:
+    """Use a concrete UI font before loading .ui files."""
+    ui_font = _system_font_family(
+        QFontDatabase.SystemFont.GeneralFont,
+        _default_ui_font(),
+    )
+    app.setFont(QFont(ui_font))
 
 
 def build_stylesheet() -> str:
     """Return a light, explicit QSS theme independent of OS dark mode."""
     arrow = files("gui").joinpath("assets", "combo-chevron-down.svg")
+    ui_font = _system_font_family(
+        QFontDatabase.SystemFont.GeneralFont,
+        _default_ui_font(),
+    )
+    mono_font = _system_font_family(
+        QFontDatabase.SystemFont.FixedFont,
+        _default_mono_font(),
+    )
     return """
     QMainWindow, QWidget#centralwidget {
         background: #f6f8fb;
         color: #1f2937;
-        font-family: "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        font-family: "__UI_FONT__";
         font-size: 13px;
     }
 
@@ -25,10 +90,10 @@ def build_stylesheet() -> str:
     }
     QLabel#appTitleLabel {
         color: #16233a;
-        font-size: 24px;
+        font-size: 30px;
         font-weight: 800;
         letter-spacing: 0px;
-        padding: 2px 0 6px 0;
+        padding: 2px 10px 6px 10px;
     }
 
     QGroupBox {
@@ -153,8 +218,11 @@ def build_stylesheet() -> str:
     }
 
     QTextEdit#logEdit {
-        font-family: "SF Mono", Menlo, Consolas, monospace;
+        font-family: "__MONO_FONT__";
         font-size: 12px;
         line-height: 1.25;
     }
-    """.replace("__COMBO_ARROW__", str(arrow))
+    """.replace("__COMBO_ARROW__", str(arrow)).replace(
+        "__UI_FONT__",
+        ui_font,
+    ).replace("__MONO_FONT__", mono_font)
