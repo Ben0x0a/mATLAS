@@ -330,6 +330,45 @@
          </item>
         </layout>
        </item>
+       <item row="5" column="0">
+        <widget class="QLabel" name="identityLabel">
+         <property name="text">
+          <string>Identity</string>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="1" colspan="3">
+        <layout class="QHBoxLayout" name="identityLayout">
+         <item>
+          <widget class="QLabel" name="entityLabel">
+           <property name="text">
+            <string>Entity</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="entityEdit">
+           <property name="placeholderText">
+            <string>optional default entity (e.g. device)</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="linkedEntityLabel">
+           <property name="text">
+            <string>Linked entity *</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="linkedEntityEdit">
+           <property name="placeholderText">
+            <string>required, e.g. case subject / person</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
       </layout>
      </widget>
     </item>
@@ -365,9 +404,16 @@
           </widget>
          </item>
          <item>
-          <widget class="QLabel" name="presetStatusLabel">
+         <widget class="QLabel" name="presetStatusLabel">
            <property name="text">
             <string>No presets loaded</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="reloadPresetsButton">
+           <property name="text">
+            <string>Reload</string>
            </property>
           </widget>
          </item>

@@ -156,6 +156,8 @@ class MainController(QObject):
         self.source_edit: QLineEdit = child(QLineEdit, "sourceEdit")
         self.presets_path_edit: QLineEdit = child(QLineEdit, "presetsPathEdit")
         self.output_edit: QLineEdit = child(QLineEdit, "outputEdit")
+        self.entity_edit: QLineEdit = child(QLineEdit, "entityEdit")
+        self.linked_entity_edit: QLineEdit = child(QLineEdit, "linkedEntityEdit")
         self.preset_search_edit: QLineEdit = child(QLineEdit, "presetSearchEdit")
         self.available_preset_list: QListWidget = child(QListWidget, "availablePresetList")
         self.selected_preset_list: QListWidget = child(QListWidget, "selectedPresetList")
@@ -177,6 +179,7 @@ class MainController(QObject):
         self.clear_log_button: QPushButton = child(QPushButton, "clearLogButton")
         self.load_profile_button: QPushButton = child(QPushButton, "loadProfileButton")
         self.save_profile_button: QPushButton = child(QPushButton, "saveProfileButton")
+        self.reload_presets_button: QPushButton = child(QPushButton, "reloadPresetsButton")
         self.auto_preset_check: QCheckBox = child(QCheckBox, "autoPresetCheck")
         self.merge_outputs_check: QCheckBox = child(QCheckBox, "mergeOutputsCheck")
         self.dump_full_ufdr_check: QCheckBox = child(QCheckBox, "dumpFullUfdrCheck")
@@ -219,6 +222,7 @@ class MainController(QObject):
         self.clear_log_button.clicked.connect(self.log_edit.clear)
         self.load_profile_button.clicked.connect(self._load_profile)
         self.save_profile_button.clicked.connect(self._save_profile)
+        self.reload_presets_button.clicked.connect(self._load_presets_async)
         self.log_level_combo.currentTextChanged.connect(self._apply_log_level)
         self.merge_outputs_check.toggled.connect(lambda _checked: self._sync_output_mode(clear_output=True))
 
@@ -571,6 +575,13 @@ class MainController(QObject):
             else:
                 self._show_error("Choose an output folder.")
             return
+        entity = self.entity_edit.text().strip() or None
+        linked_entity = self.linked_entity_edit.text().strip()
+        if not linked_entity:
+            # Linked entity is mandatory (matches the CLI's required --linked-entity):
+            # every output row must be attributable to a case subject.
+            self._show_error("Enter a linked entity (required).")
+            return
         output_path = Path(output).expanduser()
         merge_outputs = self.merge_outputs_check.isChecked()
         selected_mode = not self.auto_preset_check.isChecked()
@@ -593,6 +604,8 @@ class MainController(QObject):
                     output_path,
                     traceability_format=traceability_format,
                     merge=merge_outputs,
+                    entity=entity,
+                    linked_entity=linked_entity,
                 )
             if len(selected_paths) == 1:
                 return process(
@@ -601,6 +614,8 @@ class MainController(QObject):
                     output_path,
                     traceability_format=traceability_format,
                     merge=merge_outputs,
+                    entity=entity,
+                    linked_entity=linked_entity,
                 )
             with tempfile.TemporaryDirectory(prefix="matlas-presets-") as tmp:
                 tmp_path = build_profile_preset_folder(selected_paths, Path(tmp))
@@ -610,6 +625,8 @@ class MainController(QObject):
                     output_path,
                     traceability_format=traceability_format,
                     merge=merge_outputs,
+                    entity=entity,
+                    linked_entity=linked_entity,
                 )
 
         self._run_thread(task, self._on_process_done, self._on_process_failed)
@@ -659,6 +676,8 @@ class MainController(QObject):
     def _clear_form(self) -> None:
         self.source_edit.clear()
         self.output_edit.clear()
+        self.entity_edit.clear()
+        self.linked_entity_edit.clear()
         self.presets_path_edit.setText(str(Path.cwd() / "presets"))
         self.preset_search_edit.clear()
         self.selected_preset_list.clear()

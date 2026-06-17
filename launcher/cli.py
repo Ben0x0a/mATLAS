@@ -60,6 +60,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Load preset YAML paths from a .mATLAS-profile file.",
     )
     process_parser.add_argument(
+        "--entity",
+        default=None,
+        help=(
+            "Optional default entity for every output row whose preset does not "
+            "already set entity (e.g. the device or account the data came from)."
+        ),
+    )
+    process_parser.add_argument(
+        "--linked-entity",
+        required=True,
+        help=(
+            "Required entity linked to every output row whose preset does not "
+            "already set linked_entity, e.g. a person, company, account, or case subject."
+        ),
+    )
+    process_parser.add_argument(
         "--output",
         type=Path,
         required=True,
@@ -109,6 +125,8 @@ def _cmd_process(args: argparse.Namespace) -> int:
             args.input, args.presets, args.output,
             traceability_format=args.traceability_format,
             merge=args.merge,
+            entity=args.entity,
+            linked_entity=args.linked_entity,
         )
     else:
         with tempfile.TemporaryDirectory(prefix="matlas-profile-") as tmp:
@@ -118,6 +136,8 @@ def _cmd_process(args: argparse.Namespace) -> int:
                 args.input, presets_path, args.output,
                 traceability_format=args.traceability_format,
                 merge=args.merge,
+                entity=args.entity,
+                linked_entity=args.linked_entity,
             )
     log.info("Row counts: %s", result.row_counts)
     for entry in result.matched:

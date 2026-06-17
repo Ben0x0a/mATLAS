@@ -55,6 +55,8 @@ def process(
     *,
     traceability_format: str = "readable",
     merge: bool = True,
+    entity: str | None = None,
+    linked_entity: str | None = None,
 ) -> ProcessResult:
     """Run the full pipeline.
 
@@ -66,11 +68,33 @@ def process(
         traceability_format:  "readable" (default) or "prov" (W3C PROV-JSON).
         merge:                True → one merged output CSV (default).
                               False → one CSV per matched preset inside *output*.
+        entity:               Optional default entity for output rows whose preset
+                              does not already populate entity.
+        linked_entity:        Default linked entity for output rows whose preset does
+                              not already populate linked_entity.
     """
     started_at = reporting.now_iso()
     presets = load_preset_specs(presets_path)
     elements = discover_elements(input_path)
     log.info("Discovered %d source element(s); %d preset(s) loaded", len(elements), len(presets))
+
+    # Force-preset mode: one input file that yields exactly one source element + one
+    # preset YAML => apply that preset WITHOUT selector matching. This is the "I know
+    # what this file is" path, so a preset runs against a source whose name/path its
+    # selector would not otherwise match.
+    #
+    # The single-element guard is deliberate: a ZIP archive (or a multi-sheet workbook)
+    # is one file but discovers MANY elements. Forcing the preset onto all of them would
+    # extract every database in a full-filesystem dump. When more than one element is
+    # discovered, fall back to selector matching so only the intended source is read.
+    force_preset = (
+        Path(input_path).is_file()
+        and Path(presets_path).is_file()
+        and len(presets) == 1
+        and len(elements) == 1
+    )
+    if force_preset:
+        log.info("Force-preset mode: applying %r (selector matching bypassed)", presets[0].name)
 
     # frames_by_preset and sources_by_preset preserve insertion order so per-preset
     # CSVs are written in the order presets were first matched.
@@ -81,20 +105,31 @@ def process(
     unmatched: list[str] = []
 
     for element in elements:
-        match = match_preset(element, presets)
-        if match is None:
-            log.info("No preset matched %s", element.source_file)
-            unmatched.append(element.source_file)
-            continue
-        preset, _selector = match
+        if force_preset:
+            preset = presets[0]
+        else:
+            match = match_preset(element, presets)
+            if match is None:
+                log.info("No preset matched %s", element.source_file)
+                unmatched.append(element.source_file)
+                continue
+            preset, _selector = match
         matched.append(f"{element.source_file} -> {preset.name}")
         extracted = get_adapter(element).extract(element, preset)
         records = to_records(extracted.dataframe)
+        # The on-disk file name (for `from_file: name`): the real file for direct
+        # CSV/Excel/SQLite, or the internal db name when the source is a ZIP archive.
+        source_file_name = (
+            element.logical_name if element.path.suffix.casefold() == ".zip" else element.path.name
+        )
         env = BuildEnv(
             acquisition_path=None,
             source_file_path=extracted.source_original_path,
             input_file=extracted.source_file,
             source_tier=preset.source_tier,
+            entity=entity,
+            linked_entity=linked_entity,
+            source_file_name=source_file_name,
         )
         frame, frame_warnings = build_rows(records, preset, env, columns=list(extracted.source_columns))
         log.info("%s: %d source row(s) -> %d assertion row(s)", element.source_file, len(records), len(frame))

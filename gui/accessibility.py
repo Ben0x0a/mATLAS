@@ -120,6 +120,8 @@ def configure_accessibility(controller: Any) -> None:
     controller.load_profile_button.setAccessibleDescription("Load a mATLAS profile containing preset selections.")
     controller.save_profile_button.setAccessibleName("Save profile")
     controller.save_profile_button.setAccessibleDescription("Save the selected preset list as a mATLAS profile.")
+    controller.reload_presets_button.setAccessibleName("Reload presets")
+    controller.reload_presets_button.setAccessibleDescription("Reload presets from the current preset root.")
 
     controller.clear_log_button.setAccessibleName("Clear log")
     controller.clear_form_button.setAccessibleName("Clear form")
