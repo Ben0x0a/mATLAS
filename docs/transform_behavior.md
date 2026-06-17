@@ -1,131 +1,144 @@
 # Transform Behavior
 
-Transforms run after extraction and before export.
+Transforms run after source extraction and before export. The public entry point
+is `model_atlas.pipeline.process(input_path, presets_path, output, ...)`.
 
-The class-level orchestration entry point is
-`SpatioTemporalProcessor.transform(input_path, presets_path, output_csv, ...)`.
-It creates the request, discovers/matches sources, maps rows into assertions,
-then writes CSV, warning, and traceability sidecars.
+Processing order:
 
-Order:
+1. Load preset specs.
+2. Discover source elements.
+3. Match each source element to the first preset whose selector applies. (In
+   force-preset mode — one input file yielding one element plus one preset YAML —
+   matching is bypassed and the single preset is applied directly.)
+4. Extract a pandas DataFrame through the matching source adapter. Non-archive
+   sources are copied to a temp directory first and read from the copy; the
+   original is never opened by the parser.
+5. Convert rows to plain records with missing values normalized to `None`.
+6. Build canonical assertion rows from `common`, `assertions`, and temporal
+   specs.
+7. Apply untangle ranking.
+8. Write CSV output plus traceability and warning sidecars.
 
-1. Validate expected and mapped source columns.
-2. Apply common `model_mapping` fields.
-3. Expand `location_mappings` into internal `SpatioTemporalAssertion` objects.
-4. Calculate lower/upper timestamp interval bounds in Unix milliseconds.
-5. Flatten assertions to the canonical CSV column model.
-6. Add provenance and tool label fields.
-7. Preserve unmapped details.
-8. Optionally append rows from an existing integration-model CSV.
-9. Apply untangle over the combined model.
+## Row Assembly
 
-## Internal Assertion Model
+`build_rows()` is source-agnostic. It receives extracted records, a parsed
+`PresetSpec`, and provenance supplied by the pipeline.
 
-The transformation layer uses typed domain objects before writing a flat CSV:
+For each source row:
 
-- `Entity`: entity value, entity type, and linked entity.
-- `Temporal`: lower/upper interval bounds, normalized Unix milliseconds,
-  timestamp accuracy, raw timestamp, temporal source, and temporal relation.
-- `Spatial`: latitude, longitude, altitude, position type, raw position,
-  position source, accuracy, and speed fields.
-- `Provenance`: source file, original path, raw-data reference, and tool label.
-- `EvaluationLinks`: entity-position, entity-timestamp, and spatial-temporal
-  evaluation links.
-- `RecordRank`: untangle record type and rank.
+1. Start with every canonical output column set to `None`.
+2. Apply preset `common` fields.
+3. Fill missing provenance defaults: `acquisition_path`, `source_file_path`,
+   `input_file`, and `source_tier`.
+4. Resolve or generate `source_row_id`.
+5. For each assertion template, apply assertion fields.
+6. For each temporal spec, capture raw temporal values, apply temporal pipes,
+   and emit one final output row.
 
-`SpatioTemporalAssertion.to_flat_row()` is the boundary between the internal
-object model and the CSV representation. The CSV remains flat and stable.
+One source row can therefore produce multiple assertion rows.
 
-## Location Expansion
+## Column Resolution
 
-Each `location_mappings` item creates one or more assertions per source row.
+Preset `from` and temporal column references may be exact names or glob
+patterns. A glob must match exactly one extracted source column.
 
-- `timestamp: "col:RECORDED_AT"` creates one instant assertion.
-- `timestamp: ["col:FIRST_SEEN", "col:LAST_SEEN"]` creates one instant
-  assertion per timestamp column.
-- `timestamp_lower` + `timestamp_upper` creates one interval assertion.
+`from_name` resolves to the matched source column name itself. This is useful
+when metadata is encoded in a header, for example a timezone in
+`Timestamp Date/Time - UTC+00:00 (dd.MM.yyyy)`.
 
-The mapper writes source timestamp column names into:
+`from_file` resolves to part of the source file identity — `name`, `stem`, or
+`path` — instead of a column, so a row can carry filename-derived and
+column-derived values together.
 
-- `Timestamp interval lower bound type`
-- `Timestamp interval upper bound type`
+## Entity And Linked Entity Defaults
 
-It does not replace those types with convention names. This keeps source
-semantics traceable.
+`process(..., entity=, linked_entity=)` supply run-level defaults. During row
+assembly they fill `entity` / `linked_entity` only when the preset left them unset,
+so a preset mapping always takes precedence. The CLI exposes these as the optional
+`--entity` and the required `--linked-entity`.
 
-`raw_timestamp`, `raw_position`, `temporal_source`, and `position_source` are
-mapped like other assertion fields. Use constants such as `value:NTP`,
-`value:internal_clock`, `value:GNSS`, or `value:WiFi`, or map source columns
-with `col:<source column>`.
+## Pipes
 
-Encoded source fields can be mapped with preset `labels`. For example, a source
-column `ZTYPE` can map `1` to `GNSS`, `4` to `WiFi`, and `6` to `LTE`. The
-mapped label is written to the model field, and the original source value is
-kept in details under `value_map_references` unless the preset sets
-`keep_source_value: false`.
+Pipes run left to right. Built-in pipes are:
 
-## Details Modes
+- `cast`
+- `parse_datetime`
+- `arithmetic`
+- `lookup`
+- `regex_extract`
+- `split`
 
-- `json`: one `details` JSON column with unmapped source columns.
-- `append_column`: append unmapped fields as `details_<source column>`.
+All built-ins treat `None` as a no-op so empty cells stay empty unless an
+authoring choice explicitly raises an error.
 
-The mapper also adds parser details such as:
+`parse_datetime` writes Unix nanoseconds. A naive datetime is interpreted using
+`tz_offset_hours`, defaulting to UTC.
 
-- `positions_source_columns`
-- `timestamp_interval_source_columns`
-- `value_map_references`
+## Temporal Expansion
 
-## Append
+An instant temporal spec:
 
-`--append-model` loads an existing integration-model CSV and concatenates it
-before the newly mapped rows. No deduplication is attempted. This preserves
-evidence from tools such as AXIOM and from direct sources side by side, even
-when they describe the same apparent location event.
+```yaml
+temporal:
+  - instant: "Recorded At"
+```
 
-`Record type` and `Record rank` are recalculated after append so the untangle
-view reflects the complete output model.
+writes the same raw value, source field, and normalized value to both lower and
+upper temporal bounds.
+
+An interval temporal spec:
+
+```yaml
+temporal:
+  - interval:
+      lower: "First Seen"
+      upper: "Last Seen"
+```
+
+uses separate lower and upper source columns. Temporal overrides such as
+`entity_time_link`, `spatial_temporal_link`, and `time_zone` apply only to that
+temporal output row.
+
+## Source Row IDs
+
+If a preset declares `source_row_id`, that mapping is used. Distinct source rows
+must not resolve to the same ID; a collision is a hard error because it breaks
+traceability.
+
+If `source_row_id` is omitted, mATLAS generates a deterministic UUID from
+available provenance fields.
+
+## Merge And Split Output
+
+Merge mode is the default. It concatenates all matched preset frames, runs
+untangle over the merged model, and writes one CSV plus sidecars:
+
+```bash
+python matlas.py process --input ./evidence --presets ./presets --output ./out/merged.csv
+```
+
+Split mode writes one CSV per matched preset into the output folder and creates
+sidecars next to each CSV:
+
+```bash
+python matlas.py process --input ./evidence --presets ./presets --output ./out/by-preset --no-merge
+```
 
 ## Untangle
 
-Untangle groups rows by:
+Untangle groups comparable rows by:
 
-- `Timestamp interval lower bound UNIX ms` truncated to seconds;
-- `Timestamp interval upper bound UNIX ms` truncated to seconds;
-- `Entity`;
-- `Timestamp interval lower bound type`;
-- `Timestamp interval upper bound type`.
+- `time_lower_unix_ns` truncated to seconds
+- `time_upper_unix_ns` truncated to seconds
+- `entity`
+- `entity_time_link`
+- `spatial_temporal_link`
 
-It ranks by canonical `Horizontal accuracy`, smallest value first. A row with a
-numeric accuracy beats a row with no numeric accuracy. When accuracy cannot
-decide because values are equal or both missing, the tie-breaker is the number
-of available useful fields.
+Rows are ranked by best available horizontal accuracy first. If accuracy cannot
+decide, the row with more populated useful fields wins. Remaining ties preserve
+input order.
 
-Useful fields exclude source, metadata, and type columns. They include core
-spatio-temporal values and the link fields:
+Untangle writes:
 
-- `Entity`
-- `Linked Entity`
-- `Timestamp interval lower bound original`
-- `Timestamp interval lower bound UNIX ms`
-- `Timestamp interval upper bound original`
-- `Timestamp interval upper bound UNIX ms`
-- `Timestamp accuracy`
-- `raw_timestamp`
-- `temporal_source`
-- `Temporal relation`
-- `Latitude`
-- `Longitude`
-- `Altitude`
-- `raw_position`
-- `position_source`
-- `Horizontal accuracy`
-- `Vertical Accuracy`
-- `Horizontal Speed`
-- `Vertical Speed`
-- `Horizontal speed accuracy`
-- `Vertical speed accuracy`
-- `Entity-position link`
-- `Entity-Timestamp link`
-- `spatial-temporal link`
-
-If accuracy and completeness are still tied, original row order is kept.
+- `record_type`
+- `record_rank`

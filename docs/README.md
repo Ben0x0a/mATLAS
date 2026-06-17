@@ -1,4 +1,4 @@
-# SpatioTemporal Analysis - Forensic Data Processing Documentation
+# Model Atlas Documentation
 
 This directory is the audit-oriented documentation set. It explains not
 only *how to use* the tool but also *how it works*, where the main trust
@@ -11,12 +11,12 @@ usage. The documents below go deeper.
 
 | Document | Covers |
 | --- | --- |
-| [Architecture](architecture.md) | Module responsibilities, dependency direction, threading model. |
+| [Architecture](architecture.md) | Module responsibilities, dependency direction, CLI/GUI boundaries. |
 | [Integration Model](integration_model.md) | Canonical output columns, types, units, and temporal relation semantics. |
-| [Preset Quickstart](preset_authoring_quickstart.md) | Practical preset authoring path for real source data. |
-| [Preset Schema](preset_schema.md) | YAML fields, mapping syntax, examples, and expansion logic. |
-| [Transform Behavior](transform_behavior.md) | Source-agnostic model mapping, append, details, and untangle behavior. |
-| [GUI MVC](gui_mvc.md) | GUI architecture rules for the kept MVC shell and future GUI work. |
+| [Preset Quickstart](preset_authoring_quickstart.md) | Practical v2 preset authoring path for real source data. |
+| [Preset Schema](preset_schema.md) | Current YAML fields, mapping syntax, pipes, and expansion logic. |
+| [Transform Behavior](transform_behavior.md) | Source-agnostic row assembly, merge/split output, and untangle behavior. |
+| [GUI MVC](gui_mvc.md) | GUI architecture rules and current PySide6 front-end boundaries. |
 | [Source Adapters](source_adapters.md) | CSV, Excel, SQLite, ZIP, and folder discovery behavior. |
 | [Traceability](traceability.md) | Forensic guarantees, traceability JSON schema, limitations. |
 

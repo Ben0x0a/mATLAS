@@ -2,22 +2,34 @@
 
 Required test groups:
 
-- Public API dataclasses and package imports.
-- Recursive preset loading and schema validation.
-- Source discovery and adapter extraction for CSV, Excel, and SQLite.
-- Preset matching and unmatched-source warnings.
-- Expected-column drift warnings and missing mapped-column errors.
-- `model_mapping`, `location_mappings`, timestamp interval conversion, temporal
-  relation defaults, and position type.
-- Details modes.
+- Package imports and public API routing.
+- Recursive preset loading and v2 schema validation.
+- Source discovery and adapter extraction for CSV, Excel, SQLite, ZIP, and
+  folders.
+- Preset matching and unmatched-source reporting.
+- Expected-column drift warnings and mapped-column behavior.
+- `common`, `assertions`, temporal expansion, pipes, source row IDs, and
+  provenance defaults.
+- Merge output and split per-preset output.
+- Traceability and warnings sidecars.
 - Untangle grouping and ranking.
-- CLI `python matlas.py process` including output and traceability sidecars.
-- SQLite adapter behavior through source-agnostic processing, including direct
-  SQLite files and SQLite databases discovered inside ZIP evidence containers.
+- CLI `python matlas.py process` behavior.
+- Launcher routing for no-argument GUI launch, explicit `gui`, and CLI commands.
+- GUI-only helpers where they affect launchability, accessibility, profiles, or
+  output mode wiring.
 
 ## Test Layout
 
 | Path | Scope |
 | --- | --- |
-| `tests/source_agnostic/` | New package pipeline, source-agnostic CLI, presets, AXIOM template utility. |
-| `tests/launcher/` | Top-level launcher routing. |
+| `tests/source_agnostic/` | Package pipeline, source-agnostic CLI behavior, presets, AXIOM parser behavior. |
+| `tests/launcher/` | Top-level launcher routing and CLI-specific behavior. |
+| `tests/presets/` | Preset parsing and matching. |
+| `tests/sources/` | Source discovery and adapter registry behavior. |
+| `tests/transforms/` | Row assembly, pipes, value mapping, and untangle. |
+
+## Verification Command
+
+```bash
+.venv/bin/python -m pytest
+```

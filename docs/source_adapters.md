@@ -20,7 +20,29 @@ helpers: it copies evidence to a temporary directory, reads db-only and
 db+sidecars views, merges row provenance, validates custom SQL, and records
 before/after source integrity metadata.
 
-Excel selectors use file name and sheet name. CSV selectors use file name.
+Excel selectors use file name and sheet name. CSV selectors use file name. A
+selector matches when any criterion it declares matches (see
+[preset_schema.md](preset_schema.md)).
 
-CSV and Excel adapters hash the source file before and after reading. SQLite
+## Temp Staging (Never Touch The Original)
+
+No adapter parses the original evidence file in place. Every non-archive source is
+copied into a throwaway temporary directory first, and the parser reads only the
+copy:
+
+- CSV and Excel use the shared `sources/staging.py::stage_file` helper: it hashes
+  the original, copies it to a temp dir, and yields the local copy. The original is
+  re-hashed after the read to prove it was unchanged.
+- SQLite keeps its dedicated `sqlite/locate.py` path (it must also stage WAL/SHM/
+  journal siblings and run a two-pass db-only/db+sidecars merge before transforms).
+
+CSV and Excel adapters record the original's hash before and after reading. SQLite
 direct files use full hashes; SQLite-in-ZIP uses the strategic ZIP fingerprint.
+
+## Connection Handling (Windows)
+
+SQLite connections are closed explicitly with `contextlib.closing`, both in the
+discovery probe (`sources/folder.py`) and in the extractor reads
+(`sqlite/extractor.py`). A bare `with sqlite3.connect(...)` only manages the
+transaction and leaves the handle open; on Windows that lock blocks the later copy/
+open and temp-directory cleanup ("the file is used by someone else").

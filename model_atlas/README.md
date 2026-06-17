@@ -12,16 +12,18 @@ from model_atlas import process
 result = process(
     input_path=Path("evidence"),
     presets_path=Path("presets"),
-    output_csv=Path("out/merged.csv"),
+    output=Path("out/merged.csv"),
 )
 print(result.row_counts)
 ```
 
 `process()` discovers sources under `input_path`, matches them to YAML presets,
-extracts and maps columns into the 40-column assertion model, runs untangle, and
-writes `output_csv` plus `.matlas.traceability.json` and `.matlas.warnings.json`
+extracts and maps columns into the canonical assertion model, runs untangle, and
+writes CSV output plus `.matlas.traceability.json` and `.matlas.warnings.json`
 sidecars. It returns a `ProcessResult` with row counts, matched/unmatched source
-lists, and warning strings.
+lists, warning strings, and output paths.
+
+Set `merge=False` to write one CSV per matched preset into an output folder.
 
 ## Execution Path
 

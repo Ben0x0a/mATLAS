@@ -16,7 +16,7 @@ sidecar — it does not abort the run.
 
 ## Traceability Sidecars
 
-The `process` command writes two JSON sidecars next to the output CSV. For
+The `process` command writes two JSON sidecars next to each output CSV. For
 `output.csv`:
 
 ```text
@@ -57,6 +57,9 @@ sidecar uses the `matlas:` namespace prefix. It records the run as a
 PROV `activity`, each source as a PROV `entity`, and the tool as a PROV
 `agent`. The structure is machine-consumable by PROV-aware tooling.
 
+In split mode (`--no-merge`), each per-preset CSV receives its own traceability
+and warnings sidecars.
+
 ### Warnings sidecar
 
 `output.matlas.warnings.json` contains:
@@ -86,8 +89,9 @@ Derived gaps:
 | `mapped_absent` | Mapped − Present — a preset mapping references a missing column |
 
 `frontier_known` is the research backlog. `frontier_new` signals schema drift
-or a new data field. `drift_missing` signals source schema change. `mapped_absent`
-is a preset authoring error and produces a hard mapping error.
+or a new data field. `drift_missing` signals source schema change.
+`mapped_absent` is a preset authoring issue to review; the missing value resolves
+to `None` unless a later pipe raises.
 
 ## SQLite Helper Metadata
 
