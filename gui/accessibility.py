@@ -43,7 +43,8 @@ def configure_accessibility(controller: Any) -> None:
 
     for widget_name, buddy in (
         ("sourceLabel", controller.source_edit),
-        ("identityLabel", controller.linked_entity_edit),
+        ("identityLabel", controller.entity_edit),
+        ("entityLabel", controller.entity_edit),
         ("linkedEntityLabel", controller.linked_entity_edit),
         ("presetsPathLabel", controller.presets_path_edit),
         ("outputModeLabel", controller.merge_outputs_check),
@@ -77,9 +78,11 @@ def configure_accessibility(controller: Any) -> None:
     controller.source_file_button.setAccessibleDescription("Choose a source file for processing.")
     controller.source_folder_button.setAccessibleName("Browse for source folder")
     controller.source_folder_button.setAccessibleDescription("Choose a source folder for processing.")
+    controller.entity_edit.setAccessibleName("Entity")
+    controller.entity_edit.setAccessibleDescription("Optional source entity or owner added to output rows.")
     controller.linked_entity_edit.setAccessibleName("Linked entity")
     controller.linked_entity_edit.setAccessibleDescription(
-        "Optional person, company, account, or case subject linked to output rows."
+        "Required person, company, account, or case subject linked to output rows."
     )
 
     controller.presets_path_edit.setAccessibleName("Preset root path")
@@ -180,6 +183,7 @@ def _configure_tab_order(controller: Any) -> None:
         controller.source_edit,
         controller.source_file_button,
         controller.source_folder_button,
+        controller.entity_edit,
         controller.linked_entity_edit,
         controller.presets_path_edit,
         controller.presets_folder_button,

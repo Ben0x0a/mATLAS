@@ -157,6 +157,7 @@ class MainController(QObject):
         self.source_edit: QLineEdit = child(QLineEdit, "sourceEdit")
         self.presets_path_edit: QLineEdit = child(QLineEdit, "presetsPathEdit")
         self.output_edit: QLineEdit = child(QLineEdit, "outputEdit")
+        self.entity_edit: QLineEdit = child(QLineEdit, "entityEdit")
         self.linked_entity_edit: QLineEdit = child(QLineEdit, "linkedEntityEdit")
         self.preset_search_edit: QLineEdit = child(QLineEdit, "presetSearchEdit")
         self.available_preset_list: QListWidget = child(QListWidget, "availablePresetList")
@@ -611,6 +612,7 @@ class MainController(QObject):
             else:
                 self._show_error("Choose an output folder.")
             return
+        entity = self.entity_edit.text().strip() or None
         linked_entity = self.linked_entity_edit.text().strip()
         if not linked_entity:
             # Linked entity is mandatory (matches the CLI's required --linked-entity):
@@ -642,6 +644,7 @@ class MainController(QObject):
                         output_path,
                         traceability_format=traceability_format,
                         merge=merge_outputs,
+                        entity=entity,
                         linked_entity=linked_entity,
                     )
             if not selected_mode:
@@ -651,6 +654,7 @@ class MainController(QObject):
                     output_path,
                     traceability_format=traceability_format,
                     merge=merge_outputs,
+                    entity=entity,
                     linked_entity=linked_entity,
                 )
             with tempfile.TemporaryDirectory(prefix="matlas-presets-") as tmp:
@@ -661,6 +665,7 @@ class MainController(QObject):
                     output_path,
                     traceability_format=traceability_format,
                     merge=merge_outputs,
+                    entity=entity,
                     linked_entity=linked_entity,
                 )
 
@@ -711,6 +716,7 @@ class MainController(QObject):
     def _clear_form(self) -> None:
         self.source_edit.clear()
         self.output_edit.clear()
+        self.entity_edit.clear()
         self.linked_entity_edit.clear()
         self.presets_path_edit.setText(str(Path.cwd() / "presets"))
         self.preset_search_edit.clear()
