@@ -50,8 +50,9 @@ from model_atlas import ProcessResult, process
 
 `process(input_path, presets_path, output, *, traceability_format, merge, entity,
 linked_entity)` is the main entry point. In merge mode, `output` is a CSV path. In
-split mode, `output` is a folder for per-preset CSVs. `entity`/`linked_entity` are
-run-level defaults that fill rows only where the preset did not set those fields. It returns a `ProcessResult` with row
+split mode, `output` is a folder for per-preset CSVs. `entity`/`linked_entity`, when
+supplied, override the values a preset maps; the preset mapping is the default used
+only when the argument is absent. It returns a `ProcessResult` with row
 counts, matched/unmatched sources, warnings, and output paths. Launchers and GUI
 workers should call this function; they should not implement extraction,
 matching, mapping, export, or traceability logic themselves.

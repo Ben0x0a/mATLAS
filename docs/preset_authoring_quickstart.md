@@ -110,12 +110,11 @@ common:
 ### Entity And Linked Entity
 
 `entity` and `linked_entity` can be set in the preset (usually in `common`) or
-supplied at run time with `--entity` / `--linked-entity`. The run-level values are
-**defaults**: they fill a row only when the preset did not already set that field,
-so a preset mapping always wins. `--linked-entity` is required; `--entity` is
-optional. Map them in the preset when they are intrinsic to the source (e.g.
-`entity: {value: device}`); leave them to the run-level args when they are
-case-specific (e.g. the subject's name).
+supplied at run time with `--entity` / `--linked-entity`. The run-level argument is
+**authoritative**: when given it overrides the preset value, and the preset mapping
+is the default used only when the argument is absent. Map them in the preset when
+they are intrinsic to the source (e.g. `entity: {value: device}`); pass the
+run-level args to override per case (e.g. the subject's name).
 
 ### Field Mapping Sources
 

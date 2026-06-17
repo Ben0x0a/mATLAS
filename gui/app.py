@@ -13,6 +13,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable
 
+import yaml
 from PySide6.QtCore import QFile, QObject, QRectF, QThread, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
@@ -156,7 +157,6 @@ class MainController(QObject):
         self.source_edit: QLineEdit = child(QLineEdit, "sourceEdit")
         self.presets_path_edit: QLineEdit = child(QLineEdit, "presetsPathEdit")
         self.output_edit: QLineEdit = child(QLineEdit, "outputEdit")
-        self.entity_edit: QLineEdit = child(QLineEdit, "entityEdit")
         self.linked_entity_edit: QLineEdit = child(QLineEdit, "linkedEntityEdit")
         self.preset_search_edit: QLineEdit = child(QLineEdit, "presetSearchEdit")
         self.available_preset_list: QListWidget = child(QListWidget, "availablePresetList")
@@ -164,6 +164,7 @@ class MainController(QObject):
         self.log_edit: QTextEdit = child(QTextEdit, "logEdit")
         self.status_label: QLabel = child(QLabel, "statusLabel")
         self.preset_status_label: QLabel = child(QLabel, "presetStatusLabel")
+        self.single_preset_notice_label: QLabel = child(QLabel, "singlePresetNoticeLabel")
         self.output_label: QLabel = child(QLabel, "outputLabel")
 
         self.source_file_button: QPushButton = child(QPushButton, "sourceFileButton")
@@ -198,6 +199,7 @@ class MainController(QObject):
         self.window.setStyleSheet(build_stylesheet())
         self._configure_header_assets()
         self._hide_unreleased_options()
+        self.single_preset_notice_label.setVisible(False)
         accessibility.configure_status_label(self)
         self._stabilize_form_labels()
         self._stabilize_preset_mode_row()
@@ -223,12 +225,14 @@ class MainController(QObject):
         self.load_profile_button.clicked.connect(self._load_profile)
         self.save_profile_button.clicked.connect(self._save_profile)
         self.reload_presets_button.clicked.connect(self._load_presets_async)
+        self.auto_preset_check.toggled.connect(lambda _checked: self._sync_single_preset_notice())
         self.log_level_combo.currentTextChanged.connect(self._apply_log_level)
         self.merge_outputs_check.toggled.connect(lambda _checked: self._sync_output_mode(clear_output=True))
 
     def _stabilize_form_labels(self) -> None:
         label_names = (
             "sourceLabel",
+            "identityLabel",
             "presetsPathLabel",
             "outputModeLabel",
             "outputLabel",
@@ -451,6 +455,7 @@ class MainController(QObject):
         self.preset_status_label.setText(f"{len(self._presets)} preset(s) loaded")
         self.preset_status_label.setAccessibleDescription(f"{len(self._presets)} presets loaded.")
         self._render_available_presets()
+        self._sync_single_preset_notice()
         log.info("Loaded %d preset(s) for GUI selection", len(self._presets))
 
     def _on_presets_failed(self, tb: str) -> None:
@@ -458,6 +463,7 @@ class MainController(QObject):
         self.available_preset_list.clear()
         self.preset_status_label.setText("Preset load failed")
         self.preset_status_label.setAccessibleDescription("Preset loading failed.")
+        self._sync_single_preset_notice()
         log.error("Preset loading failed:\n%s", tb)
 
     def _render_available_presets(self) -> None:
@@ -492,12 +498,14 @@ class MainController(QObject):
         if self.selected_preset_list.count():
             self.auto_preset_check.setChecked(False)
         self._render_available_presets()
+        self._sync_single_preset_notice()
 
     def _remove_selected_presets(self) -> None:
         for item in self.selected_preset_list.selectedItems():
             row = self.selected_preset_list.row(item)
             self.selected_preset_list.takeItem(row)
         self._render_available_presets()
+        self._sync_single_preset_notice()
 
     def _selected_preset_paths(self) -> list[str]:
         return [
@@ -524,6 +532,7 @@ class MainController(QObject):
             self._add_list_item(self.selected_preset_list, self._preset_item_for_path(preset_path))
         self.auto_preset_check.setChecked(False)
         self._render_available_presets()
+        self._sync_single_preset_notice()
         log.info("Loaded profile %s with %d preset(s)", path, len(preset_paths))
 
     def _save_profile(self) -> None:
@@ -559,6 +568,33 @@ class MainController(QObject):
             pass
         return PresetItem(path.stem, path)
 
+    def _single_preset_for_selector_skip(self, selected_mode: bool, selected_paths: list[Path]) -> Path | None:
+        if selected_mode:
+            return selected_paths[0] if len(selected_paths) == 1 else None
+        return self._presets[0].path if len(self._presets) == 1 else None
+
+    def _sync_single_preset_notice(self) -> None:
+        selected_mode = not self.auto_preset_check.isChecked()
+        selected_paths = [Path(path) for path in self._selected_preset_paths()]
+        visible = self._single_preset_for_selector_skip(selected_mode, selected_paths) is not None
+        self.single_preset_notice_label.setVisible(visible)
+        self.single_preset_notice_label.setAccessibleDescription(
+            "One preset will be applied without filename selector filtering." if visible else ""
+        )
+
+    def _preset_without_selector_filters(self, preset_path: Path, target_dir: Path) -> Path:
+        raw = yaml.safe_load(preset_path.read_text(encoding="utf-8")) or {}
+        selectors = raw.get("selectors")
+        if isinstance(selectors, list):
+            raw["selectors"] = [
+                {"source_type": selector["source_type"]}
+                for selector in selectors
+                if isinstance(selector, dict) and "source_type" in selector
+            ] or selectors
+        target = target_dir / preset_path.name
+        target.write_text(yaml.safe_dump(raw, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        return target
+
     def _run_process(self) -> None:
         source = self.source_edit.text().strip()
         output = self.output_edit.text().strip()
@@ -575,7 +611,6 @@ class MainController(QObject):
             else:
                 self._show_error("Choose an output folder.")
             return
-        entity = self.entity_edit.text().strip() or None
         linked_entity = self.linked_entity_edit.text().strip()
         if not linked_entity:
             # Linked entity is mandatory (matches the CLI's required --linked-entity):
@@ -589,6 +624,7 @@ class MainController(QObject):
         if selected_mode and not selected_paths:
             self._show_error("Selected-presets mode needs at least one preset.")
             return
+        single_preset = self._single_preset_for_selector_skip(selected_mode, selected_paths)
 
         self._set_running(True)
         self._last_output_folder = None
@@ -597,6 +633,17 @@ class MainController(QObject):
         self._apply_log_level()
 
         def task() -> ProcessResult:
+            if single_preset is not None:
+                with tempfile.TemporaryDirectory(prefix="matlas-single-preset-") as tmp:
+                    relaxed_preset = self._preset_without_selector_filters(single_preset, Path(tmp))
+                    return process(
+                        Path(source),
+                        relaxed_preset,
+                        output_path,
+                        traceability_format=traceability_format,
+                        merge=merge_outputs,
+                        linked_entity=linked_entity,
+                    )
             if not selected_mode:
                 return process(
                     Path(source),
@@ -604,17 +651,6 @@ class MainController(QObject):
                     output_path,
                     traceability_format=traceability_format,
                     merge=merge_outputs,
-                    entity=entity,
-                    linked_entity=linked_entity,
-                )
-            if len(selected_paths) == 1:
-                return process(
-                    Path(source),
-                    selected_paths[0],
-                    output_path,
-                    traceability_format=traceability_format,
-                    merge=merge_outputs,
-                    entity=entity,
                     linked_entity=linked_entity,
                 )
             with tempfile.TemporaryDirectory(prefix="matlas-presets-") as tmp:
@@ -625,7 +661,6 @@ class MainController(QObject):
                     output_path,
                     traceability_format=traceability_format,
                     merge=merge_outputs,
-                    entity=entity,
                     linked_entity=linked_entity,
                 )
 
@@ -676,7 +711,6 @@ class MainController(QObject):
     def _clear_form(self) -> None:
         self.source_edit.clear()
         self.output_edit.clear()
-        self.entity_edit.clear()
         self.linked_entity_edit.clear()
         self.presets_path_edit.setText(str(Path.cwd() / "presets"))
         self.preset_search_edit.clear()
@@ -686,6 +720,7 @@ class MainController(QObject):
         self.merge_outputs_check.setChecked(True)
         self._sync_output_mode()
         self.auto_preset_check.setChecked(True)
+        self._sync_single_preset_notice()
         self._set_status("Idle")
         self._last_output_folder = None
         self.open_output_folder_button.setEnabled(False)

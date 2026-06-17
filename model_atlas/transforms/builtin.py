@@ -1,14 +1,15 @@
-"""Built-in transforms for the per-field pipe.
+"""Built-in transforms, timestamp codecs, and unit/cast helpers for v3.
 
-Defines:    arithmetic, cast, lookup, regex_extract, split — each registered into
-            the transform registry on import.
-Used by:    the assembly engine via transforms.registry; importing this module is
-            what makes the builtins available.
-Depends on: transforms.expression (sandbox), transforms.value_maps (key normaliser),
+Defines:    the pipe transforms (cast, scale, arithmetic, lookup, regex, split),
+            the timezone-offset parser, the string datetime parser, and the named
+            epoch decoders (cocoa/unix_*/webkit) -> Unix nanoseconds.
+Used by:    transforms.assemble (declarative cast/unit/epoch + procedural pipe) via
             transforms.registry.
+Depends on: transforms.expression (sandbox), transforms.value_maps (key normaliser),
+            transforms.registry, model.families (cast inference + unit factors).
 
-Every transform treats ``None`` as a no-op (returns ``None``) so an empty source
-cell flows through a pipe untouched rather than raising.
+Every transform treats ``None`` as a no-op so an empty source cell flows through a
+pipe untouched rather than raising.
 """
 from __future__ import annotations
 
@@ -17,102 +18,41 @@ import re
 from typing import Any
 
 from model_atlas.transforms.expression import evaluate
-from model_atlas.transforms.registry import TransformHardError, register_transform
+from model_atlas.transforms.registry import PipeContext, TransformHardError, register_transform
 from model_atlas.transforms.value_maps import value_map_key
 
 _TRUE_TOKENS = {"1", "true", "yes", "y", "t"}
 _FALSE_TOKENS = {"0", "false", "no", "n", "f", ""}
 
-
-@register_transform("arithmetic", primary="expression")
-def arithmetic(value: Any, *, expression: str) -> Any:
-    """Evaluate a sandboxed arithmetic expression with ``value`` bound."""
-    if value is None:
-        return None
-    return evaluate(expression, value)
-
-
-@register_transform("cast", primary="to")
-def cast(value: Any, *, to: str) -> Any:
-    """Coerce ``value`` to ``int`` | ``float`` | ``str`` | ``bool``."""
-    if value is None:
-        return None
-    if to == "int":
-        return int(value)
-    if to == "float":
-        return float(value)
-    if to == "str":
-        return str(value)
-    if to == "bool":
-        token = str(value).strip().casefold()
-        if token in _TRUE_TOKENS:
-            return True
-        if token in _FALSE_TOKENS:
-            return False
-        # An ambiguous token is a data fault — surface it to the on_error policy.
-        raise ValueError(f"Cannot cast {value!r} to bool")
-    # An unknown cast target is an authoring fault — always halt.
-    raise TransformHardError(f"Unsupported cast target {to!r}")
-
-
-@register_transform("lookup", primary="table")
-def lookup(value: Any, *, table: dict[Any, Any], on_unknown: str = "raw") -> Any:
-    """Map an encoded ``value`` to a label via ``table`` (e.g. {1: GNSS, 4: WiFi}).
-
-    YAML numeric and string keys are treated equivalently. ``on_unknown`` decides
-    an unmapped value: ``raw`` keeps it, ``null`` drops it, ``error`` raises.
-    """
-    if value is None:
-        return None
-    normalised = {value_map_key(key): label for key, label in table.items()}
-    key = value_map_key(value)
-    if key in normalised:
-        return normalised[key]
-    if on_unknown == "raw":
-        return value
-    if on_unknown == "null":
-        return None
-    if on_unknown == "error":
-        # Author asked to halt on an unmapped code — a deliberate hard stop.
-        raise TransformHardError(f"No mapping for {value!r} and on_unknown=error")
-    raise TransformHardError(f"on_unknown must be raw|null|error, got {on_unknown!r}")
-
-
-@register_transform("regex_extract", primary="pattern")
-def regex_extract(value: Any, *, pattern: str, group: int | str = 1) -> Any:
-    """Return the capture ``group`` of the first match of ``pattern``, else None."""
-    if value is None:
-        return None
-    match = re.search(pattern, str(value))
-    if match is None:
-        return None
-    return match.group(group)
-
-
-@register_transform("split", primary="separator")
-def split(value: Any, *, separator: str, index: int | None = None) -> Any:
-    """Split on ``separator``; return part ``index`` if given, else the full list."""
-    if value is None:
-        return None
-    parts = str(value).split(separator)
-    if index is None:
-        return parts
-    return parts[index]
-
-
 _UNIX_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
 
-# Accepts: a number (hours), "UTC"/"GMT"/"Z"/empty (=0), or an offset string such as
-# "UTC+02:00", "+02:00", "-0200", "+02" — case-insensitive, optional UTC/GMT prefix.
+# Seconds between the Unix epoch (1970-01-01) and the Cocoa/Core-Data epoch (2001-01-01)
+# and the WebKit epoch (1601-01-01).
+_COCOA_OFFSET_S = 978_307_200
+_WEBKIT_OFFSET_S = -11_644_473_600
+
+# epoch name -> (scale to seconds, offset in seconds added AFTER scaling to seconds).
+_EPOCHS: dict[str, tuple[float, float]] = {
+    "unix_s": (1.0, 0.0),
+    "unix_ms": (1e-3, 0.0),
+    "unix_us": (1e-6, 0.0),
+    "unix_ns": (1e-9, 0.0),
+    "cocoa": (1.0, _COCOA_OFFSET_S),
+    "webkit": (1e-6, _WEBKIT_OFFSET_S),  # WebKit/Chrome microseconds since 1601
+}
+
+
+def _to_int(value: Any) -> int:
+    return int(value)
+
+
+# --- timezone + datetime ----------------------------------------------------
+
 _TZ_OFFSET_RE = re.compile(r"^([+-])(\d{2}):?(\d{2})?$")
 
 
 def tz_offset_to_hours(value: Any) -> float:
-    """Normalise a timezone offset (number or string) to signed decimal hours.
-
-    Raises ``ValueError`` on an unrecognised string so the caller can decide whether
-    to surface it (a malformed declared zone) or fall back to UTC.
-    """
+    """Normalise a timezone offset (number or string) to signed decimal hours."""
     if value is None:
         return 0.0
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -128,33 +68,128 @@ def tz_offset_to_hours(value: Any) -> float:
     if match is None:
         raise ValueError(f"Unrecognised timezone offset {value!r}")
     sign = 1 if match.group(1) == "+" else -1
-    hours = int(match.group(2))
-    minutes = int(match.group(3) or 0)
-    return sign * (hours + minutes / 60)
+    return sign * (int(match.group(2)) + int(match.group(3) or 0) / 60)
 
 
-@register_transform("parse_datetime", primary="format")
-def parse_datetime(value: Any, *, format: str, tz_offset_hours: float | str = 0.0) -> int | None:
-    """Parse a formatted datetime string to Unix nanoseconds.
+def parse_datetime_to_ns(value: Any, fmt: str, tz_offset_hours: Any = 0.0) -> int | None:
+    """Parse a formatted datetime string to Unix nanoseconds (None -> None).
 
-    ``format`` is a strptime pattern (e.g. ``"%d.%m.%Y %H:%M:%S.%f"``). A value with
-    no zone is interpreted at ``tz_offset_hours``, which may be a number of hours or an
-    offset string such as ``"UTC+02:00"`` / ``"+02:00"`` (default 0 = UTC); a pattern
-    with ``%z`` is honoured as parsed. The engine auto-feeds a temporal spec's captured
-    ``time_zone`` here (see ``transforms.assemble``), so a zone embedded in a column
-    header is applied, not merely recorded. Many forensic exports give formatted strings
-    rather than epochs, so this is the temporal counterpart of ``arithmetic``.
+    A naive value is interpreted at ``tz_offset_hours`` (number or offset string); a
+    ``%z`` in the format is honoured as parsed.
     """
     if value is None:
         return None
-    parsed = dt.datetime.strptime(str(value), format)
+    parsed = dt.datetime.strptime(str(value), fmt)
     if parsed.tzinfo is None:
-        # WHY: a naive timestamp is meaningless without a zone; the preset declares it
-        # (or the engine feeds the captured one), defaulting to UTC, rather than the
-        # engine silently assuming local time.
-        parsed = parsed.replace(tzinfo=dt.timezone(dt.timedelta(hours=tz_offset_to_hours(tz_offset_hours))))
-    # Integer nanoseconds, exact: datetime resolves to microseconds, so ns = us * 1000
-    # (avoids the float error of multiplying timestamp() by 1e9).
+        offset = tz_offset_to_hours(tz_offset_hours)
+        parsed = parsed.replace(tzinfo=dt.timezone(dt.timedelta(hours=offset)))
     delta = parsed - _UNIX_EPOCH
     microseconds = (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
     return microseconds * 1000
+
+
+def epoch_to_ns(value: Any, epoch: str) -> int | None:
+    """Decode a numeric epoch value under a named encoding to Unix nanoseconds.
+
+    Self-documents the conversion a preset would otherwise hand-roll: e.g. ``cocoa``
+    adds the 2001->1970 offset; ``unix_ms`` scales milliseconds; etc.
+    """
+    if value is None:
+        return None
+    if epoch not in _EPOCHS:
+        raise TransformHardError(f"Unknown epoch {epoch!r}")
+    scale, offset_s = _EPOCHS[epoch]
+    seconds = float(value) * scale + offset_s
+    # Round to the nearest nanosecond; float precision is ample for forensic seconds.
+    return int(round(seconds * 1_000_000_000))
+
+
+# --- pipe transforms (value, args, kwargs, ctx) -----------------------------
+
+@register_transform("cast")
+def _cast(value: Any, args: tuple[Any, ...], kwargs: dict[str, Any], ctx: PipeContext) -> Any:
+    if value is None:
+        return None
+    to = args[0] if args else kwargs.get("to")
+    if to == "int":
+        return int(value)
+    if to == "float":
+        return float(value)
+    if to == "str":
+        return str(value)
+    if to == "bool":
+        token = str(value).strip().casefold()
+        if token in _TRUE_TOKENS:
+            return True
+        if token in _FALSE_TOKENS:
+            return False
+        raise ValueError(f"Cannot cast {value!r} to bool")
+    raise TransformHardError(f"Unsupported cast target {to!r}")
+
+
+@register_transform("scale")
+def _scale(value: Any, args: tuple[Any, ...], kwargs: dict[str, Any], ctx: PipeContext) -> Any:
+    if value is None:
+        return None
+    factor = args[0] if args else kwargs.get("by")
+    return float(value) * float(factor)
+
+
+@register_transform("arithmetic")
+def _arithmetic(value: Any, args: tuple[Any, ...], kwargs: dict[str, Any], ctx: PipeContext) -> Any:
+    if value is None:
+        return None
+    return evaluate(str(args[0]), value)
+
+
+@register_transform("lookup")
+def _lookup(value: Any, args: tuple[Any, ...], kwargs: dict[str, Any], ctx: PipeContext) -> Any:
+    if value is None:
+        return None
+    name = args[0] if args else None
+    table = ctx.lookup_tables.get(str(name))
+    if table is None:
+        raise TransformHardError(f"lookup references unknown table {name!r}")
+    on_unknown = kwargs.get("on_unknown", "raw")
+    normalised = {value_map_key(k): v for k, v in table.items()}
+    key = value_map_key(value)
+    if key in normalised:
+        return normalised[key]
+    if on_unknown == "raw":
+        return value
+    if on_unknown is None or on_unknown == "null":
+        return None
+    if on_unknown == "error":
+        raise TransformHardError(f"No mapping for {value!r} in {name!r} and on_unknown=error")
+    raise TransformHardError(f"on_unknown must be raw|null|error, got {on_unknown!r}")
+
+
+@register_transform("regex")
+def _regex(value: Any, args: tuple[Any, ...], kwargs: dict[str, Any], ctx: PipeContext) -> Any:
+    """Return a NAMED capture group of a named pattern (named groups are mandatory)."""
+    if value is None:
+        return None
+    name = str(args[0]) if args else None
+    pattern = ctx.patterns.get(name)
+    if pattern is None:
+        raise TransformHardError(f"regex references unknown pattern {name!r}")
+    group = kwargs.get("group")
+    if group is None:
+        raise TransformHardError(f"regex({name}) requires group=<named group>")
+    compiled = re.compile(pattern)
+    if str(group) not in compiled.groupindex:
+        raise TransformHardError(f"pattern {name!r} has no named group {group!r}")
+    match = compiled.search(str(value))
+    return match.group(str(group)) if match else None
+
+
+@register_transform("split")
+def _split(value: Any, args: tuple[Any, ...], kwargs: dict[str, Any], ctx: PipeContext) -> Any:
+    if value is None:
+        return None
+    separator = str(args[0])
+    parts = str(value).split(separator)
+    index = kwargs.get("index")
+    if index is None:
+        return parts
+    return parts[int(index)]

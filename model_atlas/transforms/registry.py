@@ -1,109 +1,75 @@
-"""Named transform registry and per-field pipe runner.
+"""Named transform registry and pipe runner (v3).
 
-Defines:    register_transform (decorator), get_transform, apply_step, apply_pipe.
-            A preset field declares a `pipe:` list of single-transform steps; this
-            module resolves each step to a registered function and runs them
-            left-to-right, applying the per-step on_error policy.
-Used by:    transforms.builtin (registers the builtins), and the assembly engine
-            (applies a field's pipe).
-Depends on: standard library only.
+Defines:    register_transform (decorator), TransformHardError, PipeContext, and
+            run_pipe — which executes a parsed pipe (a tuple of expr.PipeCall) left
+            to right, applying each step's on_error policy.
+Used by:    transforms.builtin (registers transforms), transforms.assemble (runs pipes).
+Depends on: presets.expr (PipeCall); standard library.
 
-Step shape (from YAML): a mapping whose one key matching a registered transform
-name carries that transform's primary argument; any remaining keys are extra
-parameters, including the optional ``on_error``. Examples:
-    {arithmetic: "(value + 1) * 1000"}
-    {cast: int}
-    {lookup: {1: GNSS, 4: WiFi}, on_unknown: raw}
-    {regex_extract: "rowid=(\\d+)", group: 1, on_error: error}
+A transform is ``fn(value, args, kwargs, ctx) -> value`` and treats ``None`` as a
+no-op. ``ctx`` (PipeContext) carries the preset's named lookup tables and regex
+patterns so ``lookup(name)`` / ``regex(name, group=...)`` resolve by name.
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from model_atlas.presets.expr import PipeCall
 
 log = logging.getLogger(__name__)
 
 _ON_ERROR_POLICIES = ("null", "raw", "error")
 
+Transform = Callable[[Any, tuple[Any, ...], dict[str, Any], "PipeContext"], Any]
+_REGISTRY: dict[str, Transform] = {}
+
 
 class TransformHardError(ValueError):
-    """A deliberate, policy-driven halt (e.g. ``on_unknown: error``, a misconfigured
-    transform) that the pipe must always propagate, regardless of a step's ``on_error``.
-    Distinguishes author/config faults from per-row data failures, which ``on_error`` governs.
-    """
+    """A deliberate, config-driven halt (unknown transform, on_unknown=error, etc.)
+    that the pipe always propagates regardless of a step's on_error policy."""
 
 
 @dataclass(frozen=True)
-class _Transform:
-    name: str
-    func: Callable[..., Any]
-    primary: str  # the parameter name the single-key step value binds to
+class PipeContext:
+    """Per-preset data a pipe step may reference by name."""
+
+    lookup_tables: dict[str, dict[Any, Any]] = field(default_factory=dict)
+    patterns: dict[str, str] = field(default_factory=dict)
 
 
-_REGISTRY: dict[str, _Transform] = {}
-
-
-def register_transform(name: str, *, primary: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Register a transform under ``name`` whose single-key value binds to ``primary``."""
-
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        # A duplicate name is a programming error, not a runtime variant — fail loudly
-        # so two transforms cannot silently shadow each other.
+def register_transform(name: str) -> Callable[[Transform], Transform]:
+    def decorator(func: Transform) -> Transform:
         if name in _REGISTRY:
             raise ValueError(f"Transform {name!r} is already registered")
-        _REGISTRY[name] = _Transform(name=name, func=func, primary=primary)
+        _REGISTRY[name] = func
         return func
 
     return decorator
 
 
-def get_transform(name: str) -> _Transform:
-    if name not in _REGISTRY:
-        raise KeyError(f"Unknown transform {name!r}")
-    return _REGISTRY[name]
-
-
-def _resolve_step(step: dict[str, Any]) -> tuple[_Transform, Any, dict[str, Any]]:
-    if not isinstance(step, dict):
-        raise ValueError(f"Pipe step must be a mapping, got {type(step).__name__}")
-    transform_keys = [key for key in step if key in _REGISTRY]
-    # Exactly one key must name a transform; zero or several is an authoring error.
-    if len(transform_keys) != 1:
-        raise ValueError(
-            f"Pipe step must name exactly one transform; found {transform_keys or 'none'} in {step}"
-        )
-    name = transform_keys[0]
-    transform = _REGISTRY[name]
-    extra = {key: value for key, value in step.items() if key != name}
-    return transform, step[name], extra
-
-
-def apply_step(value: Any, step: dict[str, Any], warnings: list[str]) -> Any:
-    """Run one pipe step against ``value``; record a warning per the on_error policy."""
-    transform, primary_value, extra = _resolve_step(step)
-    on_error = extra.pop("on_error", "null")
-    if on_error not in _ON_ERROR_POLICIES:
-        raise ValueError(f"on_error must be one of {_ON_ERROR_POLICIES}, got {on_error!r}")
-    params = {transform.primary: primary_value, **extra}
-    try:
-        return transform.func(value, **params)
-    except TransformHardError:
-        # A deliberate/config halt is never swallowed by the per-row on_error policy.
-        raise
-    except Exception as exc:  # noqa: BLE001 - the policy decides how to surface it.
-        if on_error == "error":
+def run_pipe(
+    value: Any, calls: tuple[PipeCall, ...], ctx: PipeContext, warnings: list[str]
+) -> Any:
+    """Run a parsed pipe left to right, returning the final value."""
+    for call in calls:
+        func = _REGISTRY.get(call.name)
+        if func is None:
+            raise TransformHardError(f"Unknown transform {call.name!r}")
+        kwargs = dict(call.kwargs)
+        on_error = kwargs.pop("on_error", "null")
+        if on_error not in _ON_ERROR_POLICIES:
+            raise TransformHardError(f"on_error must be one of {_ON_ERROR_POLICIES}, got {on_error!r}")
+        try:
+            value = func(value, call.args, kwargs, ctx)
+        except TransformHardError:
             raise
-        message = f"transform {transform.name!r} failed on {value!r}: {exc} (on_error={on_error})"
-        log.warning(message)
-        warnings.append(message)
-        # "raw" keeps the input value; "null" drops it.
-        return value if on_error == "raw" else None
-
-
-def apply_pipe(value: Any, steps: list[dict[str, Any]] | None) -> tuple[Any, list[str]]:
-    """Run a field's pipe left-to-right, returning the final value and any warnings."""
-    warnings: list[str] = []
-    for step in steps or []:
-        value = apply_step(value, step, warnings)
-    return value, warnings
+        except Exception as exc:  # noqa: BLE001 - the policy decides how to surface it.
+            if on_error == "error":
+                raise
+            message = f"transform {call.name!r} failed on {value!r}: {exc} (on_error={on_error})"
+            log.warning(message)
+            warnings.append(message)
+            value = value if on_error == "raw" else None
+    return value

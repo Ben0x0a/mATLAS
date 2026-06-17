@@ -1,18 +1,21 @@
-"""Assembly engine: build flat assertion rows from extracted data + a preset spec.
+"""Assembly engine: build flat assertion rows from extracted data + a v3 preset.
 
-Defines:    BuildEnv (pipeline-derived provenance defaults), to_records (NaN->None
-            normalisation), and build_rows (the fan-out + pipe + raw-capture engine).
-Used by:    the v2 pipeline.
-Depends on: model.families (OUTPUT_COLUMNS), presets.spec, transforms.registry + builtins.
+Defines:    BuildEnv (pipeline-derived defaults), to_records (NaN->None), make_resolver
+            (glob column resolver), and build_rows (the fan-out + reference + pipe +
+            raw-capture engine).
+Used by:    the pipeline.
+Depends on: model.families (columns/types/units), presets.spec + expr, transforms.
 
-One source row x each assertion template x each temporal spec -> one flat row. The
-temporal bound's raw value and source field are captured automatically before its
-pipe runs, so the raw<->normalised pairing cannot be forgotten by a preset author.
-``source_row_id`` is shared by every assertion of a row and guarded for uniqueness.
+One source row x each assertion (each with one time spec) -> one flat row. Temporal
+raw values and source fields, and the lat/lon source columns, are captured
+automatically so an author can never forget the value<->provenance pairing.
+``source_row_id`` is a UID: a real source UID when mapped, else deterministically
+generated; it is shared by every assertion of a row and guarded for uniqueness.
 """
 from __future__ import annotations
 
 import fnmatch
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,10 +24,11 @@ from typing import Any, Callable
 import pandas as pd
 
 import model_atlas.transforms.builtin  # noqa: F401 - registers builtins
-from model_atlas.model.families import OUTPUT_COLUMNS
-from model_atlas.presets.spec import FieldSpec, PresetSpec, TemporalSpec
-from model_atlas.transforms.builtin import tz_offset_to_hours
-from model_atlas.transforms.registry import apply_pipe
+from model_atlas.model.families import OUTPUT_COLUMNS, column_cast, unit_factor
+from model_atlas.presets.expr import Ref
+from model_atlas.presets.spec import FieldSpec, PresetSpec, TimeSpec
+from model_atlas.transforms.builtin import epoch_to_ns, parse_datetime_to_ns, tz_offset_to_hours
+from model_atlas.transforms.registry import PipeContext, run_pipe
 
 # Fixed namespace so deterministic source_row_ids are stable across runs/machines.
 _SOURCE_ROW_NAMESPACE = uuid.UUID("6f9b1d2e-7c3a-5e41-9a2b-0c8d4e1f2a3b")
@@ -34,8 +38,8 @@ _PROVENANCE_DEFAULT_FIELDS = ("acquisition_path", "source_file_path", "input_fil
 
 @dataclass(frozen=True)
 class BuildEnv:
-    """Pipeline/operator defaults. Values fill matching model fields only when
-    the preset did not set them."""
+    """Pipeline/operator defaults. Provenance values fill matching model fields only
+    when the preset did not set them; entity/linked_entity OVERRIDE the preset."""
 
     acquisition_path: str | None = None
     source_file_path: str | None = None
@@ -43,15 +47,13 @@ class BuildEnv:
     source_tier: str | None = None
     entity: str | None = None
     linked_entity: str | None = None
-    source_file_name: str | None = None  # used by `from_file` field mappings
+    source_file_name: str | None = None
 
 
 def _is_missing(value: Any) -> bool:
     if value is None:
         return True
     try:
-        # pandas reads empty cells as NaN; treat any NaN-like scalar as missing so a
-        # pipe sees None rather than a float nan slipping through untouched.
         return bool(pd.isna(value))
     except (TypeError, ValueError):
         return False
@@ -66,13 +68,10 @@ def to_records(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 def make_resolver(columns: list[str]) -> Callable[[str | None], str | None]:
-    """Resolve a column reference to an actual column name.
+    """Resolve a column reference (exact name or glob) to an actual source column.
 
-    A glob pattern (``* ? [``) is matched against the source columns; a unique match
-    wins, several is a hard authoring error, none yields None. A plain name resolves
-    to itself only if present (else None), so the timezone-in-header problem is fixed
-    by writing ``from: "... - * (dd.MM.yyyy)"``.
-    """
+    A glob (``* ? [``) must match exactly one column; several is a hard error, none
+    yields None. A plain name resolves to itself only if present."""
     available = list(columns)
     cache: dict[str, str | None] = {}
 
@@ -94,83 +93,119 @@ def make_resolver(columns: list[str]) -> Callable[[str | None], str | None]:
     return resolve
 
 
+def _coerce_scalar(value: Any, target: str) -> Any:
+    if target == "int":
+        return int(value)
+    if target == "float":
+        return float(value)
+    if target == "str":
+        return str(value)
+    if target == "bool":
+        return bool(value)
+    raise ValueError(f"unsupported cast target {target!r}")
+
+
+def _resolve_ref(
+    ref: Ref,
+    row: dict[str, Any],
+    resolve: Callable[[str | None], str | None],
+    file_values: dict[str, Any],
+    env: BuildEnv,
+) -> tuple[Any, str | None]:
+    """Return (value, source_column) for a reference. source_column is set only when
+    the value originates from a named source column (column/header), for provenance."""
+    if ref.kind == "const":
+        return ref.arg, None
+    if ref.kind == "param":
+        return (env.entity if ref.arg == "entity" else env.linked_entity), None
+    if ref.kind == "filename":
+        return file_values.get(ref.arg), None
+    if ref.kind == "header":
+        col = resolve(ref.arg)
+        return col, col  # the value IS the matched column's header text
+    col = resolve(ref.arg)  # column
+    return (row.get(col) if col is not None else None), col
+
+
 def _resolve_field(
     spec: FieldSpec,
     row: dict[str, Any],
     warnings: list[str],
     resolve: Callable[[str | None], str | None],
     file_values: dict[str, Any],
-) -> Any:
-    if spec.is_constant:
-        value: Any = spec.value
-    elif spec.from_name_pattern is not None:
-        # The value IS the matched column's name (e.g. to extract the timezone from it).
-        value = resolve(spec.from_name_pattern)
-    elif spec.file_token is not None:
-        # The value comes from the source FILE identity, not a column — lets a preset
-        # combine filename-derived and column-derived fields on the same row.
-        value = file_values.get(spec.file_token)
-    else:
-        actual = resolve(spec.column)
-        value = row.get(actual) if actual is not None else None
-    result, step_warnings = apply_pipe(value, list(spec.pipe))
-    warnings.extend(step_warnings)
-    return result
+    env: BuildEnv,
+    ctx: PipeContext,
+) -> tuple[Any, str | None]:
+    value, source_col = _resolve_ref(spec.ref, row, resolve, file_values, env)
+    if spec.extract is not None and value is not None:
+        pattern_name, group = spec.extract
+        match = re.search(ctx.patterns[pattern_name], str(value))
+        value = match.group(group) if match else None
+    if spec.pipe:
+        value = run_pipe(value, spec.pipe, ctx, warnings)
+    if value is not None and spec.unit:
+        value = float(value) * unit_factor(spec.unit, spec.model_field)
+    if value is not None:
+        inferred = column_cast(spec.model_field)
+        target = spec.type or (inferred.__name__ if inferred is not None else None)
+        if target is not None:
+            value = _coerce_scalar(value, target)
+    return value, source_col
 
 
-def _source_row_id(preset: PresetSpec, base: dict[str, Any], row: dict[str, Any], warnings: list[str], resolve: Callable[[str | None], str | None], file_values: dict[str, Any]) -> str:
-    if preset.source_row_id is not None:
-        resolved = _resolve_field(preset.source_row_id, row, warnings, resolve, file_values)
+def _source_row_id(
+    preset: PresetSpec, base: dict[str, Any], row: dict[str, Any], warnings: list[str],
+    resolve: Callable[[str | None], str | None], file_values: dict[str, Any], env: BuildEnv, ctx: PipeContext,
+) -> str:
+    if preset.row_uid is not None:
+        resolved, _ = _resolve_field(preset.row_uid, row, warnings, resolve, file_values, env, ctx)
         return str(resolved)
-    # Deterministic over the source identity, so re-processing yields identical ids.
+    # No source UID: generate one deterministically over the source identity so a
+    # re-process yields identical ids.
     identity = f"{base.get('acquisition_path')}|{base.get('source_file_path')}|{base.get('record_locator')}"
     return str(uuid.uuid5(_SOURCE_ROW_NAMESPACE, identity))
 
 
-def _inject_tz_offset(pipe: list[dict[str, Any]], tz_value: Any) -> list[dict[str, Any]]:
-    """Feed a captured ``time_zone`` into the spec's ``parse_datetime`` step.
-
-    Closes the loop on timezone capture: a zone read from a column header (or set as a
-    constant) is applied during parsing, not just recorded. Only a ``parse_datetime``
-    step that does not already pin its own offset (explicit ``tz_offset_hours`` or a
-    ``%z`` in the format) is touched, so an author override always wins. An
-    unparseable captured zone is left alone, so the timestamp still parses as UTC
-    rather than being dropped.
-    """
-    if not tz_value:
-        return pipe
-    try:
-        tz_offset_to_hours(tz_value)
-    except ValueError:
-        return pipe
-    injected: list[dict[str, Any]] = []
-    for step in pipe:
-        fmt = step.get("parse_datetime")
-        if fmt is not None and "tz_offset_hours" not in step and "%z" not in str(fmt):
-            step = {**step, "tz_offset_hours": tz_value}
-        injected.append(step)
-    return injected
+def _decode_time(value: Any, spec: TimeSpec, zone: Any, warnings: list[str]) -> int | None:
+    if value is None:
+        return None
+    if spec.epoch is not None:
+        return epoch_to_ns(value, spec.epoch)
+    if spec.format is not None:
+        tz: Any = 0.0
+        if zone is not None:
+            try:
+                tz_offset_to_hours(zone)
+                tz = zone
+            except ValueError:
+                warnings.append(f"unparseable time_zone {zone!r}; parsing as UTC")
+        return parse_datetime_to_ns(value, spec.format, tz)
+    # Neither epoch nor format: the column is already Unix nanoseconds.
+    return int(value)
 
 
-def _apply_temporal(flat: dict[str, Any], spec: TemporalSpec, row: dict[str, Any], warnings: list[str], resolve: Callable[[str | None], str | None], file_values: dict[str, Any]) -> None:
-    lower_col = resolve(spec.lower_column)
-    upper_col = resolve(spec.upper_column)
-    lower_raw = row.get(lower_col) if lower_col is not None else None
-    upper_raw = row.get(upper_col) if upper_col is not None else None
-    # Resolve overrides first so a captured time_zone is available to drive parsing.
+def _apply_time(
+    flat: dict[str, Any], spec: TimeSpec, row: dict[str, Any], warnings: list[str],
+    resolve: Callable[[str | None], str | None], file_values: dict[str, Any], env: BuildEnv, ctx: PipeContext,
+) -> None:
+    lower_raw, lower_col = _resolve_ref(spec.lower, row, resolve, file_values, env)
+    upper_raw, upper_col = _resolve_ref(spec.upper, row, resolve, file_values, env)
+    zone: Any = None
+    if spec.zone is not None:
+        zone, _ = _resolve_field(spec.zone, row, warnings, resolve, file_values, env, ctx)
+        flat["time_zone"] = zone
     for override in spec.overrides:
-        flat[override.model_field] = _resolve_field(override, row, warnings, resolve, file_values)
-    pipe = _inject_tz_offset(list(spec.pipe), flat.get("time_zone"))
-    lower_ns, w1 = apply_pipe(lower_raw, pipe)
-    upper_ns, w2 = apply_pipe(upper_raw, pipe)
-    warnings.extend(w1 + w2)
+        flat[override.model_field], _ = _resolve_field(override, row, warnings, resolve, file_values, env, ctx)
     flat["time_lower_raw"] = lower_raw
-    # Record the resolved column name, not the pattern, for auditability.
-    flat["time_lower_source_field"] = lower_col or spec.lower_column
-    flat["time_lower_unix_ns"] = lower_ns
+    flat["time_lower_source_field"] = lower_col or _ref_label(spec.lower)
+    flat["time_lower_unix_ns"] = _decode_time(lower_raw, spec, zone, warnings)
     flat["time_upper_raw"] = upper_raw
-    flat["time_upper_source_field"] = upper_col or spec.upper_column
-    flat["time_upper_unix_ns"] = upper_ns
+    flat["time_upper_source_field"] = upper_col or _ref_label(spec.upper)
+    flat["time_upper_unix_ns"] = _decode_time(upper_raw, spec, zone, warnings)
+
+
+def _ref_label(ref: Ref) -> str | None:
+    return ref.arg if ref.kind in ("column", "header") else None
 
 
 def build_rows(
@@ -180,15 +215,13 @@ def build_rows(
     *,
     columns: list[str] | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Build the flat 40-column rows for one extracted source."""
+    """Build the flat canonical rows for one extracted source."""
     rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     seen_ids: dict[str, int] = {}
     resolve = make_resolver(columns if columns is not None else (list(records[0].keys()) if records else []))
+    ctx = PipeContext(lookup_tables=preset.lookup_tables, patterns=preset.patterns)
 
-    # Source-file identity tokens for `from_file` mappings. ``name`` is the source's
-    # display name (e.g. "Cache.sqlite" or "export.xlsx::sheet=Locations"); ``path`` is
-    # the original/internal source path; ``stem`` drops the suffix from ``name``.
     file_name = env.source_file_name or env.input_file
     file_values: dict[str, Any] = {
         "name": file_name,
@@ -199,14 +232,12 @@ def build_rows(
     for position, record in enumerate(records):
         base = dict.fromkeys(OUTPUT_COLUMNS)
         for field_spec in preset.common:
-            base[field_spec.model_field] = _resolve_field(field_spec, record, warnings, resolve, file_values)
-        # Run-level entity/linked_entity fill only what the preset left unset, so a
-        # preset that already maps these wins over the operator-supplied defaults.
-        if base.get("entity") is None and env.entity:
+            base[field_spec.model_field], _ = _resolve_field(field_spec, record, warnings, resolve, file_values, env, ctx)
+        # Run-level entity/linked_entity OVERRIDE the preset value when supplied.
+        if env.entity:
             base["entity"] = env.entity
-        if base.get("linked_entity") is None and env.linked_entity:
+        if env.linked_entity:
             base["linked_entity"] = env.linked_entity
-        # Pipeline-known provenance fills only what the preset left unset.
         for field_name, env_value in zip(
             _PROVENANCE_DEFAULT_FIELDS,
             (env.acquisition_path, env.source_file_path, env.input_file, preset.source_tier or env.source_tier),
@@ -214,11 +245,9 @@ def build_rows(
             if base.get(field_name) is None:
                 base[field_name] = env_value
 
-        row_id = _source_row_id(preset, base, record, warnings, resolve, file_values)
+        row_id = _source_row_id(preset, base, record, warnings, resolve, file_values, env, ctx)
         previous = seen_ids.get(row_id)
         if previous is not None and previous != position:
-            # Distinct source rows must not share an id; if they do, record_locator is
-            # too coarse to separate them — a hard integrity failure, not a warning.
             raise ValueError(
                 f"source_row_id collision {row_id!r} between source rows {previous} and {position}; "
                 f"record_locator {base.get('record_locator')!r} is not unique"
@@ -229,10 +258,16 @@ def build_rows(
         for template in preset.assertions:
             shared = dict(base)
             for field_spec in template.fields:
-                shared[field_spec.model_field] = _resolve_field(field_spec, record, warnings, resolve, file_values)
-            for temporal_spec in template.temporal:
+                value, source_col = _resolve_field(field_spec, record, warnings, resolve, file_values, env, ctx)
+                shared[field_spec.model_field] = value
+                # Capture lat/lon provenance automatically, mirroring temporal bounds.
+                if source_col is not None and field_spec.model_field == "latitude_wgs84":
+                    shared["latitude_source_field"] = source_col
+                elif source_col is not None and field_spec.model_field == "longitude_wgs84":
+                    shared["longitude_source_field"] = source_col
+            for time_spec in template.temporal:
                 flat = dict(shared)
-                _apply_temporal(flat, temporal_spec, record, warnings, resolve, file_values)
+                _apply_time(flat, time_spec, record, warnings, resolve, file_values, env, ctx)
                 rows.append(flat)
 
     frame = pd.DataFrame(rows, columns=list(OUTPUT_COLUMNS))

@@ -1,74 +1,49 @@
-name: AXIOM iOS - Cached Locations
-version: "1.0"
-parser:
-  name: axiom_ios_cached_locations
-  version: "1.0"
+preset:
+  id: ios.axiom.cached_locations
+  name: Cached Locations
+  os: iOS
+  tool: AXIOM
+  version: 1.0
+  tier: secondary
 
-source_tier: secondary
+match:
+  type: csv
+  as_file: "Cached Locations.csv"
+  delimiter: ","
+  encoding: "utf-8-sig"
 
-selectors:
-  - source_type: csv
-    file_name: "Cached Locations.csv"
+patterns:
+  tz: "(?P<z>UTC[+-]\\d{2}:\\d{2})"   # the export timezone embedded in the header
+lookup_tables:
+  recovery: {Parsing: intact, Carving: recovered, Deleted: deleted}
 
-extract:
-  csv:
-    delimiter: ","
-    encoding: "utf-8-sig"
-
-# Full source inventory. Columns present here but absent from any mapping below are
-# the research frontier (e.g. Record, Tags, Comments, Evidence number, Deleted source).
-expected_columns:
-  - Record
-  - Tags
-  - Comments
-  - Latitude
-  - Longitude
-  - "Accuracy (m)"
-  - "Altitude (m)"
-  - "Altitude Accuracy (m)"
-  - Direction
-  - "Speed (m/s)"
-  - "Timestamp Date/Time - UTC+00:00 (dd.MM.yyyy)"
-  - Source
-  - Location
-  - "Evidence number"
-  - "Deleted source"
-  - "Recovery method"
-  - "Item ID"
-
-source_row_id:
-  from: "Item ID"
+row_uid: 'column("Item ID")'
 
 common:
-  entity: {value: device}
-  entity_type: {value: device}
-  tool_label: {value: ZRTCLLOCATIONMO}
-  position_source: {value: GNSS}
-  record_locator: {from: "Location"}
-  source_file_path: {from: "Source"}
-  deleted:
-    from: "Recovery method"
-    pipe:
-      - lookup: {Parsing: intact, Carving: recovered, Deleted: deleted}
-        on_unknown: "null"
+  entity:          const(device)
+  entity_type:     const(device)
+  tool_label:      const(ZRTCLLOCATIONMO)
+  position_source: const(GNSS)
+  record_locator:  column(Location)
+  source_file_path: column(Source)
+  deleted: { from: 'column("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
 
 assertions:
-  - latitude_wgs84: {from: Latitude, pipe: [{cast: float}]}
-    longitude_wgs84: {from: Longitude, pipe: [{cast: float}]}
-    altitude_m: {from: "Altitude (m)", pipe: [{cast: float}]}
-    horizontal_accuracy_m: {from: "Accuracy (m)", pipe: [{cast: float}]}
-    vertical_accuracy_m: {from: "Altitude Accuracy (m)", pipe: [{cast: float}]}
-    horizontal_speed_kmh: {from: "Speed (m/s)", pipe: [{cast: float}, {arithmetic: "value * 3.6"}]}
-    heading_deg: {from: Direction, pipe: [{cast: float}]}
-    entity_position_link: at
-    temporal:
-      # Wildcard: the header embeds the export timezone (UTC+00:00), which can change.
-      - instant: "Timestamp Date/Time - * (dd.MM.yyyy)"
-        pipe: [{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}]
-        entity_time_link: observed_at
-        spatial_temporal_link: instant
-        # Capture the timezone from the column NAME itself via from_name + regex_extract.
-        # time_zone is shared by both bounds of the assertion.
-        time_zone:
-          from_name: "Timestamp Date/Time - * (dd.MM.yyyy)"
-          pipe: [{regex_extract: "(UTC[+-][0-9]{2}:[0-9]{2})"}]
+  - position:
+      latitude_wgs84:        column(Latitude)
+      longitude_wgs84:       column(Longitude)
+      altitude_m:            'column("Altitude (m)")'
+      horizontal_accuracy_m: 'column("Accuracy (m)")'
+      vertical_accuracy_m:   'column("Altitude Accuracy (m)")'
+      heading_deg:           column(Direction)
+      horizontal_speed_kmh:  { from: 'column("Speed (m/s)")', unit: m/s }
+    time:
+      # Wildcard: the header embeds the export timezone, which is captured into
+      # time_zone via header() + regex and applied to parsing automatically.
+      instant: 'column("Timestamp Date/Time - * (dd.MM.yyyy)")'
+      format:  "%d.%m.%Y %H:%M:%S.%f"
+      zone:    { from: 'header("Timestamp Date/Time - * (dd.MM.yyyy)")', pipe: "regex(tz, group=z)" }
+    links:
+      entity_position:  at
+      entity_time:      observed_at
+      spatial_temporal: instant

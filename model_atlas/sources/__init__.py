@@ -6,7 +6,7 @@ if/elif.
 """
 from __future__ import annotations
 
-from model_atlas.sources.folder import discover_elements
+from model_atlas.sources.folder import discover_elements, peek_columns
 from model_atlas.sources.registry import get_adapter, registered_adapters
 
 # Imported for their side effect: each module registers its adapter on import.
@@ -16,4 +16,4 @@ from model_atlas.sources import (  # noqa: E402,F401
     sqlite_source,
 )
 
-__all__ = ["discover_elements", "get_adapter", "registered_adapters"]
+__all__ = ["discover_elements", "peek_columns", "get_adapter", "registered_adapters"]

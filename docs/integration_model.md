@@ -82,9 +82,9 @@ for constant preset values.
 ## Entity Fields
 
 `entity` and `linked_entity` may be mapped by a preset or supplied at run time via
-`--entity` (optional) and `--linked-entity` (required). The run-level values are
-defaults: they populate a row only when the preset did not set the field, so a
-preset mapping always wins.
+`--entity` and `--linked-entity`. A run-level argument is authoritative: when given
+it overrides the preset's value, and the preset mapping is the default used only
+when the argument is absent.
 
 ## Provenance Fields
 

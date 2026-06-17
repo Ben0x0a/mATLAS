@@ -63,16 +63,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--entity",
         default=None,
         help=(
-            "Optional default entity for every output row whose preset does not "
-            "already set entity (e.g. the device or account the data came from)."
+            "Entity for every output row. When set it OVERRIDES any entity a preset "
+            "maps (the preset value is the default otherwise), e.g. the device or "
+            "account the data came from."
         ),
     )
     process_parser.add_argument(
         "--linked-entity",
         required=True,
         help=(
-            "Required entity linked to every output row whose preset does not "
-            "already set linked_entity, e.g. a person, company, account, or case subject."
+            "Entity linked to every output row. When set it OVERRIDES any linked_entity "
+            "a preset maps (the preset value is the default otherwise), e.g. a person, "
+            "company, account, or case subject."
         ),
     )
     process_parser.add_argument(

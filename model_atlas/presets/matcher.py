@@ -79,29 +79,66 @@ def _matches_csv(selector: dict[str, Any], element: DiscoveredElement) -> bool:
     return selector.get("source_type") == ElementType.CSV.value and _matches_filename(selector, element.path)
 
 
-def match_preset(element: DiscoveredElement, presets: list[PresetSpec]) -> tuple[PresetSpec, dict[str, Any]] | None:
-    log.debug(
-        "Matching source element against presets: type=%s source_file=%s original_path=%s",
-        element.source_type.value,
-        element.source_file,
-        element.source_original_path,
-    )
+def _selector_matches(selector: dict[str, Any], element: DiscoveredElement) -> bool:
+    if element.source_type == ElementType.SQLITE:
+        return _matches_sqlite(selector, element)
+    if element.source_type == ElementType.EXCEL:
+        return _matches_excel(selector, element)
+    if element.source_type == ElementType.CSV:
+        return _matches_csv(selector, element)
+    return False
+
+
+def _structural_score(preset: PresetSpec, columns: set[str]) -> int:
+    """Score a candidate by how well its mapped columns fit the source: +1 per
+    referenced column present, -2 per referenced column absent. Higher = better fit.
+    Importing here avoids a module cycle (reporting imports assemble imports spec)."""
+    from model_atlas.reporting import _column_refs
+    from model_atlas.transforms.assemble import make_resolver
+
+    resolve = make_resolver(sorted(columns))
+    present = absent = 0
+    for ref in _column_refs(preset):
+        if resolve(ref) is not None:
+            present += 1
+        else:
+            absent += 1
+    return present - 2 * absent
+
+
+def match_preset(
+    element: DiscoveredElement,
+    presets: list[PresetSpec],
+    *,
+    peek_columns: "Callable[[DiscoveredElement, PresetSpec], set[str] | None] | None" = None,
+) -> tuple[PresetSpec, dict[str, Any]] | None:
+    """Match an element to a preset. When several presets match the coarse selector,
+    tie-break by structural fit (which preset's mapped columns the source actually has)
+    using ``peek_columns``; ties fall back to declaration order."""
+    candidates: list[tuple[PresetSpec, dict[str, Any]]] = []
     for preset in presets:
         for selector in preset.selectors:
-            log.debug(
-                "Trying selector: preset=%s selector=%s source_file=%s",
-                preset.name,
-                selector,
-                element.source_file,
-            )
-            if element.source_type == ElementType.SQLITE and _matches_sqlite(selector, element):
-                log.debug("Matched SQLite selector: preset=%s source_file=%s", preset.name, element.source_file)
-                return preset, selector
-            if element.source_type == ElementType.EXCEL and _matches_excel(selector, element):
-                log.debug("Matched Excel selector: preset=%s source_file=%s", preset.name, element.source_file)
-                return preset, selector
-            if element.source_type == ElementType.CSV and _matches_csv(selector, element):
-                log.debug("Matched CSV selector: preset=%s source_file=%s", preset.name, element.source_file)
-                return preset, selector
-    log.debug("No preset selector matched source element: %s", element.source_file)
-    return None
+            if _selector_matches(selector, element):
+                candidates.append((preset, selector))
+                break
+    if not candidates:
+        log.debug("No preset selector matched source element: %s", element.source_file)
+        return None
+    if len(candidates) == 1 or peek_columns is None:
+        return candidates[0]
+
+    # Several presets match the same source — score by structural fit.
+    scored: list[tuple[int, int, tuple[PresetSpec, dict[str, Any]]]] = []
+    for order, (preset, selector) in enumerate(candidates):
+        columns = peek_columns(element, preset)
+        score = _structural_score(preset, columns) if columns is not None else 0
+        scored.append((score, -order, (preset, selector)))
+    best_score, _, best = max(scored)
+    runner_up = sorted((s for s, _, _ in scored), reverse=True)
+    if len(runner_up) > 1 and runner_up[0] == runner_up[1]:
+        log.warning(
+            "Ambiguous preset match for %s: tie at structural score %d; chose %s by declaration order",
+            element.source_file, best_score, best[0].name,
+        )
+    log.debug("Tie-break chose preset %s (score=%d) for %s", best[0].name, best_score, element.source_file)
+    return best

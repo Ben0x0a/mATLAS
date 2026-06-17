@@ -22,7 +22,7 @@ from model_atlas import reporting
 from model_atlas.export import traceability_path_for, warnings_path_for, write_csv, write_json
 from model_atlas.presets.matcher import match_preset
 from model_atlas.presets.spec_loader import load_preset_specs
-from model_atlas.sources import discover_elements, get_adapter
+from model_atlas.sources import discover_elements, get_adapter, peek_columns
 from model_atlas.transforms.assemble import BuildEnv, build_rows, to_records
 from model_atlas.transforms.rank import untangle
 
@@ -53,10 +53,10 @@ def process(
     presets_path: Path,
     output: Path,
     *,
+    linked_entity: str,
     traceability_format: str = "readable",
     merge: bool = True,
     entity: str | None = None,
-    linked_entity: str | None = None,
 ) -> ProcessResult:
     """Run the full pipeline.
 
@@ -65,13 +65,16 @@ def process(
         presets_path:         Preset YAML file or folder (scanned recursively).
         output:               In merge mode: path for the merged CSV.
                               In split mode: folder that receives one CSV per preset.
+        linked_entity:        Required. The entity linked to every output row (e.g. the
+                              case subject). When supplied it OVERRIDES any linked_entity
+                              a preset maps; a preset value is the default only when no
+                              caller value reaches here. Declared as a required keyword
+                              so the package API makes the obligation explicit.
         traceability_format:  "readable" (default) or "prov" (W3C PROV-JSON).
         merge:                True → one merged output CSV (default).
                               False → one CSV per matched preset inside *output*.
-        entity:               Optional default entity for output rows whose preset
-                              does not already populate entity.
-        linked_entity:        Default linked entity for output rows whose preset does
-                              not already populate linked_entity.
+        entity:               Optional entity. When supplied it OVERRIDES any entity the
+                              preset maps; the preset value is the default used otherwise.
     """
     started_at = reporting.now_iso()
     presets = load_preset_specs(presets_path)
@@ -108,7 +111,7 @@ def process(
         if force_preset:
             preset = presets[0]
         else:
-            match = match_preset(element, presets)
+            match = match_preset(element, presets, peek_columns=peek_columns)
             if match is None:
                 log.info("No preset matched %s", element.source_file)
                 unmatched.append(element.source_file)

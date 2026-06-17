@@ -63,11 +63,14 @@ def _discover_file(path: Path) -> list[DiscoveredElement]:
         ]
     if _is_sqlite(path):
         try:
-            # contextlib.closing: a bare sqlite3 `with` does not close the connection
-            # (it only manages the transaction), leaving an open read handle on the
-            # ORIGINAL evidence file. On Windows that lock then blocks extraction's
-            # copy/open ("file used by someone else"); close the probe handle here.
-            with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
+            # immutable=1 (NOT just mode=ro): a read-only open of a WAL-mode database
+            # still creates -wal/-shm sidecars next to the ORIGINAL when its directory
+            # is writable — mutating the evidence, which must never happen. immutable
+            # tells SQLite the file cannot change, disabling all locking and journal/
+            # WAL/SHM creation, so the original is only read. contextlib.closing then
+            # releases the handle (a bare sqlite3 `with` does not close it — a Windows
+            # file-lock hazard).
+            with contextlib.closing(sqlite3.connect(f"file:{path}?immutable=1", uri=True)) as conn:
                 conn.execute("SELECT 1").fetchone()
         except sqlite3.Error:
             log.debug("SQLite read-only open failed during discovery: %s", path, exc_info=True)
@@ -110,6 +113,35 @@ def _discover_file(path: Path) -> list[DiscoveredElement]:
             )
         return elements
     return []
+
+
+def peek_columns(element: DiscoveredElement, preset) -> set[str] | None:
+    """Cheaply read a source's column names, for the matcher's structural tie-break.
+
+    Returns None when peeking would be expensive (SQLite inside a ZIP) or fails — the
+    matcher then falls back to declaration order. Opens SQLite ``immutable=1`` so the
+    original is never mutated."""
+    try:
+        if element.source_type == ElementType.CSV:
+            delimiter = (preset.extract.get("csv", {}) or {}).get("delimiter", ",")
+            with element.path.open("r", encoding="utf-8-sig", errors="replace", newline="") as f:
+                header = f.readline().rstrip("\n\r")
+            return set(header.split(delimiter)) if header else set()
+        if element.source_type == ElementType.EXCEL:
+            frame = pd.read_excel(element.path, sheet_name=element.sheet_name, nrows=0, engine="openpyxl")
+            return {str(c) for c in frame.columns}
+        if element.source_type == ElementType.SQLITE:
+            if element.path.suffix.casefold() == ".zip":
+                return None  # would require extracting the entry; skip the peek
+            table = (preset.extract.get("sqlite", {}) or {}).get("table")
+            if not table:
+                return None
+            with contextlib.closing(sqlite3.connect(f"file:{element.path}?immutable=1", uri=True)) as conn:
+                cur = conn.execute(f'PRAGMA table_info("{table}")')
+                return {str(row[1]) for row in cur.fetchall()}
+    except Exception:  # noqa: BLE001 - a peek failure must never abort matching
+        log.debug("peek_columns failed for %s", element.source_file, exc_info=True)
+    return None
 
 
 def discover_elements(input_path: Path) -> list[DiscoveredElement]:

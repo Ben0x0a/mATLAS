@@ -50,12 +50,12 @@ when metadata is encoded in a header, for example a timezone in
 `path` — instead of a column, so a row can carry filename-derived and
 column-derived values together.
 
-## Entity And Linked Entity Defaults
+## Entity And Linked Entity
 
-`process(..., entity=, linked_entity=)` supply run-level defaults. During row
-assembly they fill `entity` / `linked_entity` only when the preset left them unset,
-so a preset mapping always takes precedence. The CLI exposes these as the optional
-`--entity` and the required `--linked-entity`.
+`process(..., entity=, linked_entity=)` are run-level values. When supplied they
+**override** whatever a preset maps for `entity` / `linked_entity`; the preset
+mapping is the default used only when the corresponding argument is absent. The CLI
+exposes these as `--entity` and `--linked-entity`.
 
 ## Pipes
 

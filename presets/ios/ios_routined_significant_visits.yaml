@@ -1,0 +1,42 @@
+preset:
+  id: ios.routined.significant_visits
+  name: Routined Significant Location Visits
+  os: iOS
+  tool:                       # empty: primary source (the device's own database)
+  os_version: ">=13"
+  version: 1.0
+  tier: primary
+
+match:
+  type: sqlite
+  in_archive: /private/var/mobile/Library/Caches/com.apple.routined/Local.sqlite
+  as_file: Local.sqlite
+  table: ZRTLEARNEDLOCATIONOFINTERESTVISITMO
+
+# row_uid omitted: Z_PK is not a stable UID -> generate a deterministic UID.
+
+common:
+  entity:          const(device)
+  entity_type:     const(device)
+  tool_label:      const(ZRTLEARNEDLOCATIONOFINTERESTVISITMO)
+  position_source: const(significant_location)
+  record_locator:  filename(name)
+
+assertions:
+  - position:
+      latitude_wgs84:        column(ZLOCATIONLATITUDE)
+      longitude_wgs84:       column(ZLOCATIONLONGITUDE)
+      altitude_m:            column(ZLOCATIONALTITUDE)
+      horizontal_accuracy_m: column(ZLOCATIONHORIZONTALUNCERTAINTY)
+      vertical_accuracy_m:   column(ZLOCATIONVERTICALUNCERTAINTY)
+      position_type:         const(visit)
+    time:
+      interval:                      # the visit dwell window (Cocoa epoch -> ns)
+        lower: column(ZENTRYDATE)
+        upper: column(ZEXITDATE)
+      epoch: cocoa
+      zone:  const(UTC)
+    links:
+      entity_position:  at
+      entity_time:      observed_at
+      spatial_temporal: continuous_during_interval

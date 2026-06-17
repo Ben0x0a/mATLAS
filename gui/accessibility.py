@@ -43,6 +43,8 @@ def configure_accessibility(controller: Any) -> None:
 
     for widget_name, buddy in (
         ("sourceLabel", controller.source_edit),
+        ("identityLabel", controller.linked_entity_edit),
+        ("linkedEntityLabel", controller.linked_entity_edit),
         ("presetsPathLabel", controller.presets_path_edit),
         ("outputModeLabel", controller.merge_outputs_check),
         ("mergeOutputLabel", controller.merge_outputs_check),
@@ -75,6 +77,10 @@ def configure_accessibility(controller: Any) -> None:
     controller.source_file_button.setAccessibleDescription("Choose a source file for processing.")
     controller.source_folder_button.setAccessibleName("Browse for source folder")
     controller.source_folder_button.setAccessibleDescription("Choose a source folder for processing.")
+    controller.linked_entity_edit.setAccessibleName("Linked entity")
+    controller.linked_entity_edit.setAccessibleDescription(
+        "Optional person, company, account, or case subject linked to output rows."
+    )
 
     controller.presets_path_edit.setAccessibleName("Preset root path")
     controller.presets_path_edit.setAccessibleDescription("Preset folder or YAML preset file used for matching.")
@@ -100,6 +106,10 @@ def configure_accessibility(controller: Any) -> None:
         "When checked, all presets matching their selectors are used automatically."
     )
     controller.preset_status_label.setAccessibleName("Preset load status")
+    controller.single_preset_notice_label.setAccessibleName("Single preset selector notice")
+    controller.single_preset_notice_label.setAccessibleDescription(
+        "One preset selected: selector filename filters will be skipped."
+    )
     controller.preset_search_edit.setAccessibleName("Search preset names")
     controller.preset_search_edit.setAccessibleDescription("Filter the available preset list by name.")
     controller.available_preset_list.setAccessibleName("Available presets")
@@ -170,6 +180,7 @@ def _configure_tab_order(controller: Any) -> None:
         controller.source_edit,
         controller.source_file_button,
         controller.source_folder_button,
+        controller.linked_entity_edit,
         controller.presets_path_edit,
         controller.presets_folder_button,
         controller.presets_file_button,
@@ -179,6 +190,7 @@ def _configure_tab_order(controller: Any) -> None:
         controller.traceability_combo,
         controller.log_level_combo,
         controller.auto_preset_check,
+        controller.reload_presets_button,
         controller.load_profile_button,
         controller.save_profile_button,
         controller.preset_search_edit,

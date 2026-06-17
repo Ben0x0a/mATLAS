@@ -162,7 +162,9 @@ class Spatial:
     """
 
     latitude_wgs84: float | None = None
+    latitude_source_field: str | None = None    # source column latitude was read from
     longitude_wgs84: float | None = None
+    longitude_source_field: str | None = None   # source column longitude was read from
     altitude_m: float | None = None
     position_type: str | None = None
     raw_position: Any | None = None      # source-original, e.g. "I'm at home"
@@ -229,7 +231,9 @@ OUTPUT_COLUMNS: tuple[str, ...] = (
     "temporal_source",
     # spatial
     "latitude_wgs84",
+    "latitude_source_field",
     "longitude_wgs84",
+    "longitude_source_field",
     "altitude_m",
     "position_type",
     "raw_position",
@@ -261,6 +265,69 @@ OUTPUT_COLUMNS: tuple[str, ...] = (
     "record_type",
     "record_rank",
 )
+
+
+# --- Type & unit metadata (drives v3 cast inference + unit conversion) ------
+# A model column's type is a property of the model, declared once here, so a preset
+# never has to restate `cast: float` on every numeric mapping.
+
+_FLOAT_COLUMNS: frozenset[str] = frozenset({
+    "latitude_wgs84", "longitude_wgs84", "altitude_m",
+    "horizontal_accuracy_m", "vertical_accuracy_m",
+    "horizontal_speed_kmh", "vertical_speed_kmh",
+    "horizontal_speed_accuracy_kmh", "vertical_speed_accuracy_kmh",
+    "heading_deg", "heading_accuracy_deg", "beam_azimuth_deg", "beam_width_deg",
+})
+_INT_COLUMNS: frozenset[str] = frozenset({"time_accuracy_ns", "record_rank"})
+
+
+def column_cast(column: str) -> type | None:
+    """The python type a column's value should be coerced to, or None for free text.
+
+    Used by the assembly engine to apply an implicit cast so presets omit `cast:`.
+    """
+    if column in _FLOAT_COLUMNS:
+        return float
+    if column in _INT_COLUMNS:
+        return int
+    return None
+
+
+# Canonical unit each metric column is stored in. A preset declares the SOURCE unit
+# (`unit: m/s`) and the engine converts to this canonical unit.
+CANONICAL_UNIT: dict[str, str] = {
+    "altitude_m": "m", "horizontal_accuracy_m": "m", "vertical_accuracy_m": "m",
+    "horizontal_speed_kmh": "km/h", "vertical_speed_kmh": "km/h",
+    "horizontal_speed_accuracy_kmh": "km/h", "vertical_speed_accuracy_kmh": "km/h",
+    "heading_deg": "deg", "heading_accuracy_deg": "deg",
+    "beam_azimuth_deg": "deg", "beam_width_deg": "deg",
+}
+
+# Multiplicative factor (source_unit, canonical_unit) -> factor.
+_UNIT_FACTORS: dict[tuple[str, str], float] = {
+    ("m/s", "km/h"): 3.6,
+    ("km/h", "km/h"): 1.0,
+    ("mph", "km/h"): 1.609344,
+    ("knots", "km/h"): 1.852,
+    ("m", "m"): 1.0,
+    ("ft", "m"): 0.3048,
+    ("deg", "deg"): 1.0,
+}
+
+
+def unit_factor(source_unit: str, column: str) -> float:
+    """Factor to convert ``source_unit`` into ``column``'s canonical unit.
+
+    Raises ValueError for an unknown column/unit pair so a typo is caught at parse
+    time rather than silently producing a wrong magnitude.
+    """
+    canonical = CANONICAL_UNIT.get(column)
+    if canonical is None:
+        raise ValueError(f"column {column!r} has no canonical unit; cannot apply unit conversion")
+    factor = _UNIT_FACTORS.get((source_unit, canonical))
+    if factor is None:
+        raise ValueError(f"no conversion from {source_unit!r} to {canonical!r} (for {column!r})")
+    return factor
 
 
 def _value(item: Any) -> Any:
@@ -303,7 +370,9 @@ class SpatioTemporalAssertion:
             "time_accuracy_ns": self.temporal.accuracy_ns,
             "temporal_source": self.temporal.temporal_source,
             "latitude_wgs84": self.spatial.latitude_wgs84,
+            "latitude_source_field": self.spatial.latitude_source_field,
             "longitude_wgs84": self.spatial.longitude_wgs84,
+            "longitude_source_field": self.spatial.longitude_source_field,
             "altitude_m": self.spatial.altitude_m,
             "position_type": self.spatial.position_type,
             "raw_position": self.spatial.raw_position,

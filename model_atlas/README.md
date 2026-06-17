@@ -13,6 +13,7 @@ result = process(
     input_path=Path("evidence"),
     presets_path=Path("presets"),
     output=Path("out/merged.csv"),
+    linked_entity="Case Subject",
 )
 print(result.row_counts)
 ```
@@ -23,7 +24,10 @@ writes CSV output plus `.matlas.traceability.json` and `.matlas.warnings.json`
 sidecars. It returns a `ProcessResult` with row counts, matched/unmatched source
 lists, warning strings, and output paths.
 
-Set `merge=False` to write one CSV per matched preset into an output folder.
+`linked_entity` is a required keyword argument — the entity every output row is
+attributed to. `entity` is optional. When supplied, both override the value a
+preset maps (the preset value is the default otherwise). Set `merge=False` to write
+one CSV per matched preset into an output folder.
 
 ## Execution Path
 

@@ -30,8 +30,9 @@ python matlas.py process \
 ```
 
 `--linked-entity` is required: it names the case subject every output row is
-attributed to. `--entity` is optional. Both are defaults — a preset that maps
-`entity`/`linked_entity` itself takes precedence.
+attributed to. `--entity` is optional. When supplied, these arguments **override**
+any `entity`/`linked_entity` a preset maps; the preset value is the default used
+only when the argument is absent.
 
 Useful options:
 
@@ -99,8 +100,10 @@ describe:
 - pipe-based conversions for timestamps, labels, and provenance.
 
 Example presets live under `presets/axiom/` (AXIOM CSV exports) and `presets/ios/`
-(e.g. `ios_routined_cached_locations.yaml`, a direct SQLite preset for
-`com.apple.routined/Cache.sqlite` read from a full-filesystem ZIP).
+— direct SQLite presets read from a full-filesystem ZIP, e.g.
+`ios_routined_cached_locations.yaml` (`com.apple.routined/Cache.sqlite` CLLocation
+points) and `ios_routined_significant_visits.yaml`
+(`com.apple.routined/Local.sqlite` significant-location dwell intervals).
 The canonical model is documented in `docs/integration_model.md`; preset YAML
 logic is documented in `docs/preset_schema.md` and
 `docs/preset_authoring_quickstart.md`.
