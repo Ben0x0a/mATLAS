@@ -12,18 +12,37 @@ match:
   delimiter: ","
   encoding: "utf-8-sig"
 
+expected_columns:
+  - Record
+  - Address
+  - City
+  - Country
+  - "State/Province"
+  - "ZIP/Postal Code"
+  - "Vicinity Entry Date/Time"
+  - "Vicinity Exit Date/Time"
+  - "Created Date/Time - UTC+00:00 (dd.MM.yyyy)"
+  - Latitude
+  - Longitude
+  - Accuracy
+  - Source
+  - Location
+  - "Deleted source"
+  - "Recovery method"
+  - "Item ID"
+
 patterns:
   tz: "(?P<z>UTC[+-]\\d{2}:\\d{2})"
 
-row_uid: 'column("Item ID")'
+record_uid: 'column("Item ID")'
 
 common:
-  entity:          const(device)
+  entity:          param(entity)
   entity_type:     const(device)
-  tool_label:      const(ZRTLEARNEDLOCATIONOFINTERESTVISITMO)
+  source_label:    const(ZRTLEARNEDLOCATIONOFINTERESTVISITMO)
   position_source: const(significant_location)
-  record_locator:  column(Location)
-  source_file_path: column(Source)
+  input_record_id:    column(Location)
+  raw_source_path: column(Source)
   raw_position:    column(Address)
 
 # One source row -> the visit interval AND the record-creation instant. The spatial

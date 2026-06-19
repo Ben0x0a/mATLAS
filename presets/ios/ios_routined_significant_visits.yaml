@@ -13,14 +13,38 @@ match:
   as_file: Local.sqlite
   table: ZRTLEARNEDLOCATIONOFINTERESTVISITMO
 
-# row_uid omitted: Z_PK is not a stable UID -> generate a deterministic UID.
+# Full ZRTLEARNEDLOCATIONOFINTERESTVISITMO column inventory.
+expected_columns:
+  - Z_PK
+  - Z_ENT
+  - Z_OPT
+  - ZDATAPOINTCOUNT
+  - ZLOCATIONOFINTERESTSOURCE
+  - ZLOCATIONREFERENCEFRAME
+  - ZLOCATIONSOURCEACCURACY
+  - ZLOCATIONOFINTEREST
+  - Z_FOK_LOCATIONOFINTEREST
+  - ZCONFIDENCE
+  - ZCREATIONDATE
+  - ZENTRYDATE
+  - ZEXITDATE
+  - ZEXPIRATIONDATE
+  - ZLOCATIONALTITUDE
+  - ZLOCATIONHORIZONTALUNCERTAINTY
+  - ZLOCATIONLATITUDE
+  - ZLOCATIONLONGITUDE
+  - ZLOCATIONOFINTERESTCONFIDENCE
+  - ZLOCATIONVERTICALUNCERTAINTY
+  - ZIDENTIFIER
+
+# record_uid omitted: Z_PK is not a stable UID -> generate a deterministic, content-addressed UID.
 
 common:
-  entity:          const(device)
+  entity:          param(entity)
   entity_type:     const(device)
-  tool_label:      const(ZRTLEARNEDLOCATIONOFINTERESTVISITMO)
+  source_label:    const(ZRTLEARNEDLOCATIONOFINTERESTVISITMO)
   position_source: const(significant_location)
-  record_locator:  filename(name)
+  raw_source_path: preset(in_archive)   # device db path; input_record_id defaults to <table>#<ordinal>
 
 assertions:
   - position:
@@ -31,7 +55,7 @@ assertions:
       vertical_accuracy_m:   column(ZLOCATIONVERTICALUNCERTAINTY)
       position_type:         const(visit)
     time:
-      interval:                      # the visit dwell window (Cocoa epoch -> ns)
+      interval:                      # the visit dwell window (Cocoa epoch -> us)
         lower: column(ZENTRYDATE)
         upper: column(ZEXITDATE)
       epoch: cocoa

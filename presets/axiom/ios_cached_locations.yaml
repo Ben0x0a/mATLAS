@@ -12,20 +12,39 @@ match:
   delimiter: ","
   encoding: "utf-8-sig"
 
+expected_columns:
+  - Record
+  - Tags
+  - Comments
+  - Latitude
+  - Longitude
+  - "Accuracy (m)"
+  - "Altitude (m)"
+  - "Altitude Accuracy (m)"
+  - Direction
+  - "Speed (m/s)"
+  - "Timestamp Date/Time - UTC+00:00 (dd.MM.yyyy)"
+  - Source
+  - Location
+  - "Evidence number"
+  - "Deleted source"
+  - "Recovery method"
+  - "Item ID"
+
 patterns:
   tz: "(?P<z>UTC[+-]\\d{2}:\\d{2})"   # the export timezone embedded in the header
 lookup_tables:
   recovery: {Parsing: intact, Carving: recovered, Deleted: deleted}
 
-row_uid: 'column("Item ID")'
+record_uid: 'column("Item ID")'
 
 common:
-  entity:          const(device)
+  entity:          param(entity)
   entity_type:     const(device)
-  tool_label:      const(ZRTCLLOCATIONMO)
+  source_label:    const(ZRTCLLOCATIONMO)
   position_source: const(GNSS)
-  record_locator:  column(Location)
-  source_file_path: column(Source)
+  input_record_id:    column(Location)
+  raw_source_path: column(Source)
   deleted: { from: 'column("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
 
 assertions:

@@ -12,18 +12,35 @@ match:
   delimiter: ","
   encoding: "utf-8-sig"
 
+expected_columns:
+  - Record
+  - "Origin Address"
+  - "Destination Address"
+  - "Search Term"
+  - "Origin Latitude"
+  - "Origin Longitude"
+  - "Destination Latitude"
+  - "Destination Longitude"
+  - "Trip ID"
+  - "Record Date/Time - UTC+00:00 (dd.MM.yyyy)"
+  - "Start Date/Time - UTC+00:00 (dd.MM.yyyy)"
+  - "End Date/Time - UTC+00:00 (dd.MM.yyyy)"
+  - Source
+  - Location
+  - "Item ID"
+
 patterns:
   tz: "(?P<z>UTC[+-]\\d{2}:\\d{2})"
 
-row_uid: 'column("Item ID")'
+record_uid: 'column("Item ID")'
 
 common:
-  entity:        const(device)
+  entity:        param(entity)
   entity_type:   const(device)
   linked_entity: 'column("Trip ID")'
-  tool_label:    const(ZRTLEARNEDLOCATIONOFINTERESTTRANSITIONMO)
-  record_locator: column(Location)
-  source_file_path: column(Source)
+  source_label:    const(ZRTLEARNEDLOCATIONOFINTERESTTRANSITIONMO)
+  input_record_id:    column(Location)
+  raw_source_path: column(Source)
 
 # Searches, not observed travel: origin/destination are referenced places and the
 # Start/End are the planned (intended) trip times; Record is the DB write time.

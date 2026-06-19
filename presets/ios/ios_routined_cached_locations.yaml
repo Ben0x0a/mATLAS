@@ -16,15 +16,35 @@ match:
   as_file: Cache.sqlite
   table: ZRTCLLOCATIONMO
 
-# row_uid omitted: a device-DB rowid (Z_PK) is not a stable UID, so a deterministic
-# UID is generated per row instead.
+# Full ZRTCLLOCATIONMO column inventory. Columns present here but unmapped below are the
+# research frontier (reported in the warnings sidecar).
+expected_columns:
+  - Z_PK
+  - Z_ENT
+  - Z_OPT
+  - ZINTEGRITY
+  - ZSIGNALENVIRONMENTTYPE
+  - ZTYPE
+  - ZALTITUDE
+  - ZCOURSE
+  - ZCOURSEACCURACY
+  - ZHORIZONTALACCURACY
+  - ZLATITUDE
+  - ZLONGITUDE
+  - ZSPEED
+  - ZSPEEDACCURACY
+  - ZTIMESTAMP
+  - ZVERTICALACCURACY
+
+# record_uid omitted: a device-DB rowid (Z_PK) is not a stable UID, so a deterministic
+# content-addressed UID is generated per row instead.
 
 common:
-  entity:          const(device)
+  entity:          param(entity)
   entity_type:     const(device)
-  tool_label:      const(ZRTCLLOCATIONMO)
+  source_label:    const(ZRTCLLOCATIONMO)
   position_source: const(GNSS)
-  record_locator:  filename(name)
+  raw_source_path: preset(in_archive)   # device db path; input_record_id defaults to ZRTCLLOCATIONMO#<ordinal>
 
 assertions:
   - position:
@@ -36,7 +56,7 @@ assertions:
       heading_deg:           column(ZCOURSE)
       horizontal_speed_kmh:  { from: column(ZSPEED), unit: m/s }
     time:
-      instant: column(ZTIMESTAMP)   # Cocoa/Core-Data epoch -> Unix ns
+      instant: column(ZTIMESTAMP)   # Cocoa/Core-Data epoch -> Unix us
       epoch:   cocoa
       zone:    const(UTC)
     links:
