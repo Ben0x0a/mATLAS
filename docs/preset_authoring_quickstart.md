@@ -1,341 +1,174 @@
-# Preset Authoring Quickstart
+# Preset Authoring Quickstart (v3)
 
-Use this guide when turning one real source export or database table into a
-working mATLAS preset. Use [preset_schema.md](preset_schema.md) when you need
-the full field reference.
+Use this guide to turn one real source — a CSV/Excel export or a SQLite table — into a
+working mATLAS preset. See [preset_schema.md](preset_schema.md) for the full reference.
 
-## 1. Start From One Source
+## 1. Write the header
 
-Pick one concrete source element first: one CSV file, one Excel sheet, or one
-SQLite table/query. Keep the selector as narrow as possible while still matching
-the source reliably.
-
-CSV:
+`id` is a stable dotted key; `tool` is the forensic tool for a tool export and empty
+for a raw device source; together with `os`/`name` it composes the title.
 
 ```yaml
-selectors:
-  - source_type: csv
-    file_name: "Cached Locations.csv"
+preset:
+  id: ios.routined.cached_locations
+  name: Routined Cached Locations
+  os: iOS
+  tool:                 # empty -> primary (device's own DB); set "AXIOM" etc. for exports
+  os_version: ">=15"
+  version: 1.0
+  tier: primary
 ```
 
-Excel:
+## 2. Identify the source (`match`)
 
 ```yaml
-selectors:
-  - source_type: excel
-    file_name: "AXIOM Export.xlsx"
-    sheet_name: "Cached Locations"
-```
-
-SQLite:
-
-```yaml
-selectors:
-  - source_type: sqlite
-    file_name: "Cache.sqlite"
-    db_relpath: "/private/var/mobile/Library/Caches/com.apple.routined/Cache.sqlite"
-```
-
-For SQLite, the selector identifies the database. The table or SQL query belongs
-under `extract.sqlite`.
-
-## 2. Declare Extraction
-
-Add only the extraction settings needed for that source type.
-
-```yaml
-extract:
-  csv:
-    delimiter: ","
-    encoding: "utf-8-sig"
+match:                  # CSV
+  type: csv
+  as_file: "Cached Locations.csv"
+  encoding: "utf-8-sig"
 ```
 
 ```yaml
-extract:
-  excel:
-    sheet_name: "Cached Locations"
-    header_row: 0
+match:                  # SQLite (direct file or inside a ZIP)
+  type: sqlite
+  in_archive: /private/var/mobile/Library/Caches/com.apple.routined/Cache.sqlite
+  as_file: Cache.sqlite
+  table: ZRTCLLOCATIONMO
 ```
 
-```yaml
-extract:
-  sqlite:
-    table: "ZRTCLLOCATIONMO"
-    # or:
-    # sql: "SELECT * FROM ZRTCLLOCATIONMO"
-```
+Inside a ZIP the `in_archive` path selects the database; for a direct file the
+`as_file` name does.
 
-## 3. Copy The Source Columns
+## 2b. Declare the columns you have (`expected_columns`)
 
-List the columns you expect to see. This list is used for drift warnings; mapped
-columns still come from `common`, `source_row_id`, and `assertions`.
+List every source column up front, then map the subset you need. The unmapped ones
+become the research frontier (reported in the warnings sidecar), and the inventory
+drives drift detection and preset tie-breaking. Entries may be exact names or globs.
 
 ```yaml
 expected_columns:
-  - "Item ID"
-  - "Latitude"
-  - "Longitude"
-  - "Accuracy (m)"
-  - "Timestamp Date/Time - UTC+00:00 (dd.MM.yyyy)"
+  - ZLATITUDE
+  - ZLONGITUDE
+  - ZTIMESTAMP
+  - ZSPEED
+  - "Timestamp Date/Time - * (dd.MM.yyyy)"   # a glob is fine
 ```
 
-Keep frontier columns in this list even if you do not map them yet. That makes
-schema drift visible during later runs.
+## 3. Reference values explicitly
 
-## 4. Add Identity And Common Fields
-
-`source_row_id` should identify the source row stably. Use an exported item ID
-when one exists. If omitted, mATLAS generates a deterministic ID from provenance
-fields, but an explicit source ID is easier to audit.
-
-```yaml
-source_row_id:
-  from: "Item ID"
-```
-
-`common` fields are copied into every assertion generated from a source row.
-
-```yaml
-source_tier: secondary
-
-common:
-  entity: {value: device}
-  entity_type: {value: device}
-  tool_label: {value: ZRTCLLOCATIONMO}
-  position_source: {value: GNSS}
-  record_locator: {from: "Location"}
-  source_file_path: {from: "Source"}
-```
-
-### Entity And Linked Entity
-
-`entity` and `linked_entity` can be set in the preset (usually in `common`) or
-supplied at run time with `--entity` / `--linked-entity`. The run-level argument is
-**authoritative**: when given it overrides the preset value, and the preset mapping
-is the default used only when the argument is absent. Map them in the preset when
-they are intrinsic to the source (e.g. `entity: {value: device}`); pass the
-run-level args to override per case (e.g. the subject's name).
-
-### Field Mapping Sources
-
-Every assignable field in `common`, `source_row_id`, an assertion, or a temporal
-override draws its value from exactly **one** of four sources:
-
-| Form | Value comes from | Use when |
-| --- | --- | --- |
-| `{from: "Latitude"}` | a source **column** value (name may be a glob) | the data is in a column |
-| `{from_name: "Timestamp - *"}` | the matched **column name** itself | metadata is encoded in the header (e.g. a timezone) |
-| `{from_file: name}` | the **source file** identity: `name`, `stem`, or `path` | you want the file name/path on the row, possibly combined with column values |
-| `{value: device}` | a **constant** (a bare scalar works too) | the field is fixed for this preset |
-
-`from_file` lets a preset use the filename *and* column values together — for
-example record the source file name while still mapping coordinates from columns:
+Every value is one call: `column(...)`, `header(...)`, `filename(...)`,
+`param(...)`, or `const(...)`.
 
 ```yaml
 common:
-  record_locator: {from_file: name}   # e.g. "Cache.sqlite"
-  tool_label: {from_file: stem}       # e.g. "Cache"
+  entity:         const(device)
+  tool_label:     const(ZRTCLLOCATIONMO)
+  record_locator: filename(name)
+  linked_entity:  param(linked_entity)   # or pass --linked-entity at run time
 ```
 
-A glob column reference (`*`, `?`, `[`) must resolve to exactly one source column.
-
-## 5. Map Assertions
-
-Each item under `assertions` combines spatial/entity fields with one or more
-temporal specs. One source row produces one output row for each temporal spec.
-
-Single instant:
+## 4. Map an assertion (`position` + `time` + `links`)
 
 ```yaml
 assertions:
-  - latitude_wgs84: {from: Latitude, pipe: [{cast: float}]}
-    longitude_wgs84: {from: Longitude, pipe: [{cast: float}]}
-    horizontal_accuracy_m: {from: "Accuracy (m)", pipe: [{cast: float}]}
-    entity_position_link: at
-    temporal:
-      - instant: "Timestamp Date/Time - * (dd.MM.yyyy)"
-        pipe: [{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}]
-        entity_time_link: observed_at
-        spatial_temporal_link: instant
-        time_zone:
-          from_name: "Timestamp Date/Time - * (dd.MM.yyyy)"
-          pipe: [{regex_extract: "(UTC[+-][0-9]{2}:[0-9]{2})"}]
+  - position:
+      latitude_wgs84:  column(ZLATITUDE)      # numeric cast is inferred — no cast() needed
+      longitude_wgs84: column(ZLONGITUDE)
+      altitude_m:      column(ZALTITUDE)
+      horizontal_speed_kmh: { from: column(ZSPEED), unit: m/s }   # converted to km/h
+    time:
+      instant: column(ZTIMESTAMP)
+      epoch:   cocoa
+      zone:    const(UTC)
+    links:
+      entity_position:  at
+      entity_time:      observed_at
+      spatial_temporal: instant
 ```
 
-Interval:
+One assertion = one position + one time + the three links. For two times at one place
+(e.g. a visit interval AND a created instant), write two assertion entries; they share
+the row's UID automatically.
+
+## 5. Timestamps
+
+A `time` block decodes to Unix microseconds. Pick one:
 
 ```yaml
-assertions:
-  - latitude_wgs84: {from: Latitude, pipe: [{cast: float}]}
-    longitude_wgs84: {from: Longitude, pipe: [{cast: float}]}
-    entity_position_link: at
-    temporal:
-      - interval:
-          lower: "First Seen"
-          upper: "Last Seen"
-        pipe: [{parse_datetime: "%Y-%m-%d %H:%M:%S"}]
-        entity_time_link: observed_at
-        spatial_temporal_link: continuous_during_interval
+time: {instant: column(TS), format: "%d.%m.%Y %H:%M:%S.%f"}   # formatted string
+time: {instant: column(TS), epoch: unix_ms}                   # epoch milliseconds
+time: {instant: column(TS), epoch: cocoa, zone: const(UTC)}   # Apple Cocoa epoch
 ```
 
-Two instants at the same position:
+For a non-UTC export, capture the zone from the header and it is applied to parsing:
 
 ```yaml
-assertions:
-  - latitude_wgs84: {from: Latitude, pipe: [{cast: float}]}
-    longitude_wgs84: {from: Longitude, pipe: [{cast: float}]}
-    entity_position_link: at
-    temporal:
-      - instant: "Departure Time"
-        pipe: [{parse_datetime: "%Y-%m-%d %H:%M:%S"}]
-        entity_time_link: event_at
-        spatial_temporal_link: instant
-      - instant: "Arrival Time"
-        pipe: [{parse_datetime: "%Y-%m-%d %H:%M:%S"}]
-        entity_time_link: event_at
-        spatial_temporal_link: instant
+patterns: {tz: "(?P<z>UTC[+-]\\d{2}:\\d{2})"}
+...
+    time:
+      instant: 'column("Timestamp - * (dd.MM.yyyy)")'
+      format:  "%d.%m.%Y %H:%M:%S.%f"
+      zone:    { from: 'header("Timestamp - * (dd.MM.yyyy)")', pipe: "regex(tz, group=z)" }
 ```
 
-## 6. Use Pipes For Conversion
+## 6. Pipes and named tables/patterns (only when needed)
 
-Common pipes:
-
-- `cast`: convert to `int`, `float`, `str`, or `bool`.
-- `parse_datetime`: parse a formatted timestamp to Unix nanoseconds.
-- `arithmetic`: evaluate a restricted expression with `value` bound.
-- `lookup`: map source codes to labels.
-- `regex_extract`: extract one regex capture group.
-- `split`: split a string and optionally pick one part.
-
-Example source-code lookup:
+Declarative attributes cover most cases; drop to a pipe for real logic. Bulk data lives
+in `lookup_tables` / `patterns` and is referenced by name:
 
 ```yaml
-position_source:
-  from: "Provider Code"
-  pipe:
-    - lookup:
-        1: GNSS
-        4: WiFi
-        6: LTE
-      on_unknown: raw
+lookup_tables: {recovery: {Parsing: intact, Carving: recovered, Deleted: deleted}}
+patterns:      {coords: "(?P<lat>-?\\d+\\.\\d+) - (?P<lon>-?\\d+\\.\\d+)"}
+...
+  deleted: { from: 'column("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
+  # one cell holding "lat - lon": pull each named group into its own field
+  latitude_wgs84:  { from: column(Coords), extract: coords.lat }
+  longitude_wgs84: { from: column(Coords), extract: coords.lon }
 ```
 
-Example speed conversion:
+`regex` requires named groups, and you name which group to extract — so what is pulled
+out is explicit.
 
-```yaml
-horizontal_speed_kmh:
-  from: "Speed (m/s)"
-  pipe:
-    - {cast: float}
-    - {arithmetic: "value * 3.6"}
-```
+## 7. Run it
 
-### Timestamp Recipes
-
-A temporal spec writes its pipe result to `time_*_unix_ns`, so any pipe chain that
-ends in Unix nanoseconds works — `parse_datetime` is just the common case.
-
-Formatted string (most AXIOM/CSV exports):
-
-```yaml
-pipe: [{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}]
-```
-
-For a non-UTC export, declare the offset — either statically
-(`{parse_datetime: "...", tz_offset_hours: "UTC+02:00"}`), with `%z` in the format,
-or by capturing `time_zone` in the same temporal spec (e.g. from the header via
-`from_name` + `regex_extract`): a captured zone is fed into `parse_datetime`
-automatically, so the normalized `*_unix_ns` is correct.
-
-Unix epoch **seconds** (numeric column):
-
-```yaml
-pipe: [{cast: float}, {arithmetic: "int(value * 1000000000)"}]
-```
-
-Unix epoch **milliseconds**:
-
-```yaml
-pipe: [{cast: float}, {arithmetic: "int(value * 1000000)"}]
-```
-
-Cocoa / Core Data timestamp (seconds since 2001-01-01 UTC — Apple `ZTIMESTAMP`,
-`ZDATE`, etc.). Add the 978307200-second offset between the Unix and Cocoa epochs:
-
-```yaml
-pipe: [{cast: float}, {arithmetic: "int((value + 978307200) * 1000000000)"}]
-```
-
-See `presets/ios/ios_routined_cached_locations.yaml` for the Cocoa recipe in a
-complete SQLite preset.
-
-## 7. Validate Before Full Runs
-
-Run one small source first. `--linked-entity` is required (the case subject every
-row is attributed to); `--entity` is optional:
-
-```bash
-python matlas.py process \
-  --input ./evidence/sample \
-  --presets ./presets \
-  --output ./out/merged.csv \
-  --linked-entity "Case Subject"
-```
-
-Inspect:
-
-- `merged.csv`
-- `merged.matlas.traceability.json`
-- `merged.matlas.warnings.json`
-
-To test just your new preset against just one file, point `--input` at that file
-and `--presets` at the single YAML. mATLAS then runs in **force-preset mode**: it
-applies the preset to the file and skips selector matching entirely, so you can
-iterate even before the selector is finalised:
+`--linked-entity` is required; `--entity` is optional. A single input file (one element)
+plus a single preset YAML runs in **force-preset mode** (selector matching bypassed),
+which is handy while iterating:
 
 ```bash
 python matlas.py process \
   --input ./evidence/Cache.sqlite \
-  --presets ./presets/ios/ios_routined_cached_locations.yaml \
+  --presets presets/ios/ios_routined_cached_locations.yaml \
   --output ./out/routined.csv \
   --linked-entity "Case Subject"
 ```
 
-Use split output when comparing preset behavior independently:
+Inspect `out/routined.csv` plus the `.matlas.traceability.json` and
+`.matlas.warnings.json` sidecars; the warnings sidecar lists unmapped columns (the
+research frontier).
+
+## 8. Lint your preset
+
+Before relying on a preset, lint it for errors, likely mistakes, and best-practice
+nudges:
 
 ```bash
-python matlas.py process \
-  --input ./evidence/sample \
-  --presets ./presets \
-  --output ./out/by-preset \
-  --no-merge \
-  --linked-entity "Case Subject"
+python utils/lint_presets.py presets/ios/ios_routined_cached_locations.yaml --advice
 ```
 
-## 8. Use Profiles For Curated Preset Sets
+It reports ERRORs (won't load), WARNINGs (e.g. a half-coordinate, a missing link, a
+rowid mapped as `row_uid`), and ADVICE (naming, tier/tool coherence, naive-timezone,
+raw epoch arithmetic). The same checks are available as a library:
 
-The GUI can save selected presets into a `.mATLAS-profile` file. The CLI can
-then run the same selection:
-
-```bash
-python matlas.py process \
-  --input ./evidence \
-  --profile ./profiles/ios-locations.mATLAS-profile \
-  --output ./out/merged.csv \
-  --linked-entity "Case Subject"
+```python
+from model_atlas.presets import lint_file, lint_paths   # -> list[LintFinding]
 ```
 
-Profile files are JSON:
+`--strict` makes warnings fail the run (useful in CI); the default exit code is
+non-zero only on errors.
 
-```json
-{
-  "version": 1,
-  "preset_paths": [
-    "../presets/axiom/ios_cached_locations.yaml",
-    "../presets/axiom/ios_significant_locations_visits.yaml"
-  ]
-}
-```
+## 9. Different OS versions
 
-Relative profile paths are resolved from the profile file location. The GUI
-saves absolute paths for convenience.
+If a later OS renames columns, copy the preset to a new file, set its `os_version`
+range, and adjust the changed column names. The engine auto-selects the preset whose
+mapped columns actually fit the source — you don't choose by hand.

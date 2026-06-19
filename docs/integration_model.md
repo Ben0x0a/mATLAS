@@ -21,15 +21,17 @@ The current CSV uses snake_case column names.
 | `linked_entity` | string or null | none | Optional secondary entity linked to the assertion. |
 | `time_lower_raw` | source scalar or null | source-defined | Original source value for the lower temporal bound. |
 | `time_lower_source_field` | string or null | source column | Source column that supplied the lower bound. |
-| `time_lower_unix_ns` | integer or null | Unix nanoseconds | Normalized lower temporal bound. |
+| `time_lower_unix_us` | integer or null | Unix microseconds | Normalized lower temporal bound. |
 | `time_upper_raw` | source scalar or null | source-defined | Original source value for the upper temporal bound. |
 | `time_upper_source_field` | string or null | source column | Source column that supplied the upper bound. |
-| `time_upper_unix_ns` | integer or null | Unix nanoseconds | Normalized upper temporal bound. |
+| `time_upper_unix_us` | integer or null | Unix microseconds | Normalized upper temporal bound. |
 | `time_zone` | string or null | none | Timezone declared or extracted for the temporal value. |
-| `time_accuracy_ns` | integer or null | nanoseconds | Temporal uncertainty or resolution when known. |
+| `time_accuracy_us` | integer or null | microseconds | Temporal uncertainty or resolution when known. |
 | `temporal_source` | string or null | none | Source/mechanism behind the temporal value. |
 | `latitude_wgs84` | float or null | decimal degrees | WGS84 latitude. |
+| `latitude_source_field` | string or null | source column | Source column latitude was read from (auto-captured). |
 | `longitude_wgs84` | float or null | decimal degrees | WGS84 longitude. |
+| `longitude_source_field` | string or null | source column | Source column longitude was read from (auto-captured). |
 | `altitude_m` | float or null | meters | Altitude. |
 | `position_type` | string or null | none | Source-derived position type when known. |
 | `raw_position` | source scalar or null | source-defined | Raw spatial expression or source value. |
@@ -47,13 +49,14 @@ The current CSV uses snake_case column names.
 | `entity_position_link` | string or null | controlled value | Relation between entity and position. |
 | `entity_time_link` | string or null | controlled value | Relation between entity and temporal interval. |
 | `spatial_temporal_link` | string or null | controlled value | Relation between position and temporal interval. |
-| `acquisition_path` | string or null | path/context | Acquisition or evidence container path when known. |
-| `source_file_path` | string or null | path/context | Original source path or internal evidence path when known. |
-| `tool_label` | string or null | none | Source/tool label such as table, sheet, or export label. |
-| `input_file` | string or null | path/context | Input file processed by the adapter. |
-| `record_locator` | string or null | source-defined | Source-local locator useful for manual review. |
+| `raw_source_path` | string or null | path/context | Where the trace came from: a device path (e.g. `preset(in_archive)`) or a tool's source column. Mapped by the preset. |
+| `input_file` | string or null | path/context | The specific file mATLAS read (the zip / CSV / workbook). Engine-set. |
+| `input_record_id` | string or null | source-defined | Which record in that file: `<table-or-sheet>#<ordinal>` by default, or a tool locator. |
+| `record_uid` | string | stable ID | Deterministic, globally-unique UID. The tool's own id when the preset maps `record_uid` (verbatim), else a content-addressed `uuid5`. |
+| `preset_id` | string or null | none | Stable machine id of the applied preset. Engine-set. |
+| `preset_name` | string or null | none | Human title of the applied preset. Engine-set. |
+| `source_label` | string or null | none | Tool label (secondary) or any descriptive label (primary), e.g. a table name. |
 | `source_tier` | string or null | controlled value | Source tier, for example primary or secondary. |
-| `source_row_id` | string | stable ID | Stable identifier for the source row. |
 | `deleted` | string or null | controlled value | Record state when known. |
 | `record_type` | string or null | controlled value | Untangle result, usually main/additional. |
 | `record_rank` | integer or null | rank | Rank inside comparable assertion groups. |
@@ -65,7 +68,7 @@ the lower and upper raw values, source fields, and normalized values are the
 same.
 
 Timestamp normalization is preset-defined through temporal pipes. The built-in
-`parse_datetime` pipe writes Unix nanoseconds.
+`parse_datetime` pipe writes Unix microseconds.
 
 ## Link Fields
 
@@ -88,13 +91,24 @@ when the argument is absent.
 
 ## Provenance Fields
 
-Preset mappings may set provenance fields directly. Otherwise the pipeline fills
-available defaults for:
+Provenance answers four questions in order: *where from* (`raw_source_path` →
+`input_file` → `input_record_id`), *which record and its stable key*
+(`input_record_id` for a human, `record_uid` as a deterministic machine key), *how it
+was read* (`preset_id` / `preset_name` / `source_label` / `source_tier`), and *record
+state* (`deleted`).
 
-- `acquisition_path`
-- `source_file_path`
-- `input_file`
-- `source_tier`
+A preset maps `raw_source_path`, `input_record_id`, `source_label`, `deleted` and
+(optionally) `record_uid`. The engine always sets `input_file`, `preset_id`,
+`preset_name`; it fills `input_record_id` (`<table-or-sheet>#<ordinal>`) and
+`record_uid` (a content-addressed `uuid5`) when the preset maps neither, and defaults
+`source_tier` from the preset tier.
+
+`record_uid` is the row's stable key, shared by every assertion fanned out from one
+source row. When a preset maps `record_uid` to a tool's id column it is used verbatim,
+so output rows join straight back to the tool artefact. Otherwise it is
+`uuid5(content_fingerprint | raw_source_path | input_file | input_record_id)` — globally
+unique (two acquisitions differ in the content fingerprint) and portable across machines.
+A duplicate `record_uid` across distinct source rows is a hard error.
 
 Traceability and warning sidecars contain run-level provenance, matched preset
 information, row counts, and source frontier information.

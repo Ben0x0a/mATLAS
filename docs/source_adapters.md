@@ -7,22 +7,21 @@ Supported first-slice adapters:
 - CSV file
 - Excel sheet
 - SQLite database table or SQL query
-- SQLite database inside a ZIP archive when a preset provides `db_relpath`
+- SQLite database inside a ZIP archive when a preset provides `match.in_archive`
 
 Folder discovery scans recursively and skips SQLite sidecar files ending in
 `-wal`, `-shm`, or `-journal`. ZIP files are inspected for entries with SQLite
 suffixes (`.db`, `.sqlite`, `.sqlite3`) so presets can match the internal
 database name/path.
 
-SQLite selectors identify the database/file only. The table or SQL query is
-defined under `extract.sqlite`. The adapter uses the migrated forensic SQLite
-helpers: it copies evidence to a temporary directory, reads db-only and
-db+sidecars views, merges row provenance, validates custom SQL, and records
-before/after source integrity metadata.
+A preset's `match` block identifies the database/file; the table or SQL query is
+`match.table` / `match.sql`. The SQLite adapter copies evidence to a temporary
+directory, reads db-only and db+sidecars views, merges row provenance, validates
+custom SQL, and records before/after source integrity metadata.
 
-Excel selectors use file name and sheet name. CSV selectors use file name. A
-selector matches when any criterion it declares matches (see
-[preset_schema.md](preset_schema.md)).
+Matching is context-aware: inside a ZIP the `in_archive` path selects the DB; for a
+direct file the `as_file` name does. When several presets match one source, the engine
+tie-breaks by structural fit (see [preset_schema.md](preset_schema.md)).
 
 ## Temp Staging (Never Touch The Original)
 

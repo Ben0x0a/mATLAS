@@ -1,254 +1,232 @@
-# Preset YAML Schema
+# Preset YAML Schema (v3)
 
-Presets are YAML files loaded recursively from a preset folder, or loaded
-directly when `--presets` points to one YAML file. Template placeholders are
-skipped. A preset selects one source element, extracts rows, and maps each
-source row into one or more canonical assertion rows.
+Presets are YAML files loaded recursively from a preset folder, or loaded directly
+when `--presets` points to one YAML file. A preset selects one source, extracts rows,
+and maps each source row into one or more canonical assertion rows.
 
-The current preset schema is v2 and uses:
+The v3 format is examiner-first: types are inferred, timestamps use named codecs, the
+assertion's relationship is grouped, and every value is an explicit reference call.
 
-- `common` for row-level fields shared by every assertion.
-- `assertions` for spatial/entity fields plus temporal specs.
-- `pipe` lists for type conversion, parsing, lookup, and other transformations.
-
-## Minimal Shape
+## Shape
 
 ```yaml
-name: Example Locations
-version: "1.0"
-parser:
-  name: example_locations
-  version: "1.0"
+preset:
+  id: ios.routined.cached_locations     # stable machine key (traceability)
+  name: Routined Cached Locations        # human name
+  os: iOS                                # composes the title
+  tool:                                  # forensic tool; empty for a primary source
+  os_version: ">=15"                     # applicability range (tie-break)
+  version: 1.0
+  tier: primary                          # primary | secondary | unknown
 
-source_tier: secondary
+match:
+  type: sqlite                           # csv | excel | sqlite
+  in_archive: /private/var/.../Cache.sqlite   # internal path (ZIP source)
+  as_file: Cache.sqlite                  # file name (direct source)
+  table: ZRTCLLOCATIONMO                 # sqlite table (or sql:)
 
-selectors:
-  - source_type: csv
-    file_name: "locations.csv"
+expected_columns:                        # the source's full column inventory (globs ok)
+  - ZLATITUDE
+  - ZLONGITUDE
+  - ZTIMESTAMP
+  - ZSPEED
 
-extract:
-  csv:
-    delimiter: ","
-    encoding: "utf-8"
+record_uid: column(Z_PK)                 # optional; omit to auto-generate a deterministic UID
 
-expected_columns:
-  - "Item ID"
-  - "Latitude"
-  - "Longitude"
-  - "Recorded At"
+lookup_tables:                           # named tables for lookup() pipe steps
+  recovery: {Parsing: intact, Carving: recovered}
+patterns:                                # named regex with mandatory named groups
+  coords: "(?P<lat>-?\\d+\\.\\d+) - (?P<lon>-?\\d+\\.\\d+)"
 
-source_row_id:
-  from: "Item ID"
+common:                                  # fields shared by every assertion of a row
+  entity: const(device)
 
-common:
-  entity: {value: device}
-  entity_type: {value: device}
-  tool_label: {value: locations.csv}
-
-assertions:
-  - latitude_wgs84: {from: Latitude, pipe: [{cast: float}]}
-    longitude_wgs84: {from: Longitude, pipe: [{cast: float}]}
-    position_source: {value: GNSS}
-    entity_position_link: at
-    temporal:
-      - instant: "Recorded At"
-        pipe: [{parse_datetime: "%Y-%m-%d %H:%M:%S"}]
-        entity_time_link: observed_at
-        spatial_temporal_link: instant
+assertions:                              # each entry = one position + one time + links
+  - position:
+      latitude_wgs84:  column(ZLATITUDE)
+      longitude_wgs84: column(ZLONGITUDE)
+      horizontal_speed_kmh: { from: column(ZSPEED), unit: m/s }
+    time:
+      instant: column(ZTIMESTAMP)
+      epoch:   cocoa
+      zone:    const(UTC)
+    links:
+      entity_position:  at
+      entity_time:      observed_at
+      spatial_temporal: instant
 ```
 
-## Top-Level Fields
+## `preset` header
 
-| Field | Required | Description |
+| Field | Required | Meaning |
 | --- | --- | --- |
-| `name` | yes | Human-readable preset name. Used in logs and split-output filenames. |
-| `version` | no | Preset version. Defaults to `parser.version` when absent. |
-| `parser.name` | yes | Stable parser identifier recorded in traceability. |
-| `parser.version` | yes | Parser/preset version recorded in traceability. |
-| `source_tier` | no | Source tier written into output when not otherwise mapped. |
-| `selectors` | yes | One or more source-matching rules. |
-| `extract` | no | Source-type extraction settings. |
-| `expected_columns` | no | Drift warning inventory. |
-| `source_row_id` | no | Explicit stable row ID. |
-| `common` | no | Output fields shared by every assertion from a source row. |
-| `assertions` | yes | Assertion templates; each must include `temporal`. |
+| `id` | yes | Stable dotted identifier, recorded in traceability. |
+| `name` | yes | Short human name. |
+| `os` | no | Platform; composes the title. |
+| `tool` | no | Forensic tool (AXIOM, Cellebrite). Empty for a primary/device source. |
+| `os_version` | no | Comparator range (`">=15"`, `">=15 <18"`); empty = any version. |
+| `version` | no | Preset version. |
+| `tier` | no | `primary` (parsed device artefact) or `secondary` (a tool's export). |
 
-## Selectors
+The title is composed: the non-empty of `os`/`tool` joined by a space, then `— name`
+(e.g. `iOS — Routined Cached Locations`, or `iOS AXIOM — Cached Locations`).
 
-CSV:
+## `match`
 
-```yaml
-selectors:
-  - source_type: csv
-    file_name: "locations.csv"
-```
+Identifies the source and how to read it.
 
-Excel:
+| Field | Applies to | Meaning |
+| --- | --- | --- |
+| `type` | all | `csv` \| `excel` \| `sqlite`. |
+| `as_file` | all | File name (matches a direct file/folder source). |
+| `in_archive` | sqlite | Internal acquisition path (matches a DB inside a ZIP). |
+| `sheet` | excel | Sheet name. |
+| `table` / `sql` | sqlite | Exactly one: a table name or a read-only SQL query. |
+| `delimiter`,`encoding`,`header_row`,`skip_rows` | csv/excel | Read options. |
 
-```yaml
-selectors:
-  - source_type: excel
-    file_name: "export.xlsx"
-    sheet_name: "Locations"
-```
+**Matching is context-aware:** inside a ZIP the `in_archive` path discriminates; for a
+direct file the `as_file` name does. When several presets match one source, the engine
+tie-breaks by **structural fit** — how well each preset's `expected_columns` match the
+source's actual columns (falling back to the mapped columns when no inventory is
+declared) — then declaration order.
 
-SQLite:
+## `expected_columns`
 
-```yaml
-selectors:
-  - source_type: sqlite
-    file_name: "Cache.sqlite"
-    db_relpath: "/private/var/mobile/Library/Caches/example/Cache.sqlite"
-```
-
-SQLite selectors identify the database. The table or SQL query is set under
-`extract.sqlite`.
-
-A selector matches when **any** criterion it declares matches (OR semantics), not
-when all do. So a SQLite selector that gives both `file_name` and `db_relpath`
-matches a source that matches *either* — useful when an acquisition renames the
-file but preserves the internal path, or vice versa. A selector that declares no
-criteria matches on source type alone.
-
-## Extraction
+The full source-column inventory the examiner declares **before** mapping — the
+intended authoring flow is "list every column you have, then map the subset you need".
+It powers the drift / frontier report (present-but-unmapped = the research backlog;
+declared-but-absent = drift) and the AXIOM differential.
 
 ```yaml
-extract:
-  csv:
-    delimiter: ","
-    encoding: "utf-8-sig"
-    header_row: 0
-    skip_rows: 0
-
-  excel:
-    sheet_name: "Locations"
-    header_row: 0
-    skip_rows: 0
-
-  sqlite:
-    table: "ZLOCATION"
-    # exactly one of table or sql:
-    # sql: "SELECT * FROM ZLOCATION"
+expected_columns:
+  - Latitude
+  - Longitude
+  - "Speed (m/s)"
+  - "Timestamp Date/Time - * (dd.MM.yyyy)"   # entries may be exact names OR globs
 ```
 
-## Field Mapping Syntax
+Entries may be exact names or glob patterns (a glob matches any present column). It is
+optional but recommended; the linter advises when it is missing and warns when the
+mapping reads a column the inventory does not cover.
 
-Fields in `source_row_id`, `common`, assertions, and temporal overrides set
-**exactly one** of `from`, `from_name`, `from_file`, or `value`:
+## Reference vocabulary (field values)
 
-```yaml
-entity: {value: device}          # constant
-latitude_wgs84: {from: Latitude} # source column value
-time_zone:
-  from_name: "Timestamp - *"     # resolved source column name
-  pipe: [{regex_extract: "(UTC[+-][0-9]{2}:[0-9]{2})"}]
-record_locator: {from_file: name}  # source file identity: name | stem | path
-```
+Every mapped value is exactly one explicit call:
 
 | Form | Value |
 | --- | --- |
-| `from` | the value of a source column (name may be a glob) |
-| `from_name` | the matched column's *name* (e.g. to extract embedded metadata) |
-| `from_file` | the source file identity — `name`, `stem`, or `path` |
-| `value` | a constant |
+| `column(NAME)` | a source column's value (NAME may be a glob; quote if it has spaces) |
+| `header("Glob *")` | the matched column's header text (e.g. a timezone in the header) |
+| `filename(name\|stem\|path)` | part of the source file identity |
+| `param(entity\|linked_entity)` | a run-level argument |
+| `preset(in_archive\|table\|id\|...)` | a key from the current preset's own `match`/`meta` |
+| `const(VALUE)` | a literal |
 
-A bare scalar is also a constant:
-
-```yaml
-entity_position_link: at
-```
-
-Column names may use a glob pattern such as `Timestamp Date/Time - *`. A glob
-must resolve to exactly one source column.
-
-## Assertions And Temporal Specs
-
-Each `assertions` entry contains assignable output fields plus `temporal`.
-`temporal` may be one mapping or a list of mappings.
-
-Instant:
+A field may instead be a mapping with attributes:
 
 ```yaml
-temporal:
-  - instant: "Recorded At"
-    pipe: [{parse_datetime: "%Y-%m-%d %H:%M:%S"}]
-    entity_time_link: observed_at
-    spatial_temporal_link: instant
+horizontal_speed_kmh: { from: column(ZSPEED), unit: m/s }
+imei:                  { from: filename(name), pipe: "regex(imei, group=n)" }
+latitude_wgs84:        { from: column(Coords), extract: coords.lat }
 ```
 
-Interval:
+| Attribute | Effect |
+| --- | --- |
+| `from` | the reference (required in mapping form) |
+| `type` | override the inferred cast (`int`/`float`/`str`/`bool`) |
+| `unit` | declare the source unit; the engine converts to the model's canonical unit |
+| `extract` | `pattern.group` — pull a named regex group from a named pattern |
+| `pipe` | a procedural call-chain (see Pipes) |
+
+Numeric model columns are **cast automatically** from their declared type, so a plain
+`latitude_wgs84: column(Lat)` needs no `cast`.
+
+Bare scalars are allowed only where the position is a known keyword/enum — link values,
+`epoch`, `zone` — never where a column could be meant.
+
+## `time`
 
 ```yaml
-temporal:
-  - interval:
-      lower: "First Seen"
-      upper: "Last Seen"
-    pipe: [{parse_datetime: "%Y-%m-%d %H:%M:%S"}]
-    entity_time_link: observed_at
-    spatial_temporal_link: continuous_during_interval
+time:
+  instant: column(TS)               # or  interval: {lower: column(A), upper: column(B)}
+  epoch:   cocoa                     # OR  format: "%d.%m.%Y %H:%M:%S.%f"
+  zone:    const(UTC)               # const or header(...); applied to format parsing
 ```
 
-Temporal raw values and source column names are captured automatically into:
+- Exactly one of `instant` / `interval`.
+- Exactly one decoding: `epoch` (named) or `format` (strptime). With neither, the value
+  is assumed to already be Unix microseconds.
+- `epoch` ∈ `unix_s`, `unix_ms`, `unix_us`, `unix_ns`, `cocoa` (2001 epoch), `webkit`.
+- A captured `zone` (e.g. `header(...)` + `regex`) is applied during `format` parsing.
+- The raw value, the resolved source column, and the normalized `*_unix_us` are written
+  automatically to the `time_lower_*` / `time_upper_*` columns.
 
-- `time_lower_raw`
-- `time_lower_source_field`
-- `time_upper_raw`
-- `time_upper_source_field`
+## `links`
 
-The temporal pipe result is written to `time_lower_unix_ns` and
-`time_upper_unix_ns`.
+The assertion's three edges, grouped:
 
-## Pipes
+```yaml
+links:
+  entity_position:  at                 # -> entity_position_link
+  entity_time:      observed_at        # -> entity_time_link
+  spatial_temporal: instant            # -> spatial_temporal_link
+```
 
-Pipes run in order and treat `None` as a no-op.
+Each is validated against its controlled vocabulary.
 
-| Pipe | Example | Description |
+## Pipes (the procedural escape hatch)
+
+Most fields need no pipe — type, unit, epoch, and extract are declarative. When you do
+need logic, a pipe is a left-to-right call chain string:
+
+```yaml
+deleted: { from: 'column("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
+heading_deg: { from: column(Raw), pipe: "split(';', index=0) | cast(float)" }
+```
+
+| Step | Example | Meaning |
 | --- | --- | --- |
-| `cast` | `{cast: float}` | Convert to `int`, `float`, `str`, or `bool`. |
-| `parse_datetime` | `{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}` | Parse with `datetime.strptime` and write Unix nanoseconds. A naive value uses `tz_offset_hours` (number or string like `"UTC+02:00"`); a temporal spec's captured `time_zone` is auto-applied. |
-| `arithmetic` | `{arithmetic: "value * 3.6"}` | Restricted expression with `value` bound. |
-| `lookup` | `{lookup: {1: GNSS, 4: WiFi}, on_unknown: raw}` | Map encoded values. |
-| `regex_extract` | `{regex_extract: "(UTC[+-][0-9]{2}:[0-9]{2})"}` | Return one regex group. |
-| `split` | `{split: ",", index: 0}` | Split a string and optionally select one part. |
+| `cast` | `cast(int)` | coerce to int/float/str/bool |
+| `scale` | `scale(3.6)` | multiply by a factor |
+| `arithmetic` | `arithmetic((value + 1) * 2)` | sandboxed expression with `value` bound |
+| `lookup` | `lookup(recovery, on_unknown=null)` | map via a named `lookup_tables` entry |
+| `regex` | `regex(coords, group=lat)` | a **named** capture group of a named `patterns` entry |
+| `split` | `split(',', index=0)` | split and optionally pick one part |
 
-## Assignable Output Fields
+`regex` requires named groups; the author names which group to extract. Each step
+accepts `on_error=null|raw|error` (default `null`).
 
-The preset can assign any canonical output field except engine-owned fields.
+## `record_uid`
 
-Engine-owned fields:
+Optional. Reference a genuine source UID (a tool's Item ID, a real UUID column) when one
+exists; the value is used verbatim so output rows link back to the tool artefact. Omit it
+for a device DB so the engine generates a deterministic, content-addressed UID
+(`uuid5(content_fingerprint | raw_source_path | input_file | input_record_id)`). A bare
+rowid (`Z_PK`) is not a stable UID and should not be mapped here.
 
-- `time_lower_raw`
-- `time_lower_source_field`
-- `time_lower_unix_ns`
-- `time_upper_raw`
-- `time_upper_source_field`
-- `time_upper_unix_ns`
-- `source_row_id`
-- `record_type`
-- `record_rank`
+## `preset(...)` reference
 
-Common frequently mapped fields:
+`preset(<key>)` reads a value from the current preset's own definition — its `match`
+block (`in_archive`, `as_file`, `table`, `sheet`, `sql`) or `meta` (`id`, `name`, `tier`,
+`os`, `tool`, `version`, `os_version`). The common use is `raw_source_path:
+preset(in_archive)`, so a device-DB row records the canonical device path the preset
+targets regardless of how the file was read.
 
-- `entity`, `entity_type`, `linked_entity`
-- `time_zone`, `time_accuracy_ns`, `temporal_source`
-- `latitude_wgs84`, `longitude_wgs84`, `altitude_m`
-- `position_type`, `raw_position`, `position_source`
-- `horizontal_accuracy_m`, `vertical_accuracy_m`
-- `horizontal_speed_kmh`, `vertical_speed_kmh`
-- `heading_deg`, `heading_accuracy_deg`
-- `entity_position_link`, `entity_time_link`, `spatial_temporal_link`
-- `source_file_path`, `tool_label`, `input_file`, `record_locator`
-- `source_tier`, `deleted`
+## Provenance to map
 
-Some fields validate constants against controlled vocabularies, including
-`source_tier`, `deleted`, and the three link fields.
+- `raw_source_path` — where the trace came from. Map it explicitly:
+  `preset(in_archive)` for a device DB, `column(Source)` for a tool export.
+- `input_record_id` — which record in the file; defaults to `<table-or-sheet>#<ordinal>`
+  when unmapped, or map a tool locator column.
+- `source_label`, `deleted` — optional descriptive label and record state.
+- `input_file`, `preset_id`, `preset_name` are engine-set and must not be mapped.
 
-## Validation Notes
+## Validation notes
 
-- `selectors` and `assertions` must be non-empty.
-- `expected_columns` warns on drift but does not control extraction.
-- Missing mapped columns resolve to `None` unless a later pipe raises.
-- Duplicate explicit `source_row_id` values across different source rows are a
-  hard error.
-- Preset logic does not live in the GUI; both CLI and GUI call the same package
-  pipeline.
+- `assertions` must be non-empty; each needs a `time`.
+- A field value must be an explicit reference call; a missing column resolves to `None`.
+- A glob must resolve to exactly one source column.
+- A duplicate `record_uid` (generated or mapped) across distinct rows is a hard error.
+- Engine-owned columns (the `time_*`, `latitude_source_field`, `longitude_source_field`,
+  `input_file`, `record_uid`, `preset_id`, `preset_name`, `record_*`) are not assignable
+  in a mapping.
