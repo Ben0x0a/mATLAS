@@ -258,6 +258,23 @@
           </widget>
          </item>
          <item>
+          <widget class="QCheckBox" name="includeSourceColumnsCheck">
+           <property name="text">
+            <string/>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="includeSourceColumnsLabel">
+           <property name="text">
+            <string>Include source columns</string>
+           </property>
+          </widget>
+         </item>
+         <item>
           <spacer name="extractSettingsSpacer">
            <property name="orientation">
             <enum>Qt::Horizontal</enum>

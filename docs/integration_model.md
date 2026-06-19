@@ -61,6 +61,30 @@ The current CSV uses snake_case column names.
 | `record_type` | string or null | controlled value | Untangle result, usually main/additional. |
 | `record_rank` | integer or null | rank | Rank inside comparable assertion groups. |
 
+## Source-Column Passthrough (`orig_` columns)
+
+By default every original source column is carried through to the output verbatim,
+appended **after** the canonical columns and prefixed `orig_` (e.g. `orig_Latitude`,
+`orig_City`). This preserves the untouched source row beside the normalized model, so a
+transform can be verified at a glance — e.g. a normalized `horizontal_speed_kmh` of
+`10.8` next to its `orig_Speed (m/s)` of `3.0`.
+
+Notes:
+
+- The prefix is `orig_`, not `raw_`, because `raw_position` and `raw_source_path` are
+  already canonical columns. A source column whose `orig_` name would still collide with
+  a canonical column is disambiguated with a trailing `_`.
+- All source columns are included — both mapped and unmapped — so mapped values appear
+  twice (once normalized, once verbatim). The frontier report still lists only the
+  *unmapped* column names.
+- For a **pivoted** source row (one row that fans out into several assertions, e.g.
+  Significant Locations' visit interval + creation instant), every output row repeats the
+  same `orig_` values.
+- In a merged CSV across presets with different source columns, the `orig_` set is the
+  union; a row from a source lacking a column is left blank there.
+- Disable with the CLI flag `--no-source-columns` (or untick **Include source columns**
+  in the GUI) to emit the canonical columns only.
+
 ## Temporal Semantics
 
 `time_lower_*` and `time_upper_*` define the assertion interval. For an instant,

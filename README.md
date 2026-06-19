@@ -42,8 +42,13 @@ python matlas.py --log-level DEBUG process --input ./evidence --presets ./preset
 python matlas.py process --input ./evidence --presets ./presets --output ./out/merged.csv --linked-entity Subject --entity iPhone
 python matlas.py process --input ./evidence --presets ./presets --output ./out/merged.csv --linked-entity Subject --traceability-format prov
 python matlas.py process --input ./evidence --presets ./presets --output ./out/by-preset --no-merge --linked-entity Subject
+python matlas.py process --input ./evidence --presets ./presets --output ./out/merged.csv --linked-entity Subject --no-source-columns
 python matlas.py process --input ./evidence --profile ./profiles/ios-locations.mATLAS-profile --output ./out/merged.csv --linked-entity Subject
 ```
+
+By default every original source column is appended verbatim to the output, prefixed
+`orig_` (e.g. `orig_Latitude`), after the canonical columns. Use `--no-source-columns`
+to emit the canonical columns only. See [docs/integration_model.md](docs/integration_model.md).
 
 When `--input` is a single file that resolves to exactly one source element and
 `--presets` is a single YAML, mATLAS runs in **force-preset mode**: it applies that

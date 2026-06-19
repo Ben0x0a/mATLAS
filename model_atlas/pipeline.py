@@ -20,6 +20,7 @@ import pandas as pd
 
 from model_atlas import reporting
 from model_atlas.export import traceability_path_for, warnings_path_for, write_csv, write_json
+from model_atlas.model.families import OUTPUT_COLUMNS
 from model_atlas.presets.matcher import match_preset
 from model_atlas.presets.spec_loader import load_preset_specs
 from model_atlas.sources import discover_elements, get_adapter, peek_columns
@@ -57,6 +58,7 @@ def process(
     traceability_format: str = "readable",
     merge: bool = True,
     entity: str | None = None,
+    include_source_columns: bool = True,
 ) -> ProcessResult:
     """Run the full pipeline.
 
@@ -75,6 +77,9 @@ def process(
                               False → one CSV per matched preset inside *output*.
         entity:               Optional entity. When supplied it OVERRIDES any entity the
                               preset maps; the preset value is the default used otherwise.
+        include_source_columns: True (default) → append every source column verbatim as
+                              an ``orig_<col>`` column after the canonical schema. False →
+                              canonical columns only.
     """
     started_at = reporting.now_iso()
     presets = load_preset_specs(presets_path)
@@ -134,7 +139,9 @@ def process(
             linked_entity=linked_entity,
             source_file_name=source_file_name,
         )
-        frame, frame_warnings = build_rows(records, preset, env, columns=list(extracted.source_columns))
+        frame, frame_warnings = build_rows(
+            records, preset, env, columns=list(extracted.source_columns),
+            include_source_columns=include_source_columns)
         log.info("%s: %d source row(s) -> %d assertion row(s)", element.source_file, len(records), len(frame))
         frames_by_preset.setdefault(preset.name, []).append(frame)
         sources_by_preset.setdefault(preset.name, []).append({
@@ -170,6 +177,18 @@ def process(
 # ---------------------------------------------------------------------------
 # Internal writers
 # ---------------------------------------------------------------------------
+
+def _order_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Canonical columns first (in schema order), then any ``orig_<col>`` passthrough
+    columns in their existing (source/first-appearance) order. Keeps the merged CSV's
+    column order deterministic when frames from different presets carry different
+    passthrough columns."""
+    if df.empty:
+        return df
+    canonical = [c for c in OUTPUT_COLUMNS if c in df.columns]
+    extra = [c for c in df.columns if c not in set(OUTPUT_COLUMNS)]
+    return df[canonical + extra]
+
 
 def _row_counts(frames_by_preset: dict, unmatched: list, matched: list, df: pd.DataFrame) -> dict[str, int]:
     ranked = int(df["record_rank"].notna().sum()) if "record_rank" in df.columns else 0
@@ -213,7 +232,7 @@ def _write_merged(
     all_sources = [s for sources in sources_by_preset.values() for s in sources]
     merged = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame()
     if not merged.empty:
-        merged = untangle(merged)
+        merged = _order_columns(untangle(merged))
     written = write_csv(merged, output_csv) if not merged.empty else None
     counts = _row_counts(frames_by_preset, unmatched, matched, merged)
 
@@ -257,7 +276,7 @@ def _write_split(
         sources = sources_by_preset.get(preset_name, [])
         preset_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         if not preset_df.empty:
-            preset_df = untangle(preset_df)
+            preset_df = _order_columns(untangle(preset_df))
         if preset_df.empty:
             log.info("Preset %s produced no rows; skipping output file.", preset_name)
             continue

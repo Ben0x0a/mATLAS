@@ -64,6 +64,24 @@ def test_two_assertions_share_source_row_id_and_capture_provenance() -> None:
     assert interval["latitude_source_field"] == "Lat" and interval["longitude_source_field"] == "Lon"
 
 
+def test_source_columns_passthrough_on_every_pivoted_row() -> None:
+    # A pivoted source row (interval + instant) must repeat its orig_ columns on BOTH
+    # output rows, including a column no mapping consumed ("City").
+    record = {"Lat": "1.5", "Lon": "2.5", "Entry": "100", "Exit": "200", "Created": "150",
+              "Loc": "ZTABLE(1)", "ItemID": "A1", "City": "Geneva"}
+    columns = ["Lat", "Lon", "Entry", "Exit", "Created", "Loc", "ItemID", "City"]
+    frame, _ = build_rows([record], _preset(_VISITS), _ENV, columns=columns)
+    assert len(frame) == 2
+    # orig_<col> appended after the canonical schema, in source order.
+    assert list(frame.columns)[-len(columns):] == [f"orig_{c}" for c in columns]
+    for _, row in frame.iterrows():
+        assert row["orig_City"] == "Geneva"          # unmapped, verbatim, on every row
+        assert row["orig_Lat"] == "1.5"              # mapped column also kept verbatim
+    # Opt-out drops the passthrough columns.
+    frame_off, _ = build_rows([record], _preset(_VISITS), _ENV, columns=columns, include_source_columns=False)
+    assert not any(f"orig_{c}" in frame_off.columns for c in columns)
+
+
 def test_to_records_normalises_nan_to_none() -> None:
     records = to_records(pd.DataFrame({"a": [1.0, None], "b": ["x", None]}))
     assert records[1]["a"] is None and records[1]["b"] is None

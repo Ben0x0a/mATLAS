@@ -185,6 +185,7 @@ class MainController(QObject):
         self.auto_preset_check: QCheckBox = child(QCheckBox, "autoPresetCheck")
         self.merge_outputs_check: QCheckBox = child(QCheckBox, "mergeOutputsCheck")
         self.dump_full_ufdr_check: QCheckBox = child(QCheckBox, "dumpFullUfdrCheck")
+        self.include_source_columns_check: QCheckBox = child(QCheckBox, "includeSourceColumnsCheck")
 
         self.traceability_combo: QComboBox = child(QComboBox, "traceabilityCombo")
         self.log_level_combo: QComboBox = child(QComboBox, "logLevelCombo")
@@ -632,6 +633,7 @@ class MainController(QObject):
         self._last_output_folder = None
         self.open_output_folder_button.setEnabled(False)
         traceability_format = self.traceability_combo.currentText()
+        include_source_columns = self.include_source_columns_check.isChecked()
         self._apply_log_level()
 
         def task() -> ProcessResult:
@@ -646,6 +648,7 @@ class MainController(QObject):
                         merge=merge_outputs,
                         entity=entity,
                         linked_entity=linked_entity,
+                        include_source_columns=include_source_columns,
                     )
             if not selected_mode:
                 return process(
@@ -656,6 +659,7 @@ class MainController(QObject):
                     merge=merge_outputs,
                     entity=entity,
                     linked_entity=linked_entity,
+                    include_source_columns=include_source_columns,
                 )
             with tempfile.TemporaryDirectory(prefix="matlas-presets-") as tmp:
                 tmp_path = build_profile_preset_folder(selected_paths, Path(tmp))
@@ -667,6 +671,7 @@ class MainController(QObject):
                     merge=merge_outputs,
                     entity=entity,
                     linked_entity=linked_entity,
+                    include_source_columns=include_source_columns,
                 )
 
         self._run_thread(task, self._on_process_done, self._on_process_failed)

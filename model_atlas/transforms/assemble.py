@@ -237,18 +237,49 @@ def _ref_label(ref: Ref) -> str | None:
     return ref.arg if ref.kind in ("column", "header") else None
 
 
+# Prefix for verbatim source-column passthrough. NOT ``raw_`` — that is already used by
+# canonical columns (``raw_position``, ``raw_source_path``).
+PASSTHROUGH_PREFIX = "orig_"
+
+
+def _passthrough_column_names(source_columns: list[str]) -> dict[str, str]:
+    """Map each source column to its ``orig_<col>`` output name, preserving source order.
+
+    A name that would collide with a canonical column is disambiguated with a trailing
+    ``_``. The mapping is a pure function of the column name, so it is identical across
+    sources (stable merges)."""
+    used = set(OUTPUT_COLUMNS)
+    names: dict[str, str] = {}
+    for col in source_columns:
+        name = f"{PASSTHROUGH_PREFIX}{col}"
+        while name in used:
+            name += "_"
+        names[col] = name
+        used.add(name)
+    return names
+
+
 def build_rows(
     records: list[dict[str, Any]],
     preset: PresetSpec,
     env: BuildEnv,
     *,
     columns: list[str] | None = None,
+    include_source_columns: bool = True,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Build the flat canonical rows for one extracted source."""
+    """Build the flat canonical rows for one extracted source.
+
+    When ``include_source_columns`` is set, every original source column is appended
+    verbatim as an ``orig_<col>`` column (after the canonical schema). The values are
+    taken from the source record, so each assertion a row fans out into carries the same
+    passthrough columns.
+    """
     rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     seen_ids: dict[str, int] = {}
-    resolve = make_resolver(columns if columns is not None else (list(records[0].keys()) if records else []))
+    source_columns = columns if columns is not None else (list(records[0].keys()) if records else [])
+    resolve = make_resolver(source_columns)
+    passthrough_names = _passthrough_column_names(source_columns) if include_source_columns else {}
     ctx = PipeContext(lookup_tables=preset.lookup_tables, patterns=preset.patterns)
     preset_values = _preset_values(preset)
     container = _source_container(preset)
@@ -291,6 +322,11 @@ def build_rows(
         seen_ids[row_id] = position
         base["record_uid"] = row_id
 
+        # Verbatim passthrough of every source column, shared by all of this row's
+        # assertions (so a pivoted source row repeats these columns on each output row).
+        for col, name in passthrough_names.items():
+            base[name] = record.get(col)
+
         for template in preset.assertions:
             shared = dict(base)
             for field_spec in template.fields:
@@ -307,5 +343,5 @@ def build_rows(
                 _apply_time(flat, time_spec, record, warnings, resolve, file_values, env, ctx, preset_values)
                 rows.append(flat)
 
-    frame = pd.DataFrame(rows, columns=list(OUTPUT_COLUMNS))
+    frame = pd.DataFrame(rows, columns=list(OUTPUT_COLUMNS) + list(passthrough_names.values()))
     return frame, warnings

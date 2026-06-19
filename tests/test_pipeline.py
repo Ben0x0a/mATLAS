@@ -40,8 +40,16 @@ def test_pipeline_output_and_readable_sidecars(tmp_path: Path) -> None:
 
     assert result.row_counts["rows"] == 1
     assert result.output_csv is not None and result.output_csv.exists()
-    header = result.output_csv.read_text(encoding="utf-8").splitlines()[0].split(",")
-    assert header == list(OUTPUT_COLUMNS)
+    lines = result.output_csv.read_text(encoding="utf-8").splitlines()
+    header = lines[0].split(",")
+    # Canonical columns first, then an orig_<col> passthrough for every source column.
+    assert header[:len(OUTPUT_COLUMNS)] == list(OUTPUT_COLUMNS)
+    assert header[len(OUTPUT_COLUMNS):] == [
+        "orig_Lat", "orig_Lon", "orig_TS", "orig_Loc", "orig_Item", "orig_Notes", "orig_Mystery"
+    ]
+    # Passthrough values are verbatim, including the unmapped columns.
+    row = dict(zip(header, lines[1].split(",")))
+    assert row["orig_Notes"] == "note" and row["orig_Mystery"] == "xyz"
 
     trace = json.loads(result.output_traceability.read_text(encoding="utf-8"))
     front = trace["sources"][0]["frontier"]
@@ -86,6 +94,32 @@ def _setup_two_presets(tmp_path: Path) -> tuple[Path, Path, Path]:
     return tmp_path, presets, tmp_path / "out"
 
 
+def test_pipeline_no_source_columns(tmp_path: Path) -> None:
+    source, presets, output = _setup(tmp_path)
+    result = process(source, presets, output, linked_entity="subject", include_source_columns=False)
+
+    header = result.output_csv.read_text(encoding="utf-8").splitlines()[0].split(",")
+    assert header == list(OUTPUT_COLUMNS)  # canonical only, no orig_ passthrough columns
+
+
+def test_pipeline_merge_unions_raw_columns(tmp_path: Path) -> None:
+    # Two sources with different source columns: the merged CSV's raw_ columns are the
+    # union, and a row from the source lacking a column is blank there (not dropped).
+    input_folder, presets, output_folder = _setup_two_presets(tmp_path)
+    out = tmp_path / "merged.csv"
+    result = process(input_folder, presets, out, linked_entity="subject")
+
+    lines = result.output_csv.read_text(encoding="utf-8").splitlines()
+    header = lines[0].split(",")
+    # orig_Notes / orig_Mystery exist only in source A; common columns appear once.
+    assert "orig_Notes" in header and "orig_Mystery" in header
+    assert header.count("orig_Lat") == 1
+    rows = [dict(zip(header, ln.split(","))) for ln in lines[1:]]
+    by_item = {r["orig_Item"]: r for r in rows}
+    assert by_item["A"]["orig_Notes"] == "note"
+    assert by_item["B"]["orig_Notes"] == ""   # source B has no Notes column
+
+
 def test_pipeline_split_mode(tmp_path: Path) -> None:
     input_folder, presets, output_folder = _setup_two_presets(tmp_path)
     result = process(input_folder, presets, output_folder, linked_entity="subject", merge=False)
@@ -97,6 +131,7 @@ def test_pipeline_split_mode(tmp_path: Path) -> None:
     for csv in result.output_csvs:
         assert csv.exists()
         header = csv.read_text(encoding="utf-8").splitlines()[0].split(",")
-        assert header == list(OUTPUT_COLUMNS)
+        assert header[:len(OUTPUT_COLUMNS)] == list(OUTPUT_COLUMNS)
+        assert all(c.startswith("orig_") for c in header[len(OUTPUT_COLUMNS):])
         assert csv.with_suffix(".matlas.traceability.json").exists()
         assert csv.with_suffix(".matlas.warnings.json").exists()

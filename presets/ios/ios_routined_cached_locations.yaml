@@ -48,13 +48,14 @@ common:
 
 assertions:
   - position:
-      latitude_wgs84:        column(ZLATITUDE)
-      longitude_wgs84:       column(ZLONGITUDE)
-      altitude_m:            column(ZALTITUDE)
-      horizontal_accuracy_m: column(ZHORIZONTALACCURACY)
-      vertical_accuracy_m:   column(ZVERTICALACCURACY)
-      heading_deg:           column(ZCOURSE)
-      horizontal_speed_kmh:  { from: column(ZSPEED), unit: m/s }
+      latitude_wgs84:                 column(ZLATITUDE)
+      longitude_wgs84:                column(ZLONGITUDE)
+      altitude_m:                     column(ZALTITUDE)
+      horizontal_accuracy_m:          column(ZHORIZONTALACCURACY)
+      vertical_accuracy_m:            column(ZVERTICALACCURACY)
+      heading_deg:                    column(ZCOURSE)
+      horizontal_speed_kmh:           { from: column(ZSPEED), unit: m/s }
+      horizontal_speed_accuracy_kmh:  {from: column(ZSPEEDACCURACY), unit: m/s }
     time:
       instant: column(ZTIMESTAMP)   # Cocoa/Core-Data epoch -> Unix us
       epoch:   cocoa

@@ -101,6 +101,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Use --no-merge to write one CSV per matched preset into the output folder."
         ),
     )
+    process_parser.add_argument(
+        "--source-columns",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        dest="include_source_columns",
+        help=(
+            "Append every source column verbatim as an orig_<col> column after the "
+            "canonical schema (default). Use --no-source-columns for canonical columns only."
+        ),
+    )
 
     return parser
 
@@ -129,6 +139,7 @@ def _cmd_process(args: argparse.Namespace) -> int:
             merge=args.merge,
             entity=args.entity,
             linked_entity=args.linked_entity,
+            include_source_columns=args.include_source_columns,
         )
     else:
         with tempfile.TemporaryDirectory(prefix="matlas-profile-") as tmp:
@@ -140,6 +151,7 @@ def _cmd_process(args: argparse.Namespace) -> int:
                 merge=args.merge,
                 entity=args.entity,
                 linked_entity=args.linked_entity,
+                include_source_columns=args.include_source_columns,
             )
     log.info("Row counts: %s", result.row_counts)
     for entry in result.matched:
