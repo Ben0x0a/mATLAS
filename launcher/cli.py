@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="matlas",
         description=(
             "SpatioTemporal Analysis - Forensic Data Processing. Process CSV, Excel and "
-            "SQLite sources into a merged 40-column spatio-temporal assertion model."
+            "SQLite sources into a merged 43-column spatio-temporal assertion model."
         ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")

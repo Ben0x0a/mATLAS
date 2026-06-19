@@ -743,13 +743,22 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv[:1] + (argv or []))
     app.setStyle("Fusion")
     configure_application_font(app)
-    _install_sigint_handler()
+    _install_sigint_handler(app)
     controller = MainController()
     controller.window.show()
     return int(app.exec())
 
 
-def _install_sigint_handler() -> None:
+def _install_sigint_handler(app: object) -> None:
+    """Make terminal Ctrl+C terminate the GUI process immediately.
+
+    Qt's C++ event loop never yields to the Python interpreter, so a SIGINT
+    handler installed in Python alone never runs while ``app.exec()`` blocks. A
+    periodic no-op QTimer wakes the interpreter often enough to let pending
+    signals be delivered.
+    """
+    from PySide6.QtCore import QTimer
+
     def _handle_sigint(signum: int, _frame: object) -> None:
         try:
             sys.stderr.write("\nInterrupted by Ctrl+C; exiting.\n")
@@ -758,3 +767,9 @@ def _install_sigint_handler() -> None:
             os._exit(128 + signum)
 
     signal.signal(signal.SIGINT, _handle_sigint)
+
+    timer = QTimer()
+    timer.start(200)
+    timer.timeout.connect(lambda: None)
+    # Keep a reference on the app so the timer is not garbage-collected.
+    app._sigint_timer = timer
