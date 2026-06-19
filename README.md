@@ -89,15 +89,15 @@ as the CLI.
 ## Presets
 
 Presets are YAML files loaded recursively from the folder passed with
-`--presets`, or loaded directly when `--presets` points to one YAML file. They
-describe:
+`--presets`, or loaded directly when `--presets` points to one YAML file. A v3
+preset has:
 
-- how to identify a source;
-- how to extract data from CSV, Excel, or SQLite;
-- expected source columns;
-- common row-level model fields;
-- assertion templates and temporal specs;
-- pipe-based conversions for timestamps, labels, and provenance.
+- a `preset` header (id, name, os/tool, version, os_version, tier);
+- a `match` block identifying the source (CSV, Excel, or SQLite, direct or in a ZIP);
+- `common` row-level fields plus `assertions` (each a `position` + `time` + `links`);
+- explicit value references (`column()`, `header()`, `filename()`, `param()`, `const()`),
+  named timestamp codecs (`epoch:`), declarative `unit:` conversion, and `pipe` chains
+  for the procedural cases.
 
 Example presets live under `presets/axiom/` (AXIOM CSV exports) and `presets/ios/`
 — direct SQLite presets read from a full-filesystem ZIP, e.g.
