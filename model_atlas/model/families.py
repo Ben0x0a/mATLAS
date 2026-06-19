@@ -9,7 +9,7 @@ Used by:    transforms (build these from preset mappings), untangle (ranks them)
             export (flattens them to CSV rows via OUTPUT_COLUMNS).
 Depends on: standard library only (dataclasses, enum, uuid is not used here).
 
-This is the canonical 41-column model.
+This is the canonical 44-column model.
 """
 from __future__ import annotations
 
@@ -131,13 +131,13 @@ class Entity:
 class TemporalBound:
     """One end of the interval: the raw/normalised pair plus its source field.
 
-    ``raw`` and ``unix_ns`` are the source-original and exploitable forms of the
+    ``raw`` and ``unix_us`` are the source-original and exploitable forms of the
     same instant; ``source_field`` records which source column it came from.
     """
 
     raw: Any | None = None
     source_field: str | None = None
-    unix_ns: int | None = None
+    unix_us: int | None = None
 
 
 @dataclass(frozen=True)
@@ -147,13 +147,13 @@ class Temporal:
     lower: TemporalBound = field(default_factory=TemporalBound)
     upper: TemporalBound = field(default_factory=TemporalBound)
     time_zone: str | None = None        # shared by both bounds, e.g. "UTC+00:00"
-    accuracy_ns: int | float | None = None
+    accuracy_us: int | float | None = None
     temporal_source: str | None = None  # mechanism: NTP, internal_clock, ...
 
 
 @dataclass(frozen=True)
 class Spatial:
-    """Where, plus metric quality, movement and beam geometry (16 columns).
+    """Where, plus metric quality, movement and beam geometry (18 columns).
 
     Units are named on each field: ``_m`` metres, ``_kmh`` km/h, ``_deg`` degrees;
     coordinates are WGS84. ``altitude_m`` keeps the source's own datum (iOS = MSL,
@@ -192,15 +192,24 @@ class Bindings:
 
 @dataclass(frozen=True)
 class Provenance:
-    """Chain of custody, sibling link and recovery state (8 columns)."""
+    """Where the trace came from, which record it is, how it was read, and its state
+    (9 columns).
 
-    acquisition_path: str | None = None   # the archive/image
-    source_file_path: str | None = None   # original file inside the device
-    tool_label: str | None = None         # upstream parser/artefact label
-    input_file: str | None = None         # what matlas actually ingested
-    record_locator: str | None = None     # address back to the row (table+offset)
+    Four questions in order: *where from* (``raw_source_path`` → ``input_file`` →
+    ``input_record_id``), *which record + its stable key* (``input_record_id`` for a human,
+    ``record_uid`` as a deterministic, content-addressed machine key), *how read*
+    (``preset_id`` / ``preset_name`` / ``source_label`` / ``source_tier``), and *record
+    state* (``deleted``).
+    """
+
+    raw_source_path: str | None = None    # where the trace came from (preset-mapped: device path / tool column)
+    input_file: str | None = None         # the specific file matlas read (the zip / csv / workbook)
+    input_record_id: str | None = None       # which record in that file: "<table-or-sheet>#<ordinal>" or a tool locator
+    record_uid: str | None = None         # deterministic, globally-unique UID; shared by a row's assertions
+    preset_id: str | None = None          # stable machine key of the applied preset
+    preset_name: str | None = None        # human title of the applied preset
+    source_label: str | None = None       # tool label (secondary) or any descriptive label (primary)
     source_tier: SourceTier | None = None
-    source_row_id: str | None = None      # shared by every assertion from one row
     deleted: RecordState | None = None
 
 
@@ -222,12 +231,12 @@ OUTPUT_COLUMNS: tuple[str, ...] = (
     # temporal
     "time_lower_raw",
     "time_lower_source_field",
-    "time_lower_unix_ns",
+    "time_lower_unix_us",
     "time_upper_raw",
     "time_upper_source_field",
-    "time_upper_unix_ns",
+    "time_upper_unix_us",
     "time_zone",
-    "time_accuracy_ns",
+    "time_accuracy_us",
     "temporal_source",
     # spatial
     "latitude_wgs84",
@@ -253,13 +262,14 @@ OUTPUT_COLUMNS: tuple[str, ...] = (
     "entity_time_link",
     "spatial_temporal_link",
     # provenance
-    "acquisition_path",
-    "source_file_path",
-    "tool_label",
+    "raw_source_path",
     "input_file",
-    "record_locator",
+    "input_record_id",
+    "record_uid",
+    "preset_id",
+    "preset_name",
+    "source_label",
     "source_tier",
-    "source_row_id",
     "deleted",
     # derived
     "record_type",
@@ -278,7 +288,7 @@ _FLOAT_COLUMNS: frozenset[str] = frozenset({
     "horizontal_speed_accuracy_kmh", "vertical_speed_accuracy_kmh",
     "heading_deg", "heading_accuracy_deg", "beam_azimuth_deg", "beam_width_deg",
 })
-_INT_COLUMNS: frozenset[str] = frozenset({"time_accuracy_ns", "record_rank"})
+_INT_COLUMNS: frozenset[str] = frozenset({"time_accuracy_us", "record_rank"})
 
 
 def column_cast(column: str) -> type | None:
@@ -351,7 +361,7 @@ class SpatioTemporalAssertion:
     details_extra: dict[str, Any] = field(default_factory=dict)
 
     def to_flat_row(self) -> dict[str, Any]:
-        """Project the assertion onto the 40 canonical columns, in order.
+        """Project the assertion onto the canonical columns, in order.
 
         ``details_extra`` is intentionally left off the flat row; it is written
         separately by the details transform.
@@ -362,12 +372,12 @@ class SpatioTemporalAssertion:
             "linked_entity": self.entity.linked_entity,
             "time_lower_raw": self.temporal.lower.raw,
             "time_lower_source_field": self.temporal.lower.source_field,
-            "time_lower_unix_ns": self.temporal.lower.unix_ns,
+            "time_lower_unix_us": self.temporal.lower.unix_us,
             "time_upper_raw": self.temporal.upper.raw,
             "time_upper_source_field": self.temporal.upper.source_field,
-            "time_upper_unix_ns": self.temporal.upper.unix_ns,
+            "time_upper_unix_us": self.temporal.upper.unix_us,
             "time_zone": self.temporal.time_zone,
-            "time_accuracy_ns": self.temporal.accuracy_ns,
+            "time_accuracy_us": self.temporal.accuracy_us,
             "temporal_source": self.temporal.temporal_source,
             "latitude_wgs84": self.spatial.latitude_wgs84,
             "latitude_source_field": self.spatial.latitude_source_field,
@@ -390,13 +400,14 @@ class SpatioTemporalAssertion:
             "entity_position_link": _value(self.bindings.entity_position_link),
             "entity_time_link": _value(self.bindings.entity_time_link),
             "spatial_temporal_link": _value(self.bindings.spatial_temporal_link),
-            "acquisition_path": self.provenance.acquisition_path,
-            "source_file_path": self.provenance.source_file_path,
-            "tool_label": self.provenance.tool_label,
+            "raw_source_path": self.provenance.raw_source_path,
             "input_file": self.provenance.input_file,
-            "record_locator": self.provenance.record_locator,
+            "input_record_id": self.provenance.input_record_id,
+            "record_uid": self.provenance.record_uid,
+            "preset_id": self.provenance.preset_id,
+            "preset_name": self.provenance.preset_name,
+            "source_label": self.provenance.source_label,
             "source_tier": _value(self.provenance.source_tier),
-            "source_row_id": self.provenance.source_row_id,
             "deleted": _value(self.provenance.deleted),
             "record_type": _value(self.derived.record_type),
             "record_rank": self.derived.record_rank,

@@ -42,6 +42,21 @@ def _db_relpath(element: DiscoveredElement, preset: PresetSpec) -> Path | None:
     return None
 
 
+def _content_fingerprint(located) -> str | None:
+    """A stable content hash of the DB itself (not the wrapping archive), used to scope
+    the generated record_uid. From the strategic ZIP fingerprint it is the extracted
+    entry's decompressed content_sha256 (already computed); for a direct file it is the
+    DB's full SHA-256. The DB entry is the one whose arcname is not a -wal/-shm/-journal
+    sidecar."""
+    fingerprint = located.source_fingerprint
+    if fingerprint is not None:
+        for entry in fingerprint.entries:
+            if not entry.arcname.endswith(("-wal", "-shm", "-journal")):
+                return entry.content_sha256
+        return fingerprint.entries[0].content_sha256 if fingerprint.entries else None
+    return located.source_hashes.get("db")
+
+
 def _integrity_metadata(located, source_path: Path) -> dict:
     if located.source_fingerprint is not None:
         log.debug("Verifying SQLite ZIP strategic fingerprint: %s", source_path)
@@ -141,6 +156,7 @@ def extract_sqlite(element: DiscoveredElement, preset: PresetSpec) -> ExtractedD
         source_file=source_file,
         source_original_path=source_original_path,
         source_columns=source_columns,
+        source_fingerprint=_content_fingerprint(located),
         metadata={
             "source_type": "sqlite",
             "path": str(element.path),

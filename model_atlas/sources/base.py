@@ -26,6 +26,10 @@ class ExtractedData:
     source_original_path: str
     source_columns: tuple[str, ...]
     metadata: dict[str, Any]
+    # Content hash of the specific source artefact (the DB / CSV / sheet bytes, not the
+    # wrapping archive). Scopes the generated record_uid so it is globally unique and
+    # portable: two acquisitions with the same path + row differ here. None if unhashed.
+    source_fingerprint: str | None = None
 
 
 @runtime_checkable

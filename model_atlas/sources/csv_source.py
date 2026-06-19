@@ -57,6 +57,7 @@ def extract_csv(element: DiscoveredElement, preset: PresetSpec) -> ExtractedData
         source_file=element.source_file,
         source_original_path=element.source_original_path,
         source_columns=tuple(str(c) for c in df.columns),
+        source_fingerprint=hash_before,
         metadata={
             "source_type": "csv",
             "path": str(element.path),

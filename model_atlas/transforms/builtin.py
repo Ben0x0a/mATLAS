@@ -2,7 +2,7 @@
 
 Defines:    the pipe transforms (cast, scale, arithmetic, lookup, regex, split),
             the timezone-offset parser, the string datetime parser, and the named
-            epoch decoders (cocoa/unix_*/webkit) -> Unix nanoseconds.
+            epoch decoders (cocoa/unix_*/webkit) -> Unix microseconds.
 Used by:    transforms.assemble (declarative cast/unit/epoch + procedural pipe) via
             transforms.registry.
 Depends on: transforms.expression (sandbox), transforms.value_maps (key normaliser),
@@ -71,8 +71,8 @@ def tz_offset_to_hours(value: Any) -> float:
     return sign * (int(match.group(2)) + int(match.group(3) or 0) / 60)
 
 
-def parse_datetime_to_ns(value: Any, fmt: str, tz_offset_hours: Any = 0.0) -> int | None:
-    """Parse a formatted datetime string to Unix nanoseconds (None -> None).
+def parse_datetime_to_us(value: Any, fmt: str, tz_offset_hours: Any = 0.0) -> int | None:
+    """Parse a formatted datetime string to Unix microseconds (None -> None).
 
     A naive value is interpreted at ``tz_offset_hours`` (number or offset string); a
     ``%z`` in the format is honoured as parsed.
@@ -84,12 +84,11 @@ def parse_datetime_to_ns(value: Any, fmt: str, tz_offset_hours: Any = 0.0) -> in
         offset = tz_offset_to_hours(tz_offset_hours)
         parsed = parsed.replace(tzinfo=dt.timezone(dt.timedelta(hours=offset)))
     delta = parsed - _UNIX_EPOCH
-    microseconds = (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
-    return microseconds * 1000
+    return (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
 
 
-def epoch_to_ns(value: Any, epoch: str) -> int | None:
-    """Decode a numeric epoch value under a named encoding to Unix nanoseconds.
+def epoch_to_us(value: Any, epoch: str) -> int | None:
+    """Decode a numeric epoch value under a named encoding to Unix microseconds.
 
     Self-documents the conversion a preset would otherwise hand-roll: e.g. ``cocoa``
     adds the 2001->1970 offset; ``unix_ms`` scales milliseconds; etc.
@@ -100,8 +99,8 @@ def epoch_to_ns(value: Any, epoch: str) -> int | None:
         raise TransformHardError(f"Unknown epoch {epoch!r}")
     scale, offset_s = _EPOCHS[epoch]
     seconds = float(value) * scale + offset_s
-    # Round to the nearest nanosecond; float precision is ample for forensic seconds.
-    return int(round(seconds * 1_000_000_000))
+    # Round to the nearest microsecond; float precision is ample for forensic seconds.
+    return int(round(seconds * 1_000_000))
 
 
 # --- pipe transforms (value, args, kwargs, ctx) -----------------------------

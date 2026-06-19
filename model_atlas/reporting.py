@@ -11,6 +11,7 @@ inventory), Mapped (consumed). The gaps are the research backlog and drift signa
 from __future__ import annotations
 
 import datetime as dt
+import fnmatch
 from pathlib import Path
 from typing import Any
 
@@ -33,8 +34,8 @@ def _column_refs(preset: PresetSpec) -> list[str]:
         if spec.from_name_pattern is not None:
             refs.append(spec.from_name_pattern)
 
-    if preset.source_row_id is not None:
-        add(preset.source_row_id)
+    if preset.record_uid is not None:
+        add(preset.record_uid)
     for spec in preset.common:
         add(spec)
     for template in preset.assertions:
@@ -48,21 +49,24 @@ def _column_refs(preset: PresetSpec) -> list[str]:
 
 
 def frontier_report(preset: PresetSpec, present_columns: list[str]) -> dict[str, Any]:
-    """The P/E/M view for one matched source."""
+    """The P/E/M view for one matched source. ``expected_columns`` entries may be exact
+    names or glob patterns; a pattern is matched against the present columns."""
     resolve = make_resolver(list(present_columns))
     present = set(present_columns)
-    expected = set(preset.expected_columns)
+    patterns = list(preset.expected_columns)
+    # Present columns covered by some expected entry (exact or glob).
+    expected_present = {c for c in present if any(fnmatch.fnmatch(c, p) for p in patterns)}
     mapped = {resolved for ref in _column_refs(preset) if (resolved := resolve(ref)) is not None}
     return {
         "present_count": len(present),
-        "expected_count": len(expected),
+        "expected_count": len(patterns),
         "mapped_count": len(mapped),
         # Inventoried, present, but not yet mapped — the research backlog.
-        "frontier_known": sorted((present & expected) - mapped),
+        "frontier_known": sorted(expected_present - mapped),
         # Present and unexpected and unmapped — a model shift / new column to investigate.
-        "frontier_new": sorted(present - expected - mapped),
-        # Expected but absent — schema drift.
-        "drift_missing": sorted(expected - present),
+        "frontier_new": sorted(present - expected_present - mapped),
+        # Expected entry that matches no present column — schema drift.
+        "drift_missing": sorted(p for p in patterns if not any(fnmatch.fnmatch(c, p) for c in present)),
         # Mapped but absent — a preset authoring error.
         "mapped_absent": sorted(mapped - present),
     }
@@ -102,7 +106,9 @@ def build_traceability_prov(
         source_id = f"matlas:source/{index}"
         entities[source_id] = {
             "prov:label": source.get("source_file"),
-            "matlas:source_file_path": source.get("source_file_path"),
+            "matlas:raw_source_path": source.get("raw_source_path"),
+            "matlas:input_file": source.get("input_file"),
+            "matlas:preset_id": source.get("preset_id"),
             "matlas:preset": source.get("matched_preset"),
             "matlas:source_tier": source.get("source_tier"),
         }

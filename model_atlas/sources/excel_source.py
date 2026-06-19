@@ -55,6 +55,7 @@ def extract_excel(element: DiscoveredElement, preset: PresetSpec) -> ExtractedDa
         source_file=source_file,
         source_original_path=element.source_original_path,
         source_columns=tuple(str(c) for c in df.columns),
+        source_fingerprint=hash_before,
         metadata={
             "source_type": "excel",
             "path": str(element.path),

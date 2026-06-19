@@ -90,15 +90,18 @@ def _selector_matches(selector: dict[str, Any], element: DiscoveredElement) -> b
 
 
 def _structural_score(preset: PresetSpec, columns: set[str]) -> int:
-    """Score a candidate by how well its mapped columns fit the source: +1 per
-    referenced column present, -2 per referenced column absent. Higher = better fit.
+    """Score a candidate by how well its declared columns fit the source: +1 per
+    column present, -2 per column absent. Higher = better fit. Uses the preset's
+    declared ``expected_columns`` inventory when present (the strongest signature),
+    else the columns the mapping references.
     Importing here avoids a module cycle (reporting imports assemble imports spec)."""
     from model_atlas.reporting import _column_refs
     from model_atlas.transforms.assemble import make_resolver
 
+    signature = list(preset.expected_columns) or _column_refs(preset)
     resolve = make_resolver(sorted(columns))
     present = absent = 0
-    for ref in _column_refs(preset):
+    for ref in signature:
         if resolve(ref) is not None:
             present += 1
         else:

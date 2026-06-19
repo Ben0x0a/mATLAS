@@ -12,6 +12,7 @@ Reference forms — the value of a mapped field is ONE explicit call:
     header("Glob *")          the matched column's header text (was v2 `from_name`)
     filename(name|stem|path)  part of the source file identity (was v2 `from_file`)
     param(linked_entity)      a run-level parameter (entity | linked_entity)
+    preset(in_archive)        a key from the CURRENT preset's own definition (match/meta)
     const(VALUE)              a literal (number / bool / string)
 
 Pipe form — the procedural escape hatch, left-to-right, '|'-separated calls:
@@ -26,9 +27,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-REF_KINDS = ("column", "header", "filename", "const", "param")
+REF_KINDS = ("column", "header", "filename", "const", "param", "preset")
 FILENAME_TOKENS = ("name", "stem", "path")
 PARAM_TOKENS = ("entity", "linked_entity")
+# Keys a preset(...) ref may read from the current preset (match block + meta).
+PRESET_TOKENS = (
+    "in_archive", "as_file", "table", "sheet", "sql",
+    "id", "name", "tier", "os", "tool", "version", "os_version",
+)
 
 _CALL_RE = re.compile(r"^\s*([a-z_]+)\s*\((.*)\)\s*$", re.DOTALL)
 _BARE_CALL_RE = re.compile(r"^\s*([a-z_]+)\s*$")
@@ -131,6 +137,8 @@ def parse_ref(text: Any) -> Ref:
         raise ValueError(f"filename(...) takes one of {FILENAME_TOKENS}, got {arg!r}")
     if kind == "param" and arg not in PARAM_TOKENS:
         raise ValueError(f"param(...) takes one of {PARAM_TOKENS}, got {arg!r}")
+    if kind == "preset" and arg not in PRESET_TOKENS:
+        raise ValueError(f"preset(...) takes one of {PRESET_TOKENS}, got {arg!r}")
     if kind in ("column", "header") and not arg:
         raise ValueError(f"{kind}(...) needs a column name or glob")
     return Ref(kind=kind, arg=arg)

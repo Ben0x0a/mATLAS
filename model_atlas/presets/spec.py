@@ -21,7 +21,8 @@ v3 layout (readable, examiner-first)::
       in_archive: /private/.../Cache.sqlite
       as_file: Cache.sqlite
       table: ZRTCLLOCATIONMO
-    row_uid: column(Z_PK)                  # optional; omit to auto-generate a UID
+    record_uid: column(ArtifactID)         # optional; omit to auto-generate a deterministic UID
+    raw_source_path: preset(in_archive)    # where the trace came from (mapped in `common:`)
     lookup_tables: {recovery: {Parsing: intact}}
     patterns: {coords: "(?P<lat>...) - (?P<lon>...)"}
     common:
@@ -51,14 +52,18 @@ from model_atlas.model.families import (
 )
 from model_atlas.presets.expr import PipeCall, Ref, parse_pipe, parse_ref
 
-# Columns the engine owns; presets never assign them directly. The temporal bounds
-# come from a `time:` block, the lat/lon source fields are auto-captured, source_row_id
-# from `row_uid` (or generated), and the derived columns from untangle.
+# Columns the engine owns; presets never assign them directly. The temporal bounds come
+# from a `time:` block, the lat/lon source fields are auto-captured, ``input_file`` /
+# ``preset_id`` / ``preset_name`` come from the run + matched preset, ``record_uid`` from the
+# top-level `record_uid:` key (or is generated), and the derived columns from untangle.
+# ``raw_source_path`` and ``input_record_id`` are intentionally NOT engine-owned: a preset maps
+# them (e.g. AXIOM Source / Location), and the engine only fills a default when it does not.
 _ENGINE_OWNED_FIELDS: frozenset[str] = frozenset({
-    "time_lower_raw", "time_lower_source_field", "time_lower_unix_ns",
-    "time_upper_raw", "time_upper_source_field", "time_upper_unix_ns",
+    "time_lower_raw", "time_lower_source_field", "time_lower_unix_us",
+    "time_upper_raw", "time_upper_source_field", "time_upper_unix_us",
     "latitude_source_field", "longitude_source_field",
-    "source_row_id", "record_type", "record_rank",
+    "input_file", "record_uid", "preset_id", "preset_name",
+    "record_type", "record_rank",
 })
 ASSIGNABLE_FIELDS: frozenset[str] = frozenset(OUTPUT_COLUMNS) - _ENGINE_OWNED_FIELDS
 
@@ -186,11 +191,14 @@ class PresetSpec:
     meta: PresetMeta
     match: Match
     path: Path
-    row_uid: FieldSpec | None = None
+    record_uid: FieldSpec | None = None
     common: tuple[FieldSpec, ...] = ()
     assertions: tuple[AssertionTemplate, ...] = ()
     lookup_tables: dict[str, dict[Any, Any]] = field(default_factory=dict)
     patterns: dict[str, str] = field(default_factory=dict)
+    # The full source-column inventory the examiner declares before mapping. Drives the
+    # drift/frontier report and the AXIOM differential; the mapping maps a subset of it.
+    expected_columns: tuple[str, ...] = ()
 
     # --- compatibility accessors so adapters / matcher / reporting / pipeline
     # keep reading familiar attributes without each knowing the v3 layout. ---
@@ -205,14 +213,6 @@ class PresetSpec:
     @property
     def parser(self) -> ParserInfo:
         return ParserInfo(name=self.meta.id, version=self.meta.version)
-
-    @property
-    def source_row_id(self) -> FieldSpec | None:
-        return self.row_uid
-
-    @property
-    def expected_columns(self) -> tuple[str, ...]:
-        return ()  # v3 has no separate inventory; the mapping IS the signature
 
     @property
     def selectors(self) -> tuple[dict[str, Any], ...]:
@@ -421,10 +421,14 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
     if not isinstance(lookup_tables, dict) or not all(isinstance(v, dict) for v in lookup_tables.values()):
         raise ValueError(f"{path}: 'lookup_tables' must be a mapping of name -> table")
 
-    row_uid_raw = raw.get("row_uid")
-    row_uid = (
-        _parse_field("source_row_id", row_uid_raw, path, patterns, assignable=False)
-        if row_uid_raw is not None else None
+    expected = raw.get("expected_columns") or []
+    if not isinstance(expected, list) or not all(isinstance(c, str) for c in expected):
+        raise ValueError(f"{path}: 'expected_columns' must be a list of column-name strings")
+
+    record_uid_raw = raw.get("record_uid")
+    record_uid = (
+        _parse_field("record_uid", record_uid_raw, path, patterns, assignable=False)
+        if record_uid_raw is not None else None
     )
 
     common_raw = raw.get("common") or {}
@@ -439,7 +443,8 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
 
     return PresetSpec(
         meta=meta, match=match, path=path,
-        row_uid=row_uid, common=common, assertions=assertions,
+        record_uid=record_uid, common=common, assertions=assertions,
         lookup_tables={str(k): dict(v) for k, v in lookup_tables.items()},
         patterns=patterns,
+        expected_columns=tuple(expected),
     )

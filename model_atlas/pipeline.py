@@ -113,7 +113,7 @@ def process(
         else:
             match = match_preset(element, presets, peek_columns=peek_columns)
             if match is None:
-                log.info("No preset matched %s", element.source_file)
+                log.debug("No preset matched %s", element.source_file)
                 unmatched.append(element.source_file)
                 continue
             preset, _selector = match
@@ -126,9 +126,9 @@ def process(
             element.logical_name if element.path.suffix.casefold() == ".zip" else element.path.name
         )
         env = BuildEnv(
-            acquisition_path=None,
+            input_file=element.path.name,
+            source_fingerprint=extracted.source_fingerprint,
             source_file_path=extracted.source_original_path,
-            input_file=extracted.source_file,
             source_tier=preset.source_tier,
             entity=entity,
             linked_entity=linked_entity,
@@ -139,7 +139,9 @@ def process(
         frames_by_preset.setdefault(preset.name, []).append(frame)
         sources_by_preset.setdefault(preset.name, []).append({
             "source_file": extracted.source_file,
-            "source_file_path": extracted.source_original_path,
+            "raw_source_path": extracted.source_original_path,
+            "input_file": element.path.name,
+            "preset_id": preset.meta.id,
             "matched_preset": preset.name,
             "parser": f"{preset.parser.name} {preset.parser.version}",
             "source_tier": preset.source_tier,
@@ -148,6 +150,9 @@ def process(
             "frontier": reporting.frontier_report(preset, list(extracted.source_columns)),
         })
         warnings.extend(frame_warnings)
+
+    if unmatched:
+        log.info("%d element(s) matched no preset (set log level to DEBUG to list them)", len(unmatched))
 
     if merge:
         return _write_merged(
