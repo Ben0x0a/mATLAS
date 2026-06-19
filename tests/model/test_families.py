@@ -27,8 +27,8 @@ from model_atlas.model.families import (
 
 
 def test_output_columns_count_and_uniqueness() -> None:
-    assert len(OUTPUT_COLUMNS) == 41
-    assert len(set(OUTPUT_COLUMNS)) == 41  # no duplicate column names
+    assert len(OUTPUT_COLUMNS) == 44
+    assert len(set(OUTPUT_COLUMNS)) == 44  # no duplicate column names
 
 
 def test_entity_time_link_genesis_for_every_member() -> None:
@@ -80,23 +80,23 @@ def test_enums_serialise_to_their_string_value() -> None:
 def test_temporal_bounds_expand_to_prefixed_columns() -> None:
     assertion = SpatioTemporalAssertion(
         temporal=Temporal(
-            lower=TemporalBound(raw="694223890", source_field="FIRST_SEEN", unix_ns=1672531200000000000),
-            upper=TemporalBound(raw="694223990", source_field="LAST_SEEN", unix_ns=1672531300000000000),
+            lower=TemporalBound(raw="694223890", source_field="FIRST_SEEN", unix_us=1672531200000000),
+            upper=TemporalBound(raw="694223990", source_field="LAST_SEEN", unix_us=1672531300000000),
             time_zone="UTC+00:00",
-            accuracy_ns=500,
+            accuracy_us=500,
             temporal_source="internal_clock",
         ),
     )
     row = assertion.to_flat_row()
     assert row["time_lower_raw"] == "694223890"
     assert row["time_lower_source_field"] == "FIRST_SEEN"
-    assert row["time_lower_unix_ns"] == 1672531200000000000
+    assert row["time_lower_unix_us"] == 1672531200000000
     assert row["time_upper_raw"] == "694223990"
     assert row["time_upper_source_field"] == "LAST_SEEN"
-    assert row["time_upper_unix_ns"] == 1672531300000000000
+    assert row["time_upper_unix_us"] == 1672531300000000
     # time_zone is shared by both bounds (a single column).
     assert row["time_zone"] == "UTC+00:00"
-    assert row["time_accuracy_ns"] == 500
+    assert row["time_accuracy_us"] == 500
     assert row["temporal_source"] == "internal_clock"
 
 

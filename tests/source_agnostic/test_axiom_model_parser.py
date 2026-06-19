@@ -66,20 +66,18 @@ def test_axiom_model_parser_writes_valid_template(tmp_path: Path) -> None:
     text = written[0].read_text(encoding="utf-8")
     assert text.startswith("# AXIOM model reference")
     assert "# - Origin Latitude: Latitude." in text
-    assert "axiom_model:" not in text
-    assert data["selectors"] == [
-        {"source_type": "csv", "file_name": "Example Sheet.csv"},
-        {"source_type": "excel", "sheet_name": "Example Sheet"},
-    ]
-    location = data["location_mappings"][0]
-    assert location["timestamp"] == "col:Created Date/Time - UTC"
-    assert location["Latitude"] == "col:Origin Latitude"
-    assert location["Longitude"] == "col:Origin Longitude"
-    assert location["Temporal relation"] == "value:instant"
-    assert location["raw_timestamp"] is None
-    assert location["temporal_source"] is None
-    assert location["raw_position"] is None
-    assert location["position_source"] is None
+    # v3 header
+    assert data["preset"]["id"] == "ios.axiom.example_sheet"
+    assert data["preset"]["name"] == "Example Sheet"
+    assert data["preset"]["os"] == "iOS" and data["preset"]["tool"] == "AXIOM"
+    assert data["match"] == {"type": "csv", "as_file": "Example Sheet.csv", "encoding": "utf-8-sig"}
+    # The full attribute inventory is declared up front, before the mapping.
+    assert data["expected_columns"] == ["Created Date/Time - UTC", "Origin Latitude", "Origin Longitude"]
+    assertion = data["assertions"][0]
+    assert assertion["position"]["latitude_wgs84"] == 'column("Origin Latitude")'
+    assert assertion["position"]["longitude_wgs84"] == 'column("Origin Longitude")'
+    assert assertion["time"]["instant"] == 'column("Created Date/Time - UTC")'
+    assert assertion["links"] == {"entity_position": "at", "entity_time": "observed_at", "spatial_temporal": "instant"}
 
 
 def test_axiom_model_parser_diffs_expected_columns(tmp_path: Path) -> None:
@@ -99,35 +97,25 @@ def test_axiom_model_parser_diffs_expected_columns(tmp_path: Path) -> None:
     )
     presets = tmp_path / "presets"
     presets.mkdir()
-    existing = yaml.safe_load(
-        (
-            "# comment\n"
-            + """
-name: AXIOM iOS - Example Sheet
-parser:
-  name: axiom_ios_example_sheet
-  version: 1.0
-selectors: []
-expected_columns:
-  - Timestamp
-  - Latitude
-model_mapping: []
+    existing = """
+preset: {id: ios.axiom.example_sheet, name: Example Sheet, os: iOS, tool: AXIOM, version: 1.0, tier: secondary}
+match: {type: csv, as_file: "Example Sheet.csv"}
+expected_columns: [Timestamp, Latitude]
+assertions:
+  - position: {latitude_wgs84: 'column("Latitude")'}
+    time: {instant: 'column("Timestamp")', format: TODO}
+    links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
-        )
-    )
-    (presets / "example_sheet.yaml").write_text(
-        yaml.safe_dump(existing, sort_keys=False),
-        encoding="utf-8",
-    )
+    (presets / "example_sheet.yaml").write_text(existing, encoding="utf-8")
 
     diff = diff_with_presets(html, "iOS", presets)
 
     assert diff.missing == ()
     assert len(diff.expected_columns_modified) == 1
-    parser_name, _, existing_columns, generated_columns = diff.expected_columns_modified[0]
-    assert parser_name == "axiom_ios_example_sheet"
-    assert existing_columns == ("Timestamp", "Latitude")
-    assert generated_columns == ("Timestamp", "Latitude", "Longitude")
+    preset_id, _, existing_columns, generated_columns = diff.expected_columns_modified[0]
+    assert preset_id == "ios.axiom.example_sheet"
+    assert existing_columns == ("Timestamp", "Latitude")               # declared inventory
+    assert generated_columns == ("Timestamp", "Latitude", "Longitude")  # generator adds Longitude
 
 
 def test_default_output_dir_lives_under_utils_results(tmp_path: Path) -> None:

@@ -1,0 +1,49 @@
+# Golden fixture: a SECONDARY (tool export) preset that maps record_uid to the tool's
+# own id column, so record_uid is the tool value verbatim.
+preset:
+  id: golden.secondary.cached
+  name: Golden Secondary Cached
+  os: iOS
+  tool: AXIOM
+  os_version: ">=15"
+  version: 1.0
+  tier: secondary
+
+match:
+  type: csv
+  as_file: cached.csv
+
+expected_columns:
+  - Latitude
+  - Longitude
+  - "Accuracy (m)"
+  - "Speed (m/s)"
+  - "Timestamp Date/Time - UTC+00:00 (dd.MM.yyyy)"
+  - Source
+  - Location
+  - "Item ID"
+
+record_uid: 'column("Item ID")'
+
+common:
+  entity:          const(device)
+  entity_type:     const(device)
+  source_label:    const(ZRTCLLOCATIONMO)
+  position_source: const(GNSS)
+  input_record_id: column(Location)
+  raw_source_path: column(Source)
+
+assertions:
+  - position:
+      latitude_wgs84:        column(Latitude)
+      longitude_wgs84:       column(Longitude)
+      horizontal_accuracy_m: 'column("Accuracy (m)")'
+      horizontal_speed_kmh:  { from: 'column("Speed (m/s)")', unit: m/s }
+    time:
+      instant: 'column("Timestamp Date/Time - UTC+00:00 (dd.MM.yyyy)")'
+      format:  "%d.%m.%Y %H:%M:%S.%f"
+      zone:    const(UTC+00:00)
+    links:
+      entity_position:  at
+      entity_time:      observed_at
+      spatial_temporal: instant

@@ -19,23 +19,17 @@ from model_atlas.pipeline import process
 # A CSV preset whose selector intentionally points at a DIFFERENT file name, so it
 # only runs under force-preset mode.
 _PRESET_OTHER_NAME = """
-name: T
-parser: {name: t, version: "1.0"}
-selectors: [{source_type: csv, file_name: "does-not-match.csv"}]
-source_row_id: {from: Item}
+preset: {id: t.t, name: T, version: 1.0, tier: secondary}
+match: {type: csv, as_file: "does-not-match.csv"}
+record_uid: column(Item)
 common:
-  record_locator: {from_file: name}
-  tool_label: {from_file: stem}
-  source_file_path: {from_file: path}
+  input_record_id: filename(name)
+  source_label: filename(stem)
+  raw_source_path: filename(path)
 assertions:
-  - latitude_wgs84: {from: Lat, pipe: [{cast: float}]}
-    longitude_wgs84: {from: Lon, pipe: [{cast: float}]}
-    entity_position_link: at
-    temporal:
-      - instant: TS
-        pipe: [{parse_datetime: "%d.%m.%Y %H:%M:%S.%f"}]
-        entity_time_link: observed_at
-        spatial_temporal_link: instant
+  - position: {latitude_wgs84: column(Lat), longitude_wgs84: column(Lon)}
+    time: {instant: column(TS), format: "%d.%m.%Y %H:%M:%S.%f"}
+    links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 
 _CSV = "Lat,Lon,TS,Item\n1.5,2.5,06.12.2025 13:00:00.000,A\n"
@@ -77,9 +71,9 @@ def test_from_file_tokens_populate_fields(tmp_path: Path) -> None:
     process(source, preset, output, linked_entity="subject")
     row = _read_rows(output)[0]
 
-    assert row["record_locator"] == "data.csv"   # from_file: name
-    assert row["tool_label"] == "data"            # from_file: stem
-    assert row["source_file_path"].endswith("data.csv")  # from_file: path
+    assert row["input_record_id"] == "data.csv"      # from_file: name
+    assert row["source_label"] == "data"          # from_file: stem
+    assert row["raw_source_path"].endswith("data.csv")  # from_file: path
 
 
 def test_entity_and_linked_entity_defaults_fill_when_preset_omits(tmp_path: Path) -> None:
@@ -96,17 +90,31 @@ def test_entity_and_linked_entity_defaults_fill_when_preset_omits(tmp_path: Path
 
 
 _PRESET_WITH_ENTITY = _PRESET_OTHER_NAME.replace(
-    "common:\n", "common:\n  entity: {value: preset-entity}\n"
+    "common:\n", "common:\n  entity: const(preset-entity)\n"
 )
 
 
-def test_preset_entity_wins_over_run_level_default(tmp_path: Path) -> None:
+def test_run_level_entity_overrides_preset(tmp_path: Path) -> None:
     source = _write_csv(tmp_path)
     preset = tmp_path / "p.yaml"
     preset.write_text(_PRESET_WITH_ENTITY, encoding="utf-8")
     output = tmp_path / "out.csv"
 
+    # The arg is authoritative; the preset's entity is only the default.
     process(source, preset, output, entity="run-level", linked_entity="Daphne")
+    row = _read_rows(output)[0]
+
+    assert row["entity"] == "run-level"
+
+
+def test_preset_entity_used_when_no_arg(tmp_path: Path) -> None:
+    source = _write_csv(tmp_path)
+    preset = tmp_path / "p.yaml"
+    preset.write_text(_PRESET_WITH_ENTITY, encoding="utf-8")
+    output = tmp_path / "out.csv"
+
+    # No --entity: the preset default stands.
+    process(source, preset, output, linked_entity="Daphne")
     row = _read_rows(output)[0]
 
     assert row["entity"] == "preset-entity"
@@ -167,23 +175,25 @@ def test_direct_file_matches_on_filename() -> None:
 
 
 _SQLITE_PRESET = """
-name: S
-parser: {name: s, version: "1.0"}
-selectors: [{source_type: sqlite, file_name: "loc.sqlite"}]
-extract: {sqlite: {table: LOCATIONS}}
-source_row_id: {from: id}
-common:
-  entity: {value: device}
+preset: {id: t.s, name: S, version: 1.0, tier: secondary}
+match: {type: sqlite, as_file: loc.sqlite, table: LOCATIONS}
+record_uid: column(id)
+common: {entity: const(device)}
 assertions:
-  - latitude_wgs84: {from: lat, pipe: [{cast: float}]}
-    longitude_wgs84: {from: lon, pipe: [{cast: float}]}
-    entity_position_link: at
-    temporal:
-      - instant: ts
-        pipe: [{cast: float}, {arithmetic: "int(value * 1000000000)"}]
-        entity_time_link: observed_at
-        spatial_temporal_link: instant
+  - position: {latitude_wgs84: column(lat), longitude_wgs84: column(lon)}
+    time: {instant: column(ts), epoch: unix_s}
+    links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
+
+
+def test_process_requires_linked_entity_argument(tmp_path: Path) -> None:
+    """The package API declares linked_entity as a required keyword: omitting it is a
+    TypeError, not a silent None."""
+    source = _write_csv(tmp_path)
+    preset = tmp_path / "p.yaml"
+    preset.write_text(_PRESET_OTHER_NAME, encoding="utf-8")
+    with pytest.raises(TypeError):
+        process(source, preset, tmp_path / "out.csv")  # type: ignore[call-arg]
 
 
 def test_cli_requires_linked_entity() -> None:
@@ -196,6 +206,34 @@ def test_cli_requires_linked_entity() -> None:
     args = parser.parse_args(["process", "--input", "x", "--output", "y", "--linked-entity", "s"])
     assert args.linked_entity == "s"
     assert args.entity is None
+
+
+def test_discovery_never_creates_sidecars_next_to_original(tmp_path: Path) -> None:
+    """A WAL-mode database must not gain -wal/-shm/-journal siblings when mATLAS reads
+    it: the original evidence is opened immutably, never mutated. Regression guard for
+    the discovery probe (mode=ro alone leaks sidecars; immutable=1 does not)."""
+    from model_atlas.sources.folder import discover_elements
+
+    db = tmp_path / "loc.sqlite"
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")  # persists in the file header
+        conn.execute("CREATE TABLE LOCATIONS (id INTEGER, lat REAL, lon REAL, ts REAL)")
+        conn.execute("INSERT INTO LOCATIONS VALUES (1, 1.5, 2.5, 1700000000.0)")
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        conn.close()
+    # Clear any sidecars our own setup connection may have left.
+    for suffix in ("-wal", "-shm", "-journal"):
+        db.with_name(db.name + suffix).unlink(missing_ok=True)
+
+    elements = discover_elements(db)
+
+    assert len(elements) == 1
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = db.with_name(db.name + suffix)
+        assert not sidecar.exists(), f"discovery created {sidecar.name} next to the original"
 
 
 def test_sqlite_roundtrip_releases_file(tmp_path: Path) -> None:
@@ -218,4 +256,4 @@ def test_sqlite_roundtrip_releases_file(tmp_path: Path) -> None:
     assert result.row_counts["rows"] == 1
     row = _read_rows(output)[0]
     assert row["latitude_wgs84"] == "1.5"
-    assert row["time_lower_unix_ns"] == "1700000000000000000"
+    assert row["time_lower_unix_us"] == "1700000000000000"

@@ -14,13 +14,13 @@ from model_atlas.transforms.rank import untangle
 def _frame() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            # two records of the same second (1.0s and 1.4s in ns), different accuracy
-            {"time_lower_unix_ns": 1_000_000_000, "time_upper_unix_ns": 1_000_000_000, "entity": "device",
+            # two records of the same second (1.0s and 1.4s in us), different accuracy
+            {"time_lower_unix_us": 1_000_000, "time_upper_unix_us": 1_000_000, "entity": "device",
              "time_lower_source_field": "T", "time_upper_source_field": "T", "horizontal_accuracy_m": 50.0},
-            {"time_lower_unix_ns": 1_400_000_000, "time_upper_unix_ns": 1_400_000_000, "entity": "device",
+            {"time_lower_unix_us": 1_400_000, "time_upper_unix_us": 1_400_000, "entity": "device",
              "time_lower_source_field": "T", "time_upper_source_field": "T", "horizontal_accuracy_m": 10.0},
             # a lone record in a different second (5.0s)
-            {"time_lower_unix_ns": 5_000_000_000, "time_upper_unix_ns": 5_000_000_000, "entity": "device",
+            {"time_lower_unix_us": 5_000_000, "time_upper_unix_us": 5_000_000, "entity": "device",
              "time_lower_source_field": "T", "time_upper_source_field": "T", "horizontal_accuracy_m": 5.0},
         ]
     )
@@ -37,5 +37,5 @@ def test_same_second_records_are_ranked_by_accuracy() -> None:
 
 def test_finer_resolution_separates_the_subsecond_pair() -> None:
     # At 0.1s resolution, 1.0s and 1.4s fall in different buckets -> no group.
-    out = untangle(_frame(), resolution_ns=100_000_000)
+    out = untangle(_frame(), resolution_us=100_000)
     assert out["record_rank"].notna().sum() == 0
