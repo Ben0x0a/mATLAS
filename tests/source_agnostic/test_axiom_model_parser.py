@@ -70,14 +70,47 @@ def test_axiom_model_parser_writes_valid_template(tmp_path: Path) -> None:
     assert data["preset"]["id"] == "ios.axiom.example_sheet"
     assert data["preset"]["name"] == "Example Sheet"
     assert data["preset"]["os"] == "iOS" and data["preset"]["tool"] == "AXIOM"
-    assert data["input_selector"] == {"format": "csv", "name": "Example Sheet.csv", "encoding": "utf-8-sig"}
     # The full attribute inventory is declared up front, before the mapping.
     assert data["expected_columns"] == ["Created Date/Time - UTC", "Origin Latitude", "Origin Longitude"]
+    # The generator GUESSES NO COLUMN: the selector filename and every column mapping are
+    # TODO placeholders the analyst fills/prunes.
+    assert data["input_selector"] == {"format": "csv", "name": "TODO_export_filename.csv", "encoding": "utf-8-sig"}
     assertion = data["assertions"][0]
-    assert assertion["position"]["latitude_wgs84"] == 'column("Origin Latitude")'
-    assert assertion["position"]["longitude_wgs84"] == 'column("Origin Longitude")'
-    assert assertion["time"]["instant"] == 'column("Created Date/Time - UTC")'
+    assert assertion["position"]["latitude_wgs84"] == 'column("TODO")'
+    assert assertion["position"]["longitude_wgs84"] == 'column("TODO")'
+    assert assertion["time"]["instant"] == 'column("TODO")'
+    assert assertion["time"]["format"] == "TODO_STRPTIME"
+    # Rich template: common + the enum links carry reviewed defaults (a TODO is not a valid
+    # enum value); source_record_uid stays commented out (auto-generated).
+    assert data["common"]["raw_source_path"] == 'column("TODO_Source")'
     assert assertion["links"] == {"entity_position": "at", "entity_time": "observed_at", "spatial_temporal": "instant"}
+    assert "source_record_uid" not in data
+    # The trip/interval alternative is offered as a commented block to swap in.
+    assert "(B) a TRIP / dwell over an INTERVAL" in text
+    assert "# optional position detail" in text
+
+
+def test_generated_template_loads_but_lints_with_guidance(tmp_path: Path) -> None:
+    """The skeleton is structurally loadable, but the linter surfaces exactly the
+    decisions the analyst still owes — never a silent gap."""
+    from model_atlas.presets.lint import lint_file
+
+    html = tmp_path / "Trip.htm"
+    html.write_text(
+        "<html><head><title>Trip</title></head><body><table>"
+        "<tr><th>Attribute</th><th>Description</th></tr>"
+        "<tr><td>Latitude</td><td>x</td></tr><tr><td>Longitude</td><td>y</td></tr>"
+        "<tr><td>Timestamp</td><td>t</td></tr></table></body></html>",
+        encoding="utf-8",
+    )
+    written = write_templates(html, tmp_path / "out", "iOS")
+    codes = {f.code for f in lint_file(written[0])}
+
+    assert "parse-error" not in codes                      # it still loads
+    assert "unfilled-placeholder" in codes                 # TODO filename/columns/format/entity
+    assert "naive-timezone" in codes                       # format set, no zone -> analyst confirms
+    assert "no-os-version" in codes                        # os_version left commented
+    assert "mapped-not-declared" not in codes              # TODO placeholders are not phantom columns
 
 
 def test_axiom_model_parser_diffs_expected_columns(tmp_path: Path) -> None:

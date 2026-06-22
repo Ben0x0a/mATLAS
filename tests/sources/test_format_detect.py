@@ -46,3 +46,25 @@ def test_unknown_returns_none() -> None:
 
 def test_utf8_bom_text_is_xml() -> None:
     assert detect_format(b"\xef\xbb\xbf<?xml ?>", None, ".xml") == "xml"
+
+
+def test_tsv_by_suffix() -> None:
+    assert detect_format(b"a\tb\tc", None, ".tsv") == "csv"
+
+
+def test_empty_head_is_unknown() -> None:
+    assert detect_format(b"", None, "") is None
+
+
+def test_truncated_sqlite_magic_is_not_sqlite() -> None:
+    # 15 bytes — missing the trailing NUL of the 16-byte signature.
+    assert detect_format(b"SQLite format 3", None, "") is None
+
+
+def test_zip_without_workbook_part_is_archive() -> None:
+    assert detect_format(b"PK\x03\x04rest", lambda: ["a/b.txt", "c.bin"], ".zip") == "archive"
+
+
+def test_suffix_does_not_override_magic() -> None:
+    # A real SQLite file mislabelled .csv is still sqlite (magic wins).
+    assert detect_format(b"SQLite format 3\x00", None, ".csv") == "sqlite"
