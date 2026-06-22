@@ -28,6 +28,11 @@ log = logging.getLogger(__name__)
 
 _SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _HEAD_BYTES = 16
+# A nested archive must be buffered in memory to be listed; cap that buffer so a
+# zip-bomb-as-nested-archive cannot exhaust memory. On-disk archives are read lazily by
+# path and are not subject to this. Per-entry decompression is bounded separately in
+# ZipContainer (ZipBombError).
+_NESTED_ARCHIVE_MAX_BYTES = 512 * 1024 * 1024
 
 
 def _is_sidecar(name: str) -> bool:
@@ -58,22 +63,32 @@ def _walk(
         if depth < max_container_depth:
             head = _peek_head(container, file)
             if head[:4] == b"PK\x03\x04" and detect_format(head, lambda: _peek_zip_names(container, file), file.logical_path.suffix) == "archive":
-                # TODO: zip-bomb max-depth guard — bound total decompressed bytes here.
                 try:
                     # A zip on the filesystem keeps its on-disk path (lazy reads, and the
                     # path backs input_file_path); a zip nested in another zip has no path,
-                    # so fall back to its decompressed bytes.
+                    # so fall back to its decompressed bytes — bounded to guard against a
+                    # zip-bomb-as-nested-archive exhausting memory.
                     disk = container.ondisk_path(file)
                     if disk is not None:
                         nested = ZipContainer(path=disk, label=file.name)
                     else:
                         with container.open(file) as fh:
-                            data = fh.read()
+                            data = fh.read(_NESTED_ARCHIVE_MAX_BYTES + 1)
+                        if len(data) > _NESTED_ARCHIVE_MAX_BYTES:
+                            log.warning(
+                                f"nested archive {file.logical_path} exceeds "
+                                f"{_NESTED_ARCHIVE_MAX_BYTES} bytes; treating as an opaque file"
+                            )
+                            yield file
+                            continue
                         nested = ZipContainer(data=data, label=file.name)
                     yield from _walk(nested, prefix + (container,), depth + 1, max_container_depth)
                     continue
                 except (OSError, zipfile.BadZipFile):
-                    log.debug(f"Failed to open nested archive {file.logical_path}", exc_info=True)
+                    # A file that looked like an archive but cannot be opened (truncated /
+                    # corrupt acquisition). Surface it (not debug) and keep it as an opaque
+                    # file so the run continues and the corruption is visible, not silent.
+                    log.warning(f"could not open archive {file.logical_path}; treating as an opaque file")
         yield file
 
 
@@ -103,7 +118,12 @@ def discover(input_path: Path, *, max_container_depth: int = 1) -> tuple[SourceF
     fmt = detect_format(head, lambda: _zip_namelist(input_path), input_path.suffix)
     if fmt == "archive":
         top = ZipContainer(path=input_path)
-        files = tuple(_walk(top, (), 1, max_container_depth))
+        try:
+            files = tuple(_walk(top, (), 1, max_container_depth))
+        except zipfile.BadZipFile as exc:
+            # The input itself has archive magic but is not a readable zip (truncated /
+            # corrupt). Fail with a clear, actionable error rather than a raw traceback.
+            raise ValueError(f"input archive is not a readable zip: {input_path}") from exc
         log.info(f"Discovered {len(files)} file(s) from archive {input_path}")
         return files
 

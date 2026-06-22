@@ -32,6 +32,11 @@ _CHUNK = 1024 * 1024
 DEFAULT_SIBLING_SUFFIXES = ("-wal", "-shm", "-journal")
 
 
+class ZipBombError(Exception):
+    """A zip entry decompresses far past a safe size/ratio — refused to avoid a DoS
+    (disk/memory exhaustion) from a malicious or malformed archive."""
+
+
 @dataclass(frozen=True)
 class SourceFile:
     """One leaf file inside the innermost of its container chain."""
@@ -207,7 +212,17 @@ class FilesystemContainer:
 
 class ZipContainer:
     """A zip archive presented as a Container. Built from a path (the input archive) or
-    from raw bytes (a nested archive). The archive is never mutated during a run."""
+    from raw bytes (a nested archive). The archive is never mutated during a run.
+
+    Decompression is bounded against zip bombs: an entry that expands beyond
+    ``max_decompression_ratio`` times its compressed size, once past
+    ``min_ratio_check_bytes``, is refused with a ``ZipBombError`` rather than filling the
+    disk. The floor keeps the check off small entries (whose ratio is meaningless); large
+    but modestly-compressed evidence (e.g. a multi-GB SQLite DB) passes. Both are class
+    attributes so they can be tuned per deployment."""
+
+    max_decompression_ratio: int = 200
+    min_ratio_check_bytes: int = 64 * 1024 * 1024
 
     def __init__(self, *, path: Path | None = None, data: bytes | None = None, label: str | None = None) -> None:
         if path is None and data is None:
@@ -250,8 +265,20 @@ class ZipContainer:
 
     def _extract_entry(self, zf: zipfile.ZipFile, info: zipfile.ZipInfo, dest: Path) -> str:
         h = hashlib.sha256()
+        written = 0
+        floor = self.min_ratio_check_bytes
+        ratio = self.max_decompression_ratio
         with zf.open(info) as src, open(dest, "wb") as out:
             for chunk in iter(lambda: src.read(_CHUNK), b""):
+                written += len(chunk)
+                # Trip only once an entry is large in absolute terms AND its expansion
+                # ratio is implausible (or the compressed size is unknown/zero).
+                if written > floor and (info.compress_size == 0 or written > info.compress_size * ratio):
+                    raise ZipBombError(
+                        f"entry {info.filename!r} decompresses past the safe limit "
+                        f"({written} bytes from {info.compress_size} compressed, "
+                        f"ratio cap {ratio}); refusing to extract"
+                    )
                 h.update(chunk)
                 out.write(chunk)
         return h.hexdigest()
