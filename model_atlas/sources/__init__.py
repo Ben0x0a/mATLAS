@@ -1,19 +1,33 @@
-"""Source discovery and pluggable extraction adapters.
+"""Source discovery, the Container model, format readers, and extraction.
 
-Importing this package registers the built-in adapters (csv, excel, sqlite) so the
-pipeline can dispatch extraction through the registry rather than a hardcoded
-if/elif.
+The Container/SourceFile layer (``discover``), the per-format readers, and the
+``SingleSourceExtractor`` together replace the old discovery + adapter registry. None of
+these import ``presets.spec`` at module load, so ``presets.spec`` can safely import
+``sources.pathmatch`` without a cycle.
 """
 from __future__ import annotations
 
-from model_atlas.sources.folder import discover_elements, peek_columns
-from model_atlas.sources.registry import get_adapter, registered_adapters
-
-# Imported for their side effect: each module registers its adapter on import.
-from model_atlas.sources import (  # noqa: E402,F401
-    csv_source,
-    excel_source,
-    sqlite_source,
+from model_atlas.sources.base import ExtractedData
+from model_atlas.sources.container import (
+    Container,
+    FilesystemContainer,
+    SourceFile,
+    ZipContainer,
 )
+from model_atlas.sources.discover import discover
+from model_atlas.sources.extractor import ScriptExtractor, SingleSourceExtractor
+from model_atlas.sources.readers import FormatReader, ReadResult, get_reader
 
-__all__ = ["discover_elements", "peek_columns", "get_adapter", "registered_adapters"]
+__all__ = [
+    "discover",
+    "ExtractedData",
+    "Container",
+    "FilesystemContainer",
+    "ZipContainer",
+    "SourceFile",
+    "SingleSourceExtractor",
+    "ScriptExtractor",
+    "FormatReader",
+    "ReadResult",
+    "get_reader",
+]

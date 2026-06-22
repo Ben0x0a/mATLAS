@@ -87,6 +87,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     process_parser.add_argument(
+        "--root-prefix-depth",
+        type=int,
+        default=1,
+        help=(
+            "How many leading path segments a selector 'path' may skip so /private/... "
+            "matches filesystem1/private/... (the acquisition's root wrapper). Default 1."
+        ),
+    )
+    process_parser.add_argument(
         "--traceability-format",
         choices=("readable", "prov"),
         default="readable",
@@ -140,6 +149,7 @@ def _cmd_process(args: argparse.Namespace) -> int:
             entity=args.entity,
             linked_entity=args.linked_entity,
             include_source_columns=args.include_source_columns,
+            root_prefix_depth=args.root_prefix_depth,
         )
     else:
         with tempfile.TemporaryDirectory(prefix="matlas-profile-") as tmp:
@@ -153,20 +163,20 @@ def _cmd_process(args: argparse.Namespace) -> int:
                 linked_entity=args.linked_entity,
                 include_source_columns=args.include_source_columns,
             )
-    log.info("Row counts: %s", result.row_counts)
+    log.info(f"Row counts: {result.row_counts}")
     for entry in result.matched:
-        log.info("Matched: %s", entry)
-    log.info("Unmatched sources: %d", len(result.unmatched))
+        log.info(f"Matched: {entry}")
+    log.info(f"Unmatched sources: {len(result.unmatched)}")
     for warning in result.warnings[:20]:
-        log.warning("%s", warning)
-    log.info("Transform warnings: %d", len(result.warnings))
+        log.warning(f"{warning}")
+    log.info(f"Transform warnings: {len(result.warnings)}")
     if result.output_csv is not None:
-        log.info("CSV: %s", result.output_csv)
-        log.info("Traceability: %s", result.output_traceability)
-        log.info("Warnings report: %s", result.output_warnings)
+        log.info(f"CSV: {result.output_csv}")
+        log.info(f"Traceability: {result.output_traceability}")
+        log.info(f"Warnings report: {result.output_warnings}")
     elif result.output_csvs:
         for csv in result.output_csvs:
-            log.info("CSV: %s", csv)
+            log.info(f"CSV: {csv}")
     else:
         log.warning("No rows produced: no discovered source matched a preset.")
     return 0

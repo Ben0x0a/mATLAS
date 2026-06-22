@@ -34,10 +34,10 @@ def load_preset_specs(presets_path: Path) -> list[PresetSpec]:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         if _is_template(raw):
             # A template is documentation, not a live preset — never load it for matching.
-            log.debug("Skipping template/placeholder preset: %s", path)
+            log.debug(f"Skipping template/placeholder preset: {path}")
             continue
         specs.append(preset_spec_from_yaml(raw, path))
     if not specs:
         raise ValueError(f"No declarative presets found under {presets_path}")
-    log.info("Loaded %d declarative preset(s) from %s", len(specs), presets_path)
+    log.info(f"Loaded {len(specs)} declarative preset(s) from {presets_path}")
     return specs

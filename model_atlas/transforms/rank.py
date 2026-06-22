@@ -107,5 +107,5 @@ def untangle(df: pd.DataFrame, *, resolution_us: int = DEFAULT_RESOLUTION_US) ->
             "_completeness", "_order", "_lower_unit", "_upper_unit"]
     result = out.drop(columns=temp)
     ranked_rows = int(result[_RECORD_RANK].notna().sum())
-    log.info("Untangle complete: %d ranked row(s) at %d us resolution", ranked_rows, resolution_us)
+    log.info(f"Untangle complete: {ranked_rows} ranked row(s) at {resolution_us} us resolution")
     return result

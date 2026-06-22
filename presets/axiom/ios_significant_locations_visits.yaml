@@ -6,9 +6,9 @@ preset:
   version: 1.0
   tier: secondary
 
-match:
-  type: csv
-  as_file: "Significant Locations Visits.csv"
+input_selector:
+  format: csv
+  name: "Significant Locations Visits.csv"
   delimiter: ","
   encoding: "utf-8-sig"
 
@@ -34,7 +34,7 @@ expected_columns:
 patterns:
   tz: "(?P<z>UTC[+-]\\d{2}:\\d{2})"
 
-record_uid: 'column("Item ID")'
+source_record_uid: 'column("Item ID")'
 
 common:
   entity:          param(entity)

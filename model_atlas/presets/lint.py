@@ -102,8 +102,8 @@ def _plain_columns(spec: PresetSpec) -> set[str]:
         if ref.kind == "column" and not any(ch in str(ref.arg) for ch in "*?["):
             names.add(str(ref.arg))
 
-    if spec.record_uid is not None:
-        add(spec.record_uid.ref)
+    if spec.source_record_uid is not None:
+        add(spec.source_record_uid.ref)
     for field in spec.common:
         add(field.ref)
     for tmpl in spec.assertions:
@@ -155,22 +155,22 @@ def _check_raw_source_path(spec: PresetSpec, label: str) -> list[LintFinding]:
     if not any(f.model_field == "raw_source_path" for f in spec.common):
         return [LintFinding(
             WARNING, "no-raw-source-path",
-            "no raw_source_path mapped; map it explicitly (e.g. preset(in_archive) for a "
+            "no raw_source_path mapped; map it explicitly (e.g. preset(path) for a "
             "device DB, or column(Source) for a tool export) so a row records where it came from",
             label, "common")]
     return []
 
 
 def _check_record_uid_not_rowid(spec: PresetSpec, label: str) -> list[LintFinding]:
-    uid = spec.record_uid
+    uid = spec.source_record_uid
     if uid is None or uid.ref.kind != "column":
         return []
     name = str(uid.ref.arg)
     if name.casefold() in _ROWID_NAMES or name.casefold().endswith("_pk"):
         return [LintFinding(
             WARNING, "rowid-as-uid",
-            f"record_uid maps {name!r}, which looks like a row counter, not a stable UID; "
-            f"omit record_uid to generate a deterministic UID instead", label, "record_uid")]
+            f"source_record_uid maps {name!r}, which looks like a row counter, not a stable UID; "
+            f"omit source_record_uid to generate a deterministic UID instead", label, "source_record_uid")]
     return []
 
 

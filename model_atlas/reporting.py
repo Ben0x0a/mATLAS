@@ -34,8 +34,8 @@ def _column_refs(preset: PresetSpec) -> list[str]:
         if spec.from_name_pattern is not None:
             refs.append(spec.from_name_pattern)
 
-    if preset.record_uid is not None:
-        add(preset.record_uid)
+    if preset.source_record_uid is not None:
+        add(preset.source_record_uid)
     for spec in preset.common:
         add(spec)
     for template in preset.assertions:
@@ -107,7 +107,13 @@ def build_traceability_prov(
         entities[source_id] = {
             "prov:label": source.get("source_file"),
             "matlas:raw_source_path": source.get("raw_source_path"),
-            "matlas:input_file": source.get("input_file"),
+            "matlas:input_file_path": source.get("input_file_path"),
+            "matlas:input_file_name": source.get("input_file_name"),
+            "matlas:container_chain": source.get("container_chain"),
+            "matlas:format": source.get("format"),
+            "matlas:table": source.get("table"),
+            "matlas:sheet": source.get("sheet"),
+            "matlas:source_fingerprint": source.get("source_fingerprint"),
             "matlas:preset_id": source.get("preset_id"),
             "matlas:preset": source.get("matched_preset"),
             "matlas:source_tier": source.get("source_tier"),

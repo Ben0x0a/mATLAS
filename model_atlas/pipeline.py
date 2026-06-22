@@ -21,13 +21,106 @@ import pandas as pd
 from model_atlas import reporting
 from model_atlas.export import traceability_path_for, warnings_path_for, write_csv, write_json
 from model_atlas.model.families import OUTPUT_COLUMNS
-from model_atlas.presets.matcher import match_preset
+from model_atlas.presets.matcher import detect_file_format, match_file
+from model_atlas.presets.spec import InputSelector, PresetSpec
 from model_atlas.presets.spec_loader import load_preset_specs
-from model_atlas.sources import discover_elements, get_adapter, peek_columns
+from model_atlas.sources import SingleSourceExtractor, SourceFile, ZipContainer, discover
+from model_atlas.sources.container import FilesystemContainer
+from model_atlas.sources.readers import get_reader
 from model_atlas.transforms.assemble import BuildEnv, build_rows, to_records
 from model_atlas.transforms.rank import untangle
 
 log = logging.getLogger(__name__)
+
+
+def _input_file_path(file: SourceFile) -> str:
+    """Full path of the OUTERMOST on-disk artifact matlas opened: the input archive when
+    reading from one (outermost if nested), else the leaf file's own filesystem path."""
+    outermost = file.containers[0]
+    if isinstance(outermost, ZipContainer) and outermost.path is not None:
+        return str(outermost.path)
+    if isinstance(outermost, FilesystemContainer):
+        return str(outermost.root.joinpath(*file.logical_path.parts))
+    return str(file.logical_path)
+
+
+def _input_detected_format(path: Path) -> str | None:
+    """Magic-detect the format of an on-disk input file (to tell archive from leaf file)."""
+    import zipfile
+
+    from model_atlas.sources.format_detect import detect_format
+
+    with path.open("rb") as fh:
+        head = fh.read(512)
+
+    def peek_zip() -> list[str]:
+        try:
+            with zipfile.ZipFile(path) as zf:
+                return zf.namelist()
+        except (OSError, zipfile.BadZipFile):
+            return []
+
+    return detect_format(head, peek_zip, path.suffix)
+
+
+def _peek(file: SourceFile, selector: InputSelector) -> "set[str] | None":
+    return get_reader(selector.format).peek_columns(file, selector)
+
+
+def _resolve_force_selector(
+    file: SourceFile, preset: PresetSpec, detected: str | None
+) -> InputSelector:
+    """Force mode: ignore location, but verify ``format`` and resolve the in-file sub-unit.
+
+    Picks the first selector whose format matches the file (hard error on mismatch), then
+    for excel/sqlite falls back to a structurally-best sheet/table when the declared one is
+    absent (force-mode only — auto matching stays precise)."""
+    import dataclasses
+
+    from model_atlas.presets.matcher import _structural_score
+
+    selectors = [s for s in preset.input_selectors if s.format == detected]
+    if not selectors:
+        raise ValueError(
+            f"force-preset format mismatch: {file.logical_path} is {detected}, "
+            f"preset {preset.name!r} declares {[s.format for s in preset.input_selectors]}"
+        )
+    selector = selectors[0]
+    reader = get_reader(selector.format)
+    if selector.format == "csv" or selector.sql:
+        return selector  # csv: whole file; sql: run as written (a missing table just errors)
+
+    declared = selector.sheet if selector.format == "excel" else selector.table
+    subtables = reader.list_subtables(file)
+    if declared in subtables:
+        return selector
+
+    # Choose the qualifying sub-unit (all referenced columns present) with the best score.
+    from model_atlas.reporting import _column_refs
+    from model_atlas.transforms.assemble import make_resolver
+
+    refs = list(preset.expected_columns) or _column_refs(preset)
+    best: tuple[int, str] | None = None
+    for sub in subtables:
+        probe = dataclasses.replace(
+            selector, **({"sheet": sub} if selector.format == "excel" else {"table": sub})
+        )
+        columns = reader.peek_columns(file, probe)
+        if columns is None:
+            continue
+        resolve = make_resolver(sorted(columns))
+        if all(resolve(ref) is not None for ref in refs):
+            score = _structural_score(preset, columns)
+            if best is None or score > best[0]:
+                best = (score, sub)
+    if best is None:
+        raise ValueError(
+            f"force-preset {preset.name!r}: no {selector.format} sub-unit in "
+            f"{file.logical_path} satisfies the mapped columns"
+        )
+    return dataclasses.replace(
+        selector, **({"sheet": best[1]} if selector.format == "excel" else {"table": best[1]})
+    )
 
 # Characters that are unsafe in filenames on any major OS.
 _UNSAFE_CHARS = re.compile(r'[^\w.\-]')
@@ -59,6 +152,8 @@ def process(
     merge: bool = True,
     entity: str | None = None,
     include_source_columns: bool = True,
+    root_prefix_depth: int = 1,
+    max_container_depth: int = 1,
 ) -> ProcessResult:
     """Run the full pipeline.
 
@@ -83,27 +178,26 @@ def process(
     """
     started_at = reporting.now_iso()
     presets = load_preset_specs(presets_path)
-    elements = discover_elements(input_path)
-    log.info("Discovered %d source element(s); %d preset(s) loaded", len(elements), len(presets))
+    files = discover(input_path, max_container_depth=max_container_depth)
+    log.info(f"Discovered {len(files)} source file(s); {len(presets)} preset(s) loaded")
 
-    # Force-preset mode: one input file that yields exactly one source element + one
-    # preset YAML => apply that preset WITHOUT selector matching. This is the "I know
-    # what this file is" path, so a preset runs against a source whose name/path its
-    # selector would not otherwise match.
-    #
-    # The single-element guard is deliberate: a ZIP archive (or a multi-sheet workbook)
-    # is one file but discovers MANY elements. Forcing the preset onto all of them would
-    # extract every database in a full-filesystem dump. When more than one element is
-    # discovered, fall back to selector matching so only the intended source is read.
+    # Force-preset mode: the input is a single ordinary file (its detected format is NOT
+    # an archive) and the presets argument is one YAML with exactly one preset. Then the
+    # preset is applied to that one file WITHOUT path/name matching — but its `format` is
+    # still verified (hard error on mismatch) and the in-file sub-unit still resolved. A
+    # single zip/folder is a Container -> normal matching.
+    input_is_file = Path(input_path).is_file()
+    input_is_archive = input_is_file and _input_detected_format(Path(input_path)) == "archive"
     force_preset = (
-        Path(input_path).is_file()
+        input_is_file
+        and not input_is_archive
         and Path(presets_path).is_file()
         and len(presets) == 1
-        and len(elements) == 1
     )
     if force_preset:
-        log.info("Force-preset mode: applying %r (selector matching bypassed)", presets[0].name)
+        log.info(f"Force-preset mode: applying {presets[0].name!r} (location matching bypassed)")
 
+    extractor = SingleSourceExtractor()
     # frames_by_preset and sources_by_preset preserve insertion order so per-preset
     # CSVs are written in the order presets were first matched.
     frames_by_preset: dict[str, list[pd.DataFrame]] = {}
@@ -112,42 +206,49 @@ def process(
     matched: list[str] = []
     unmatched: list[str] = []
 
-    for element in elements:
+    for file in files:
+        label = str(file.full_logical_path)
         if force_preset:
             preset = presets[0]
+            selector = _resolve_force_selector(file, preset, detect_file_format(file))
         else:
-            match = match_preset(element, presets, peek_columns=peek_columns)
+            match = match_file(file, presets, root_prefix_depth=root_prefix_depth, peek=_peek)
             if match is None:
-                log.debug("No preset matched %s", element.source_file)
-                unmatched.append(element.source_file)
+                log.debug(f"No preset matched {label}")
+                unmatched.append(label)
                 continue
-            preset, _selector = match
-        matched.append(f"{element.source_file} -> {preset.name}")
-        extracted = get_adapter(element).extract(element, preset)
+            preset, selector = match
+        if len(preset.roles) > 1:
+            raise NotImplementedError("multi-source python extract not yet implemented")
+        matched.append(f"{label} -> {preset.name}")
+        extracted = extractor.extract({selector.role: (file, selector)}, preset)
         records = to_records(extracted.dataframe)
-        # The on-disk file name (for `from_file: name`): the real file for direct
-        # CSV/Excel/SQLite, or the internal db name when the source is a ZIP archive.
-        source_file_name = (
-            element.logical_name if element.path.suffix.casefold() == ".zip" else element.path.name
-        )
         env = BuildEnv(
-            input_file=element.path.name,
+            input_file_path=_input_file_path(file),
+            input_file_name=Path(_input_file_path(file)).name,
             source_fingerprint=extracted.source_fingerprint,
             source_file_path=extracted.source_original_path,
+            raw_source_path=extracted.source_original_path,
             source_tier=preset.source_tier,
             entity=entity,
             linked_entity=linked_entity,
-            source_file_name=source_file_name,
+            source_file_name=file.name,
         )
         frame, frame_warnings = build_rows(
-            records, preset, env, columns=list(extracted.source_columns),
+            records, preset, env, selector=selector, columns=list(extracted.source_columns),
             include_source_columns=include_source_columns)
-        log.info("%s: %d source row(s) -> %d assertion row(s)", element.source_file, len(records), len(frame))
+        log.info(f"{label}: {len(records)} source row(s) -> {len(frame)} assertion row(s)")
         frames_by_preset.setdefault(preset.name, []).append(frame)
         sources_by_preset.setdefault(preset.name, []).append({
             "source_file": extracted.source_file,
             "raw_source_path": extracted.source_original_path,
-            "input_file": element.path.name,
+            "input_file_path": env.input_file_path,
+            "input_file_name": env.input_file_name,
+            "container_chain": file.container_chain,
+            "format": selector.format,
+            "table": selector.table,
+            "sheet": selector.sheet,
+            "source_fingerprint": extracted.source_fingerprint,
             "preset_id": preset.meta.id,
             "matched_preset": preset.name,
             "parser": f"{preset.parser.name} {preset.parser.version}",
@@ -159,7 +260,7 @@ def process(
         warnings.extend(frame_warnings)
 
     if unmatched:
-        log.info("%d element(s) matched no preset (set log level to DEBUG to list them)", len(unmatched))
+        log.info(f"{len(unmatched)} file(s) matched no preset (set log level to DEBUG to list them)")
 
     if merge:
         return _write_merged(
@@ -278,7 +379,7 @@ def _write_split(
         if not preset_df.empty:
             preset_df = _order_columns(untangle(preset_df))
         if preset_df.empty:
-            log.info("Preset %s produced no rows; skipping output file.", preset_name)
+            log.info(f"Preset {preset_name} produced no rows; skipping output file.")
             continue
         csv_path = output_folder / f"{_safe_filename(preset_name)}.csv"
         written = write_csv(preset_df, csv_path)

@@ -32,8 +32,8 @@ FILENAME_TOKENS = ("name", "stem", "path")
 PARAM_TOKENS = ("entity", "linked_entity")
 # Keys a preset(...) ref may read from the current preset (match block + meta).
 PRESET_TOKENS = (
-    "in_archive", "as_file", "table", "sheet", "sql",
-    "id", "name", "tier", "os", "tool", "version", "os_version",
+    "path", "name", "format", "table", "sheet", "sql",
+    "id", "tier", "os", "tool", "version", "os_version",
 )
 
 _CALL_RE = re.compile(r"^\s*([a-z_]+)\s*\((.*)\)\s*$", re.DOTALL)

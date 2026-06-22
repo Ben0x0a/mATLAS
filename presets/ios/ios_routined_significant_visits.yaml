@@ -7,10 +7,9 @@ preset:
   version: 1.0
   tier: primary
 
-match:
-  type: sqlite
-  in_archive: /private/var/mobile/Library/Caches/com.apple.routined/Local.sqlite
-  as_file: Local.sqlite
+input_selector:
+  format: sqlite
+  path: /private/var/mobile/Library/Caches/com.apple.routined/Local.sqlite
   table: ZRTLEARNEDLOCATIONOFINTERESTVISITMO
 
 # Full ZRTLEARNEDLOCATIONOFINTERESTVISITMO column inventory.
@@ -37,14 +36,14 @@ expected_columns:
   - ZLOCATIONVERTICALUNCERTAINTY
   - ZIDENTIFIER
 
-# record_uid omitted: Z_PK is not a stable UID -> generate a deterministic, content-addressed UID.
+# source_record_uid omitted: Z_PK is not a stable UID -> generate a deterministic, content-addressed UID.
 
 common:
   entity:          param(entity)
   entity_type:     const(device)
   source_label:    const(ZRTLEARNEDLOCATIONOFINTERESTVISITMO)
   position_source: const(significant_location)
-  raw_source_path: preset(in_archive)   # device db path; input_record_id defaults to <table>#<ordinal>
+  raw_source_path: preset(path)   # device db path; input_record_id defaults to <table>#<ordinal>
 
 assertions:
   - position:

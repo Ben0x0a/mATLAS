@@ -6,9 +6,9 @@ preset:
   version: 1.0
   tier: secondary
 
-match:
-  type: csv
-  as_file: "Cached Locations.csv"
+input_selector:
+  format: csv
+  name: "Cached Locations.csv"
   delimiter: ","
   encoding: "utf-8-sig"
 
@@ -36,7 +36,7 @@ patterns:
 lookup_tables:
   recovery: {Parsing: intact, Carving: recovered, Deleted: deleted}
 
-record_uid: 'column("Item ID")'
+source_record_uid: 'column("Item ID")'
 
 common:
   entity:          param(entity)

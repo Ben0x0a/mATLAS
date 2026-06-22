@@ -26,13 +26,13 @@ def warnings_path_for(output_csv: Path) -> Path:
 
 def write_csv(df: pd.DataFrame, output_csv: Path) -> Path:
     output_csv.parent.mkdir(parents=True, exist_ok=True)
-    log.info("Writing CSV: path=%s rows=%d columns=%d", output_csv, len(df), len(df.columns))
+    log.info(f"Writing CSV: path={output_csv} rows={len(df)} columns={len(df.columns)}")
     df.to_csv(output_csv, index=False)
     return output_csv
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    log.info("Writing JSON sidecar: %s", path)
+    log.info(f"Writing JSON sidecar: {path}")
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     return path

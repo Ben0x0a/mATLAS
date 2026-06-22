@@ -1,10 +1,11 @@
 """Declarative preset schema (v3) for the pluggable pipeline.
 
-Defines:    the typed preset structures (PresetMeta, Match, FieldSpec, TimeSpec,
+Defines:    the typed preset structures (PresetMeta, InputSelector, FieldSpec, TimeSpec,
             Links, AssertionTemplate, PresetSpec) and preset_spec_from_yaml(), which
             parses + validates a v3 YAML preset against the canonical model.
 Used by:    the loader, the assembly engine, the matcher, and reporting.
-Depends on: model.families (columns/types/enums), presets.expr (ref + pipe parser).
+Depends on: model.families (columns/types/enums), presets.expr (ref + pipe parser),
+            sources.pathmatch (selector path validation).
 
 v3 layout (readable, examiner-first)::
 
@@ -16,13 +17,12 @@ v3 layout (readable, examiner-first)::
       os_version: ">=15"                   # applicability range (tie-break)
       version: 1.0
       tier: primary
-    match:
-      type: sqlite
-      in_archive: /private/.../Cache.sqlite
-      as_file: Cache.sqlite
+    input_selector:                        # one mapping OR a list (same role = OR)
+      format: sqlite                       # REQUIRED, magic-verified: csv|excel|sqlite
+      path: /private/.../Cache.sqlite      # XOR name; anchored, prefix-tolerant, {uuid}/*
       table: ZRTCLLOCATIONMO
-    record_uid: column(ArtifactID)         # optional; omit to auto-generate a deterministic UID
-    raw_source_path: preset(in_archive)    # where the trace came from (mapped in `common:`)
+    source_record_uid: column(ArtifactID)  # optional; omit to auto-generate a deterministic per-record UID
+    raw_source_path: preset(path)          # where the trace came from (mapped in `common:`)
     lookup_tables: {recovery: {Parsing: intact}}
     patterns: {coords: "(?P<lat>...) - (?P<lon>...)"}
     common:
@@ -51,18 +51,20 @@ from model_atlas.model.families import (
     SpatialTemporalLink,
 )
 from model_atlas.presets.expr import PipeCall, Ref, parse_pipe, parse_ref
+from model_atlas.sources.pathmatch import validate_selector_path
 
 # Columns the engine owns; presets never assign them directly. The temporal bounds come
-# from a `time:` block, the lat/lon source fields are auto-captured, ``input_file`` /
-# ``preset_id`` / ``preset_name`` come from the run + matched preset, ``record_uid`` from the
-# top-level `record_uid:` key (or is generated), and the derived columns from untangle.
+# from a `time:` block, the lat/lon source fields are auto-captured, ``input_file_path`` /
+# ``preset_id`` / ``preset_name`` come from the run + matched preset, ``source_record_uid``
+# from the top-level `source_record_uid:` key (or is generated), ``row_uid`` is generated
+# per output row, and the derived columns come from untangle.
 # ``raw_source_path`` and ``input_record_id`` are intentionally NOT engine-owned: a preset maps
 # them (e.g. AXIOM Source / Location), and the engine only fills a default when it does not.
 _ENGINE_OWNED_FIELDS: frozenset[str] = frozenset({
     "time_lower_raw", "time_lower_source_field", "time_lower_unix_us",
     "time_upper_raw", "time_upper_source_field", "time_upper_unix_us",
     "latitude_source_field", "longitude_source_field",
-    "input_file", "record_uid", "preset_id", "preset_name",
+    "input_file_path", "source_record_uid", "row_uid", "preset_id", "preset_name",
     "record_type", "record_rank",
 })
 ASSIGNABLE_FIELDS: frozenset[str] = frozenset(OUTPUT_COLUMNS) - _ENGINE_OWNED_FIELDS
@@ -113,15 +115,36 @@ class PresetMeta:
         return f"{prefix} — {self.name}" if prefix else self.name
 
 
+_READER_FORMATS = ("csv", "excel", "sqlite")
+_READ_KEYS = ("delimiter", "encoding", "header_row", "skip_rows")
+
+
 @dataclass(frozen=True)
-class Match:
-    source_type: str
-    as_file: str | None = None      # was selector file_name
-    in_archive: str | None = None   # was selector db_relpath
-    sheet: str | None = None        # excel
-    table: str | None = None        # sqlite
-    sql: str | None = None          # sqlite
-    read: dict[str, Any] = field(default_factory=dict)  # delimiter/encoding/header_row/skip_rows
+class InputSelector:
+    """One ``input_selector`` entry: where the file is (``path`` XOR ``name``), its
+    magic-verified ``format``, an optional ``role``, and the reader params for that
+    format (table/sql for sqlite, sheet for excel, delimiter/encoding/… for csv)."""
+
+    format: str                      # csv | excel | sqlite
+    role: str = "source"
+    path: str | None = None          # anchored, prefix-tolerant; XOR name
+    name: str | None = None          # basename anywhere; XOR path
+    table: str | None = None         # sqlite
+    sql: str | None = None           # sqlite
+    sheet: str | None = None         # excel
+    read: dict[str, Any] = field(default_factory=dict)
+
+    def reader_params(self) -> dict[str, Any]:
+        if self.format == "csv":
+            return dict(self.read)
+        if self.format == "excel":
+            return {"sheet": self.sheet, **self.read}
+        params: dict[str, Any] = {}
+        if self.table:
+            params["table"] = self.table
+        if self.sql:
+            params["sql"] = self.sql
+        return params
 
 
 @dataclass(frozen=True)
@@ -189,9 +212,9 @@ class AssertionTemplate:
 @dataclass(frozen=True)
 class PresetSpec:
     meta: PresetMeta
-    match: Match
+    input_selectors: tuple[InputSelector, ...]
     path: Path
-    record_uid: FieldSpec | None = None
+    source_record_uid: FieldSpec | None = None
     common: tuple[FieldSpec, ...] = ()
     assertions: tuple[AssertionTemplate, ...] = ()
     lookup_tables: dict[str, dict[Any, Any]] = field(default_factory=dict)
@@ -215,36 +238,13 @@ class PresetSpec:
         return ParserInfo(name=self.meta.id, version=self.meta.version)
 
     @property
-    def selectors(self) -> tuple[dict[str, Any], ...]:
-        sel: dict[str, Any] = {"source_type": self.match.source_type}
-        if self.match.as_file:
-            sel["file_name"] = self.match.as_file
-        if self.match.in_archive:
-            sel["db_relpath"] = self.match.in_archive
-        if self.match.sheet:
-            sel["sheet_name"] = self.match.sheet
-        return (sel,)
-
-    @property
-    def extract(self) -> dict[str, Any]:
-        cfg: dict[str, Any] = {}
-        read = dict(self.match.read)
-        if self.match.source_type == "csv":
-            cfg["csv"] = read
-        elif self.match.source_type == "excel":
-            if self.match.sheet:
-                read.setdefault("sheet_name", self.match.sheet)
-            cfg["excel"] = read
-        elif self.match.source_type == "sqlite":
-            sqlite_cfg: dict[str, Any] = {}
-            if self.match.table:
-                sqlite_cfg["table"] = self.match.table
-            if self.match.sql:
-                sqlite_cfg["sql"] = self.match.sql
-            if self.match.in_archive:
-                sqlite_cfg["db_relpath"] = self.match.in_archive
-            cfg["sqlite"] = sqlite_cfg
-        return cfg
+    def roles(self) -> tuple[str, ...]:
+        """Distinct roles in declaration order. Same role = OR; different roles = AND."""
+        seen: list[str] = []
+        for selector in self.input_selectors:
+            if selector.role not in seen:
+                seen.append(selector.role)
+        return tuple(seen)
 
 
 # --- parsing ----------------------------------------------------------------
@@ -363,22 +363,39 @@ def _parse_assertion(raw: Any, path: Path, patterns: dict[str, str]) -> Assertio
     return AssertionTemplate(fields=tuple(fields), temporal=(time,))
 
 
-def _parse_match(raw: Any, path: Path) -> Match:
+def _parse_one_selector(raw: Any, path: Path) -> InputSelector:
     if not isinstance(raw, dict):
-        raise ValueError(f"{path}: 'match' must be a mapping")
-    source_type = _require_str(raw, "type", path, "match")
-    if source_type not in ("csv", "excel", "sqlite"):
-        raise ValueError(f"{path}: match type {source_type!r} must be csv|excel|sqlite")
-    read = {k: raw[k] for k in ("delimiter", "encoding", "header_row", "skip_rows") if k in raw}
-    return Match(
-        source_type=source_type,
-        as_file=raw.get("as_file"),
-        in_archive=raw.get("in_archive"),
-        sheet=raw.get("sheet"),
-        table=raw.get("table"),
-        sql=raw.get("sql"),
+        raise ValueError(f"{path}: each input_selector entry must be a mapping")
+    fmt = raw.get("format")
+    if fmt not in _READER_FORMATS:
+        raise ValueError(f"{path}: no reader for format {fmt!r}; expected one of {list(_READER_FORMATS)}")
+    has_path, has_name = raw.get("path") is not None, raw.get("name") is not None
+    if has_path == has_name:
+        raise ValueError(f"{path}: input_selector needs exactly one of 'path' or 'name'")
+    if has_path:
+        validate_selector_path(str(raw["path"]))
+    if fmt == "sqlite":
+        if bool(raw.get("table")) == bool(raw.get("sql")):
+            raise ValueError(f"{path}: a sqlite input_selector needs exactly one of 'table' or 'sql'")
+    if fmt == "excel" and not raw.get("sheet"):
+        raise ValueError(f"{path}: an excel input_selector needs 'sheet'")
+    read = {k: raw[k] for k in _READ_KEYS if k in raw}
+    role = raw.get("role") or "source"
+    return InputSelector(
+        format=fmt, role=str(role),
+        path=raw.get("path"), name=raw.get("name"),
+        table=raw.get("table"), sql=raw.get("sql"), sheet=raw.get("sheet"),
         read=read,
     )
+
+
+def _parse_input_selectors(raw: Any, path: Path) -> tuple[InputSelector, ...]:
+    if raw is None:
+        raise ValueError(f"{path}: 'input_selector' is required")
+    entries = raw if isinstance(raw, list) else [raw]
+    if not entries:
+        raise ValueError(f"{path}: 'input_selector' must not be empty")
+    return tuple(_parse_one_selector(entry, path) for entry in entries)
 
 
 def _parse_meta(raw: Any, path: Path) -> PresetMeta:
@@ -405,7 +422,7 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
     raw = raw_obj
 
     meta = _parse_meta(raw.get("preset"), path)
-    match = _parse_match(raw.get("match"), path)
+    input_selectors = _parse_input_selectors(raw.get("input_selector"), path)
 
     patterns = raw.get("patterns") or {}
     if not isinstance(patterns, dict):
@@ -425,10 +442,10 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
     if not isinstance(expected, list) or not all(isinstance(c, str) for c in expected):
         raise ValueError(f"{path}: 'expected_columns' must be a list of column-name strings")
 
-    record_uid_raw = raw.get("record_uid")
-    record_uid = (
-        _parse_field("record_uid", record_uid_raw, path, patterns, assignable=False)
-        if record_uid_raw is not None else None
+    source_record_uid_raw = raw.get("source_record_uid")
+    source_record_uid = (
+        _parse_field("source_record_uid", source_record_uid_raw, path, patterns, assignable=False)
+        if source_record_uid_raw is not None else None
     )
 
     common_raw = raw.get("common") or {}
@@ -442,8 +459,8 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
     assertions = tuple(_parse_assertion(entry, path, patterns) for entry in assertions_raw)
 
     return PresetSpec(
-        meta=meta, match=match, path=path,
-        record_uid=record_uid, common=common, assertions=assertions,
+        meta=meta, input_selectors=input_selectors, path=path,
+        source_record_uid=source_record_uid, common=common, assertions=assertions,
         lookup_tables={str(k): dict(v) for k, v in lookup_tables.items()},
         patterns=patterns,
         expected_columns=tuple(expected),

@@ -9,7 +9,7 @@ Used by:    transforms (build these from preset mappings), untangle (ranks them)
             export (flattens them to CSV rows via OUTPUT_COLUMNS).
 Depends on: standard library only (dataclasses, enum, uuid is not used here).
 
-This is the canonical 44-column model.
+This is the canonical 45-column model.
 """
 from __future__ import annotations
 
@@ -195,17 +195,19 @@ class Provenance:
     """Where the trace came from, which record it is, how it was read, and its state
     (9 columns).
 
-    Four questions in order: *where from* (``raw_source_path`` → ``input_file`` →
-    ``input_record_id``), *which record + its stable key* (``input_record_id`` for a human,
-    ``record_uid`` as a deterministic, content-addressed machine key), *how read*
-    (``preset_id`` / ``preset_name`` / ``source_label`` / ``source_tier``), and *record
-    state* (``deleted``).
+    Four questions in order: *where from* (``raw_source_path`` → ``input_file_path`` →
+    ``input_record_id``), *which record + its keys* (``input_record_id`` for a human — the
+    1-based source line number by default, or a mapped tool locator; ``source_record_uid``
+    as a deterministic per-source-record machine key shared by every output row derived from
+    one source record; ``row_uid`` as the unique per-output-row key), *how read* (``preset_id``
+    / ``preset_name`` / ``source_label`` / ``source_tier``), and *record state* (``deleted``).
     """
 
     raw_source_path: str | None = None    # where the trace came from (preset-mapped: device path / tool column)
-    input_file: str | None = None         # the specific file matlas read (the zip / csv / workbook)
-    input_record_id: str | None = None       # which record in that file: "<table-or-sheet>#<ordinal>" or a tool locator
-    record_uid: str | None = None         # deterministic, globally-unique UID; shared by a row's assertions
+    input_file_path: str | None = None    # full path of the outermost on-disk artifact matlas opened
+    input_record_id: str | None = None    # which record in that file: "<table-or-sheet>#<line>" (1-based) or a tool locator
+    source_record_uid: str | None = None  # per-source-record UID; shared by every output row of one source record
+    row_uid: str | None = None            # unique per OUTPUT row (differentiates every emitted row)
     preset_id: str | None = None          # stable machine key of the applied preset
     preset_name: str | None = None        # human title of the applied preset
     source_label: str | None = None       # tool label (secondary) or any descriptive label (primary)
@@ -263,9 +265,10 @@ OUTPUT_COLUMNS: tuple[str, ...] = (
     "spatial_temporal_link",
     # provenance
     "raw_source_path",
-    "input_file",
+    "input_file_path",
     "input_record_id",
-    "record_uid",
+    "source_record_uid",
+    "row_uid",
     "preset_id",
     "preset_name",
     "source_label",
@@ -401,9 +404,10 @@ class SpatioTemporalAssertion:
             "entity_time_link": _value(self.bindings.entity_time_link),
             "spatial_temporal_link": _value(self.bindings.spatial_temporal_link),
             "raw_source_path": self.provenance.raw_source_path,
-            "input_file": self.provenance.input_file,
+            "input_file_path": self.provenance.input_file_path,
             "input_record_id": self.provenance.input_record_id,
-            "record_uid": self.provenance.record_uid,
+            "source_record_uid": self.provenance.source_record_uid,
+            "row_uid": self.provenance.row_uid,
             "preset_id": self.provenance.preset_id,
             "preset_name": self.provenance.preset_name,
             "source_label": self.provenance.source_label,

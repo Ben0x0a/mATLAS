@@ -33,10 +33,10 @@ one CSV per matched preset into an output folder.
 
 ```text
 process()
-  -> discover_elements()          (sources.folder)
+  -> discover()                   (sources.discover — Container/SourceFile)
   -> load_preset_specs()          (presets.spec_loader)
-  -> match_preset()               (presets.matcher)
-  -> adapter.extract()            (sources registry)
+  -> match_file()                 (presets.matcher)
+  -> SingleSourceExtractor.extract() (sources.extractor -> FormatReader)
   -> build_rows()                 (transforms.assemble)
   -> untangle()                   (transforms.rank)
   -> write_csv() / write_json()   (export)

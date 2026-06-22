@@ -75,5 +75,5 @@ def evaluate(expression: str, value: Any) -> Any:
     _validate(node)
     code = compile(node, "<matlas-expression>", "eval")
     result = eval(code, _SAFE_GLOBALS, {"value": value})  # noqa: S307 - AST + globals restricted above.
-    log.debug("Evaluated expression %s on %r -> %r", expression, value, result)
+    log.debug(f"Evaluated expression {expression} on {value!r} -> {result!r}")
     return result

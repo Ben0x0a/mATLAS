@@ -7,13 +7,12 @@ preset:
   version: 1.0
   tier: primary
 
-# SQLite source, read from a full-filesystem ZIP or as a direct file. Inside an
-# archive the internal db_relpath discriminates (an iOS dump holds many unrelated
-# "Cache.sqlite" files); for a direct file the as_file name is used.
-match:
-  type: sqlite
-  in_archive: /private/var/mobile/Library/Caches/com.apple.routined/Cache.sqlite
-  as_file: Cache.sqlite
+# SQLite source, located by its anchored device path (prefix-tolerant: matches a loose
+# folder tree and a full-filesystem ZIP alike, skipping a "filesystem1/" wrapper). The
+# path discriminates because an iOS dump holds many unrelated "Cache.sqlite" files.
+input_selector:
+  format: sqlite
+  path: /private/var/mobile/Library/Caches/com.apple.routined/Cache.sqlite
   table: ZRTCLLOCATIONMO
 
 # Full ZRTCLLOCATIONMO column inventory. Columns present here but unmapped below are the
@@ -36,7 +35,7 @@ expected_columns:
   - ZTIMESTAMP
   - ZVERTICALACCURACY
 
-# record_uid omitted: a device-DB rowid (Z_PK) is not a stable UID, so a deterministic
+# source_record_uid omitted: a device-DB rowid (Z_PK) is not a stable UID, so a deterministic
 # content-addressed UID is generated per row instead.
 
 common:
@@ -44,7 +43,7 @@ common:
   entity_type:     const(device)
   source_label:    const(ZRTCLLOCATIONMO)
   position_source: const(GNSS)
-  raw_source_path: preset(in_archive)   # device db path; input_record_id defaults to ZRTCLLOCATIONMO#<ordinal>
+  raw_source_path: preset(path)   # device db path; input_record_id defaults to ZRTCLLOCATIONMO#<ordinal>
 
 assertions:
   - position:

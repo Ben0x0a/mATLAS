@@ -1,100 +1,65 @@
-"""Preset matching for discovered source elements."""
+"""File-centric preset matching.
+
+Defines:    detect_file_format (open-once magic detection of a SourceFile) and
+            match_file (path/name pre-filter -> type guard -> structural tie-break).
+Used by:    the pipeline.
+Depends on: sources (Container/SourceFile, pathmatch, format_detect), presets.spec.
+
+Iteration is per file: each SourceFile is matched independently, so a selector that fans
+out (a ``name`` present in many folders, or a ``{uuid}`` path) applies the preset to each
+matching file. Same-role selectors are OR alternatives; the first to match supplies the
+reader params.
+"""
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Any
+import zipfile
+from typing import Callable
 
-from model_atlas.models import DiscoveredElement, ElementType
-from model_atlas.presets.spec import PresetSpec
+from model_atlas.presets.spec import InputSelector, PresetSpec
+from model_atlas.sources.container import SourceFile
+from model_atlas.sources.format_detect import detect_format
+from model_atlas.sources.pathmatch import name_matches, path_matches
 
 log = logging.getLogger(__name__)
 
+_HEAD = 512
 
-def _matches_filename(selector: dict[str, Any], path: Path) -> bool:
-    file_name = selector.get("file_name")
-    return not file_name or path.name == file_name
-
-
-def _matches_element_filename(selector: dict[str, Any], element: DiscoveredElement) -> bool:
-    file_name = selector.get("file_name")
-    if not file_name:
-        return True
-    candidates = {
-        element.path.name,
-        element.logical_name,
-        Path(element.source_original_path).name,
-    }
-    return str(file_name) in candidates
+PeekFn = Callable[[SourceFile, InputSelector], "set[str] | None"]
 
 
-def _normalise_relpath(value: str) -> str:
-    """POSIX separators, no leading slash — so a UNIX-absolute ``/private/.../db``
-    and a ZIP entry stored as ``private/.../db`` compare equal."""
-    return value.replace("\\", "/").lstrip("/")
+def detect_file_format(file: SourceFile) -> str | None:
+    """Open the file once and magic-detect its format (a few KB + a zip central-dir peek)."""
+    container = file.container
+    try:
+        with container.open(file) as fh:
+            head = fh.read(_HEAD)
+    except (OSError, KeyError, zipfile.BadZipFile):
+        log.debug(f"Could not read {file.logical_path} for format detection", exc_info=True)
+        return None
+
+    def peek_zip() -> list[str]:
+        try:
+            with container.open(file) as fh:
+                with zipfile.ZipFile(fh) as zf:
+                    return zf.namelist()
+        except (OSError, zipfile.BadZipFile):
+            return []
+
+    return detect_format(head, peek_zip, file.logical_path.suffix)
 
 
-def _relpath_matches(selector: dict[str, Any], element: DiscoveredElement) -> bool:
-    db_relpath = selector.get("db_relpath")
-    return bool(db_relpath) and (
-        _normalise_relpath(element.source_original_path) == _normalise_relpath(str(db_relpath))
-    )
-
-
-def _matches_sqlite(selector: dict[str, Any], element: DiscoveredElement) -> bool:
-    if selector.get("source_type") != ElementType.SQLITE.value:
-        return False
-    file_name = selector.get("file_name")
-    db_relpath = selector.get("db_relpath")
-    if not file_name and not db_relpath:
-        return True  # type-only selector
-
-    # Context-aware criterion: a selector may declare BOTH file_name and db_relpath,
-    # and the one relevant to the source's origin is applied.
-    #   - Container source (SQLite inside an archive, e.g. a ZIP): the discovered
-    #     element carries the internal acquisition path, so db_relpath is the
-    #     discriminator. Matching on a bare file name would be unsafe — an iOS dump
-    #     holds many unrelated "Cache.sqlite" files at different paths.
-    #   - Direct file/folder source: there is no internal path, so file_name is the
-    #     discriminator.
-    # A container element is recognised by its original path differing from the
-    # on-disk path of the archive it was discovered in. The check is archive-format
-    # agnostic; ZIP is the only container format supported today.
-    is_container = element.source_original_path != str(element.path)
-    if is_container:
-        return _relpath_matches(selector, element) if db_relpath else _matches_element_filename(selector, element)
-    return _matches_element_filename(selector, element) if file_name else _relpath_matches(selector, element)
-
-
-def _matches_excel(selector: dict[str, Any], element: DiscoveredElement) -> bool:
-    if selector.get("source_type") != ElementType.EXCEL.value:
-        return False
-    if not _matches_filename(selector, element.path):
-        return False
-    sheet_name = selector.get("sheet_name")
-    return not sheet_name or element.sheet_name == sheet_name
-
-
-def _matches_csv(selector: dict[str, Any], element: DiscoveredElement) -> bool:
-    return selector.get("source_type") == ElementType.CSV.value and _matches_filename(selector, element.path)
-
-
-def _selector_matches(selector: dict[str, Any], element: DiscoveredElement) -> bool:
-    if element.source_type == ElementType.SQLITE:
-        return _matches_sqlite(selector, element)
-    if element.source_type == ElementType.EXCEL:
-        return _matches_excel(selector, element)
-    if element.source_type == ElementType.CSV:
-        return _matches_csv(selector, element)
+def _selector_location_matches(selector: InputSelector, file: SourceFile, root_prefix_depth: int) -> bool:
+    if selector.name is not None:
+        return name_matches(selector.name, file.logical_path)
+    if selector.path is not None:
+        return path_matches(selector.path, file.logical_path, root_prefix_depth=root_prefix_depth)
     return False
 
 
 def _structural_score(preset: PresetSpec, columns: set[str]) -> int:
-    """Score a candidate by how well its declared columns fit the source: +1 per
-    column present, -2 per column absent. Higher = better fit. Uses the preset's
-    declared ``expected_columns`` inventory when present (the strongest signature),
-    else the columns the mapping references.
-    Importing here avoids a module cycle (reporting imports assemble imports spec)."""
+    """+1 per declared column present, -2 per absent. Uses ``expected_columns`` when set,
+    else the columns the mapping references. Imported lazily to avoid a module cycle."""
     from model_atlas.reporting import _column_refs
     from model_atlas.transforms.assemble import make_resolver
 
@@ -109,39 +74,55 @@ def _structural_score(preset: PresetSpec, columns: set[str]) -> int:
     return present - 2 * absent
 
 
-def match_preset(
-    element: DiscoveredElement,
+def match_file(
+    file: SourceFile,
     presets: list[PresetSpec],
     *,
-    peek_columns: "Callable[[DiscoveredElement, PresetSpec], set[str] | None] | None" = None,
-) -> tuple[PresetSpec, dict[str, Any]] | None:
-    """Match an element to a preset. When several presets match the coarse selector,
-    tie-break by structural fit (which preset's mapped columns the source actually has)
-    using ``peek_columns``; ties fall back to declaration order."""
-    candidates: list[tuple[PresetSpec, dict[str, Any]]] = []
+    root_prefix_depth: int = 1,
+    peek: PeekFn | None = None,
+) -> tuple[PresetSpec, InputSelector] | None:
+    """Match one SourceFile to a preset + the selector that claimed it, or None.
+
+    1. Path/name pre-filter (cheap, name-only): collect (preset, selector) whose location
+       key matches ``file.logical_path``. Same-role selectors are OR — keep the first match
+       per preset.
+    2. Type guard (open once): detect the file's format and drop candidates whose declared
+       ``format`` disagrees, warning per dropped pairing.
+    3. Tie-break: if more than one preset still matches, score by structural column fit.
+    """
+    # Step 1 — location pre-filter, one selector per preset (first match wins; OR within role).
+    located: list[tuple[PresetSpec, InputSelector]] = []
     for preset in presets:
-        for selector in preset.selectors:
-            if _selector_matches(selector, element):
-                candidates.append((preset, selector))
+        for selector in preset.input_selectors:
+            if _selector_location_matches(selector, file, root_prefix_depth):
+                located.append((preset, selector))
                 break
-    if not candidates:
-        log.debug("No preset selector matched source element: %s", element.source_file)
+    if not located:
+        log.debug(f"No selector located {file.logical_path}")
         return None
-    if len(candidates) == 1 or peek_columns is None:
+
+    # Step 2 — type guard.
+    detected = detect_file_format(file)
+    candidates: list[tuple[PresetSpec, InputSelector]] = []
+    for preset, selector in located:
+        if selector.format != detected:
+            log.warning(f"format mismatch: {file.logical_path} is {detected}, preset {preset.name} expects {selector.format}; skipped")
+            continue
+        candidates.append((preset, selector))
+    if not candidates:
+        return None
+    if len(candidates) == 1 or peek is None:
         return candidates[0]
 
-    # Several presets match the same source — score by structural fit.
-    scored: list[tuple[int, int, tuple[PresetSpec, dict[str, Any]]]] = []
+    # Step 3 — structural tie-break.
+    scored: list[tuple[int, int, tuple[PresetSpec, InputSelector]]] = []
     for order, (preset, selector) in enumerate(candidates):
-        columns = peek_columns(element, preset)
+        columns = peek(file, selector)
         score = _structural_score(preset, columns) if columns is not None else 0
         scored.append((score, -order, (preset, selector)))
     best_score, _, best = max(scored)
-    runner_up = sorted((s for s, _, _ in scored), reverse=True)
-    if len(runner_up) > 1 and runner_up[0] == runner_up[1]:
-        log.warning(
-            "Ambiguous preset match for %s: tie at structural score %d; chose %s by declaration order",
-            element.source_file, best_score, best[0].name,
-        )
-    log.debug("Tie-break chose preset %s (score=%d) for %s", best[0].name, best_score, element.source_file)
+    ranked = sorted((s for s, _, _ in scored), reverse=True)
+    if len(ranked) > 1 and ranked[0] == ranked[1]:
+        log.warning(f"Ambiguous preset match for {file.logical_path}: tie at structural score {best_score}; chose {best[0].name} by declaration order")
+    log.debug(f"Tie-break chose preset {best[0].name} (score={best_score}) for {file.logical_path}")
     return best

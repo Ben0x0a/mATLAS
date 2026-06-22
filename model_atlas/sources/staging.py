@@ -1,50 +1,40 @@
-"""Stage a source file into a throwaway temp copy before extraction.
+"""Staging result types for the Container layer.
 
-Defines:    StagedFile (the staging result) and stage_file (a context manager that
-            hashes the original, copies it to a temp dir, and yields the local copy).
-Used by:    the CSV and Excel source adapters.
-Depends on: integrity (sha256_file); standard library only otherwise.
+Defines:    StagedFile (one materialised file the reader opens) and StagedGroup (a
+            SQLite db plus its co-located WAL/SHM/journal siblings in one temp dir).
+Used by:    Container implementations (which produce them in ``stage``/``stage_group``)
+            and the FormatReaders (which consume them).
+Depends on: standard library + the SourceFile type (for the ``origin`` back-pointer).
 
-WHY: forensic integrity requires that the parser never opens — let alone touches —
-the original evidence file. The SQLite adapter already works on a copy (via
-``sqlite.locate``); this gives CSV/Excel the same guarantee through one shared helper.
+WHY one place: forensic integrity requires the parser never opens the original
+evidence — only a throwaway copy. ``integrity`` keeps the keys today's metadata uses
+(``mode``/``ok``/``source_hash_before``/``verification_after``) so traceability is
+unchanged. ``temp_dir`` is the directory to delete once the reader has finished.
 """
 from __future__ import annotations
 
-import contextlib
-import logging
-import shutil
-import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING, Any
 
-from model_atlas.integrity import sha256_file
-
-log = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from model_atlas.sources.container import SourceFile
 
 
 @dataclass(frozen=True)
 class StagedFile:
-    original: Path      # the untouched source on disk
-    staged: Path        # the temp copy the parser reads
-    sha256: str         # SHA-256 of the original, computed before copying
+    path: Path                       # the temp copy a reader opens
+    fingerprint: str                 # sha256 of THIS file's content bytes
+    origin: "SourceFile"
+    integrity: dict[str, Any] = field(default_factory=dict)
+    temp_dir: Path | None = None     # directory to clean up after the reader is done
 
 
-@contextlib.contextmanager
-def stage_file(path: Path) -> Iterator[StagedFile]:
-    """Hash ``path``, copy it into a temp dir, and yield the local copy.
-
-    The temp dir (and the copy) live for the duration of the ``with`` block, so the
-    caller must finish reading before leaving it. The original is only read, never
-    written, so re-hashing it afterwards (the adapter's integrity check) always
-    confirms it is unchanged.
-    """
-    original = Path(path)
-    sha = sha256_file(original)
-    with tempfile.TemporaryDirectory(prefix="matlas-stage-") as td:
-        staged = Path(td) / original.name
-        # copy2 preserves mtime/permissions so the copy is a faithful working replica.
-        shutil.copy2(original, staged)
-        log.debug("Staged source %s -> %s (sha256=%s)", original, staged, sha)
-        yield StagedFile(original=original, staged=staged, sha256=sha)
+@dataclass(frozen=True)
+class StagedGroup:
+    dir: Path                        # temp dir holding the db + siblings
+    members: dict[str, Path]         # {"db", "wal", "shm", "journal"} -> path (present only)
+    fingerprint: str                 # content hash of the db member
+    origin: "SourceFile"
+    integrity: dict[str, Any] = field(default_factory=dict)
+    temp_dir: Path | None = None
