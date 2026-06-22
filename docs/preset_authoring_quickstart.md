@@ -19,25 +19,27 @@ preset:
   tier: primary
 ```
 
-## 2. Identify the source (`match`)
+## 2. Identify the source (`input_selector`)
 
 ```yaml
-match:                  # CSV
-  type: csv
-  as_file: "Cached Locations.csv"
+input_selector:         # CSV — basename match anywhere (a tool export)
+  format: csv
+  name: "Cached Locations.csv"
   encoding: "utf-8-sig"
 ```
 
 ```yaml
-match:                  # SQLite (direct file or inside a ZIP)
-  type: sqlite
-  in_archive: /private/var/mobile/Library/Caches/com.apple.routined/Cache.sqlite
-  as_file: Cache.sqlite
+input_selector:         # SQLite — anchored device path (folder or ZIP, prefix-tolerant)
+  format: sqlite
+  path: /private/var/mobile/Library/Caches/com.apple.routined/Cache.sqlite
   table: ZRTCLLOCATIONMO
 ```
 
-Inside a ZIP the `in_archive` path selects the database; for a direct file the
-`as_file` name does.
+Use `name:` for the easy basename case (it fans out to every matching file). Use `path:`
+when location is the discriminator — it is an anchored, prefix-tolerant path that matches
+a loose folder tree and a full-filesystem ZIP alike (skipping a `filesystem1/` wrapper up
+to `--root-prefix-depth`, default 1), with `{uuid}` and `*` for variable segments. Pass a
+list of selectors for OR alternatives. `format` is always magic-verified.
 
 ## 2b. Declare the columns you have (`expected_columns`)
 
@@ -157,7 +159,7 @@ python utils/lint_presets.py presets/ios/ios_routined_cached_locations.yaml --ad
 ```
 
 It reports ERRORs (won't load), WARNINGs (e.g. a half-coordinate, a missing link, a
-rowid mapped as `row_uid`), and ADVICE (naming, tier/tool coherence, naive-timezone,
+rowid mapped as `source_record_uid`), and ADVICE (naming, tier/tool coherence, naive-timezone,
 raw epoch arithmetic). The same checks are available as a library:
 
 ```python

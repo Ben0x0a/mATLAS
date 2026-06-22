@@ -49,10 +49,12 @@ The current CSV uses snake_case column names.
 | `entity_position_link` | string or null | controlled value | Relation between entity and position. |
 | `entity_time_link` | string or null | controlled value | Relation between entity and temporal interval. |
 | `spatial_temporal_link` | string or null | controlled value | Relation between position and temporal interval. |
-| `raw_source_path` | string or null | path/context | Where the trace came from: a device path (e.g. `preset(in_archive)`) or a tool's source column. Mapped by the preset. |
-| `input_file` | string or null | path/context | The specific file mATLAS read (the zip / CSV / workbook). Engine-set. |
+| `raw_source_path` | string or null | path/context | Where the trace came from: a device path (e.g. `preset(path)`) or a tool's source column. Mapped by the preset; defaults to the inner-container logical path. |
+| `input_file_path` | string or null | path/context | Full filesystem path of the outermost on-disk artifact mATLAS opened (the input archive when reading from one, else the leaf file). Engine-set. |
 | `input_record_id` | string or null | source-defined | Which record in that file: `<table-or-sheet>#<ordinal>` by default, or a tool locator. |
-| `record_uid` | string | stable ID | Deterministic, globally-unique UID. The tool's own id when the preset maps `record_uid` (verbatim), else a content-addressed `uuid5`. |
+| `source_record_number` | int | ordinal | 1-based position of the record within its extracted source — the analyst's handle to jump to it, and the always-unique disambiguator behind the UIDs. Engine-set. |
+| `source_record_uid` | string | stable ID | Per-source-record UID, shared by every output row of one source record. The tool's own id when the preset maps `source_record_uid` (verbatim), else a content-addressed `uuid5` keyed on `source_record_number`. |
+| `row_uid` | string | stable ID | Unique per OUTPUT row. Engine-generated deterministic `uuid5` over the row's own data + `source_record_number` + output ordinal (scoped by the source); content-addressed, never preset-mapped. |
 | `preset_id` | string or null | none | Stable machine id of the applied preset. Engine-set. |
 | `preset_name` | string or null | none | Human title of the applied preset. Engine-set. |
 | `source_label` | string or null | none | Tool label (secondary) or any descriptive label (primary), e.g. a table name. |
@@ -116,23 +118,32 @@ when the argument is absent.
 ## Provenance Fields
 
 Provenance answers four questions in order: *where from* (`raw_source_path` →
-`input_file` → `input_record_id`), *which record and its stable key*
-(`input_record_id` for a human, `record_uid` as a deterministic machine key), *how it
-was read* (`preset_id` / `preset_name` / `source_label` / `source_tier`), and *record
-state* (`deleted`).
+`input_file_path` → `input_record_id`), *which record and its keys*
+(`input_record_id` for a human, `source_record_uid` as a deterministic per-source-record
+machine key, `row_uid` as the unique per-output-row key), *how it was read* (`preset_id` /
+`preset_name` / `source_label` / `source_tier`), and *record state* (`deleted`).
 
 A preset maps `raw_source_path`, `input_record_id`, `source_label`, `deleted` and
-(optionally) `record_uid`. The engine always sets `input_file`, `preset_id`,
-`preset_name`; it fills `input_record_id` (`<table-or-sheet>#<ordinal>`) and
-`record_uid` (a content-addressed `uuid5`) when the preset maps neither, and defaults
-`source_tier` from the preset tier.
+(optionally) `source_record_uid`. The engine always sets `input_file_path`,
+`source_record_number`, `preset_id`, `preset_name`, `row_uid`; it fills `input_record_id`
+(`<table-or-sheet>#<ordinal>`) and
+`source_record_uid` (a content-addressed `uuid5`) when the preset maps neither, defaults
+`raw_source_path` to the inner-container logical path, and `source_tier` from the preset
+tier.
 
-`record_uid` is the row's stable key, shared by every assertion fanned out from one
-source row. When a preset maps `record_uid` to a tool's id column it is used verbatim,
-so output rows join straight back to the tool artefact. Otherwise it is
-`uuid5(content_fingerprint | raw_source_path | input_file | input_record_id)` — globally
-unique (two acquisitions differ in the content fingerprint) and portable across machines.
-A duplicate `record_uid` across distinct source rows is a hard error.
+`source_record_uid` is the source record's stable key, shared by every output row fanned
+out from one source record. When a preset maps it to a tool's id column it is used
+verbatim, so output rows join straight back to the tool artefact. Otherwise it is
+`uuid5(content_fingerprint | raw_source_path | source_record_number)` — globally unique
+(two acquisitions differ in the fingerprint; identical-data rows differ in the record
+number), independent of the input file name so a db read from a folder or a zip yields the
+same UID, and portable across machines. A *mapped* duplicate `source_record_uid` across
+distinct source records is a hard error (a non-unique "stable id" is a preset bug); the
+generated one never collides because it is keyed on the unique `source_record_number`.
+`row_uid` is then derived per output row
+(`uuid5(content_fingerprint | raw_source_path | source_record_number | row_data | output_ordinal)`),
+so every emitted row has a unique, reproducible, content-addressed key — folding in the
+row's own data while the record number keeps identical-data rows distinct.
 
 Traceability and warning sidecars contain run-level provenance, matched preset
 information, row counts, and source frontier information.

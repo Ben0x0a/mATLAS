@@ -19,10 +19,9 @@ preset:
   version: 1.0
   tier: primary                          # primary | secondary | unknown
 
-match:
-  type: sqlite                           # csv | excel | sqlite
-  in_archive: /private/var/.../Cache.sqlite   # internal path (ZIP source)
-  as_file: Cache.sqlite                  # file name (direct source)
+input_selector:                          # one mapping, OR a list (same role = OR alternatives)
+  format: sqlite                         # REQUIRED, magic-verified: csv | excel | sqlite
+  path: /private/var/.../Cache.sqlite    # anchored, prefix-tolerant; XOR name
   table: ZRTCLLOCATIONMO                 # sqlite table (or sql:)
 
 expected_columns:                        # the source's full column inventory (globs ok)
@@ -31,7 +30,7 @@ expected_columns:                        # the source's full column inventory (g
   - ZTIMESTAMP
   - ZSPEED
 
-record_uid: column(Z_PK)                 # optional; omit to auto-generate a deterministic UID
+source_record_uid: column(Z_PK)          # optional; omit to auto-generate a deterministic UID
 
 lookup_tables:                           # named tables for lookup() pipe steps
   recovery: {Parsing: intact, Carving: recovered}
@@ -71,24 +70,44 @@ assertions:                              # each entry = one position + one time 
 The title is composed: the non-empty of `os`/`tool` joined by a space, then `— name`
 (e.g. `iOS — Routined Cached Locations`, or `iOS AXIOM — Cached Locations`).
 
-## `match`
+## `input_selector`
 
-Identifies the source and how to read it.
+Identifies the source and how to read it. It is **one mapping or a list** of mappings.
+A folder and an archive are the same thing (a Container), so a selector matches the same
+way in either.
 
 | Field | Applies to | Meaning |
 | --- | --- | --- |
-| `type` | all | `csv` \| `excel` \| `sqlite`. |
-| `as_file` | all | File name (matches a direct file/folder source). |
-| `in_archive` | sqlite | Internal acquisition path (matches a DB inside a ZIP). |
-| `sheet` | excel | Sheet name. |
+| `format` | all | **Required**, magic-verified: `csv` \| `excel` \| `sqlite`. |
+| `name` | all | Exact basename, matched anywhere in the tree. **XOR `path`.** |
+| `path` | all | Anchored path from the container root. **XOR `name`.** |
+| `role` | all | Optional, default `source`. Same role = OR; different roles = AND. |
+| `sheet` | excel | Sheet name (required for excel). |
 | `table` / `sql` | sqlite | Exactly one: a table name or a read-only SQL query. |
 | `delimiter`,`encoding`,`header_row`,`skip_rows` | csv/excel | Read options. |
 
-**Matching is context-aware:** inside a ZIP the `in_archive` path discriminates; for a
-direct file the `as_file` name does. When several presets match one source, the engine
-tie-breaks by **structural fit** — how well each preset's `expected_columns` match the
-source's actual columns (falling back to the mapped columns when no inventory is
-declared) — then declaration order.
+**`name` vs `path`** — the distinction is basename-vs-path, not folder-vs-archive:
+- `name:` matches the basename anywhere (the easy CSV / AXIOM-export case). Matching
+  several files is **fan-out** — the preset applies to each.
+- `path:` is a full **anchored** path from the container root, with **prefix tolerance**
+  (`--root-prefix-depth`, default 1) so `/private/...` matches `filesystem1/private/...`,
+  `_/private/...` or bare `private/...`. Wildcards only on variable segments: `{uuid}`
+  (a UUID segment) and `*` (one opaque segment). There is **no `**`** — `path` is a full
+  path, not a roaming glob. Use it where location is the discriminator (an iOS dump holds
+  many unrelated `Cache.sqlite`).
+
+**`format` is always magic-verified.** If the file's detected format disagrees with the
+declared `format`, the (file, preset) pairing is skipped with a warning in auto mode (a
+hard error in force-preset mode).
+
+**Multiple selectors** (a list) with the same/no `role` are **OR** alternatives; the
+first to match supplies the reader params. Distinct roles are **AND** (every role must
+resolve) and require the deferred python ScriptExtractor — running one now raises
+`NotImplementedError`.
+
+When several presets match one file, the engine tie-breaks by **structural fit** — how
+well each preset's `expected_columns` match the file's actual columns (falling back to
+the mapped columns when no inventory is declared) — then declaration order.
 
 ## `expected_columns`
 
@@ -119,7 +138,7 @@ Every mapped value is exactly one explicit call:
 | `header("Glob *")` | the matched column's header text (e.g. a timezone in the header) |
 | `filename(name\|stem\|path)` | part of the source file identity |
 | `param(entity\|linked_entity)` | a run-level argument |
-| `preset(in_archive\|table\|id\|...)` | a key from the current preset's own `match`/`meta` |
+| `preset(path\|name\|table\|id\|...)` | a key from the matched `input_selector` / preset `meta` |
 | `const(VALUE)` | a literal |
 
 A field may instead be a mapping with attributes:
@@ -196,37 +215,56 @@ heading_deg: { from: column(Raw), pipe: "split(';', index=0) | cast(float)" }
 `regex` requires named groups; the author names which group to extract. Each step
 accepts `on_error=null|raw|error` (default `null`).
 
-## `record_uid`
+## `source_record_uid` and `row_uid`
 
-Optional. Reference a genuine source UID (a tool's Item ID, a real UUID column) when one
-exists; the value is used verbatim so output rows link back to the tool artefact. Omit it
-for a device DB so the engine generates a deterministic, content-addressed UID
-(`uuid5(content_fingerprint | raw_source_path | input_file | input_record_id)`). A bare
-rowid (`Z_PK`) is not a stable UID and should not be mapped here.
+Two identifiers — only `source_record_uid` is preset-facing:
+
+- **`source_record_uid`** (optional, mappable) — one UID per SOURCE record, **shared** by
+  every output row the record fans out into (e.g. a trip emitting start/end rows). Reference
+  a genuine source UID (a tool's Item ID, a real UUID column) when one exists; the value is
+  used verbatim so output rows link back to the tool artefact. Omit it for a device DB so
+  the engine generates a deterministic, content-addressed UID
+  (`uuid5(content_fingerprint | raw_source_path | source_record_number)`), independent of the
+  input file name/path so the SAME db read from a folder or a zip yields the SAME UID
+  (folder == zip parity). A bare rowid (`Z_PK`) is not a stable UID and should not be mapped
+  here. A *mapped* duplicate `source_record_uid` across distinct source records is a hard
+  error; the generated one never collides (it is keyed on the unique record number).
+- **`source_record_number`** (engine-only) — the 1-based ordinal of the record within its
+  extracted source. Surfaced as an output column so an analyst can jump straight to the
+  source record, and used as the always-unique disambiguator behind the generated UIDs.
+- **`row_uid`** (engine-only, never mapped) — **unique per OUTPUT row**, a deterministic
+  uuid5 over the row's own DATA + `source_record_number` + the output-row ordinal (scoped by
+  the source identity), so it is content-addressed yet the record number keeps two
+  identical-data rows distinct and the output ordinal keeps a record's fan-out rows distinct. Use it to differentiate every
+  emitted row; use `source_record_uid` to group the rows that came from one source record.
 
 ## `preset(...)` reference
 
-`preset(<key>)` reads a value from the current preset's own definition — its `match`
-block (`in_archive`, `as_file`, `table`, `sheet`, `sql`) or `meta` (`id`, `name`, `tier`,
-`os`, `tool`, `version`, `os_version`). The common use is `raw_source_path:
-preset(in_archive)`, so a device-DB row records the canonical device path the preset
-targets regardless of how the file was read.
+`preset(<key>)` reads a value from the current preset's own definition — the matched
+`input_selector` entry (`path`, `name`, `format`, `table`, `sheet`, `sql`) or `meta`
+(`id`, `tier`, `os`, `tool`, `version`, `os_version`). The common use is
+`raw_source_path: preset(path)`, so a device-DB row records the canonical device path the
+preset targets regardless of how the file was read.
 
 ## Provenance to map
 
-- `raw_source_path` — where the trace came from. Map it explicitly:
-  `preset(in_archive)` for a device DB, `column(Source)` for a tool export.
+- `raw_source_path` — where the trace came from. Map it explicitly: `preset(path)` for a
+  device DB, `column(Source)` for a tool export. When unmapped, the engine defaults it to
+  the inner-container logical path (with its prefix, without the container name).
 - `input_record_id` — which record in the file; defaults to `<table-or-sheet>#<ordinal>`
   when unmapped, or map a tool locator column.
 - `source_label`, `deleted` — optional descriptive label and record state.
-- `input_file`, `preset_id`, `preset_name` are engine-set and must not be mapped.
+- `recovery_state` (`live`/`wal`/`journal`) is **captured** by every reader and surfaced
+  on the extract; it is **not** mappable yet (a later task wires the `enrich()` ref).
+- `input_file_path` (full path of the outermost on-disk artifact opened), `preset_id`,
+  `preset_name` are engine-set and must not be mapped.
 
 ## Validation notes
 
 - `assertions` must be non-empty; each needs a `time`.
 - A field value must be an explicit reference call; a missing column resolves to `None`.
 - A glob must resolve to exactly one source column.
-- A duplicate `record_uid` (generated or mapped) across distinct rows is a hard error.
+- A duplicate `source_record_uid` (generated or mapped) across distinct source records is a hard error.
 - Engine-owned columns (the `time_*`, `latitude_source_field`, `longitude_source_field`,
-  `input_file`, `record_uid`, `preset_id`, `preset_name`, `record_*`) are not assignable
+  `input_file_path`, `source_record_number`, `source_record_uid`, `row_uid`, `preset_id`, `preset_name`, `record_*`) are not assignable
   in a mapping.
