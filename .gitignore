@@ -1,6 +1,7 @@
 # User data
 out/
-utils/
+# Generated AXIOM starter templates (regenerate from the parser; not tracked).
+utils/AXIOM_model_parser/results/
 
 # Python-generated files
 __pycache__/
