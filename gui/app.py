@@ -458,7 +458,7 @@ class MainController(QObject):
         self.preset_status_label.setAccessibleDescription(f"{len(self._presets)} presets loaded.")
         self._render_available_presets()
         self._sync_single_preset_notice()
-        log.info("Loaded %d preset(s) for GUI selection", len(self._presets))
+        log.info(f"Loaded {len(self._presets)} preset(s) for GUI selection")
 
     def _on_presets_failed(self, tb: str) -> None:
         self._presets = []
@@ -466,7 +466,7 @@ class MainController(QObject):
         self.preset_status_label.setText("Preset load failed")
         self.preset_status_label.setAccessibleDescription("Preset loading failed.")
         self._sync_single_preset_notice()
-        log.error("Preset loading failed:\n%s", tb)
+        log.error(f"Preset loading failed:\n{tb}")
 
     def _render_available_presets(self) -> None:
         selected = set(self._selected_preset_paths())
@@ -535,7 +535,7 @@ class MainController(QObject):
         self.auto_preset_check.setChecked(False)
         self._render_available_presets()
         self._sync_single_preset_notice()
-        log.info("Loaded profile %s with %d preset(s)", path, len(preset_paths))
+        log.info(f"Loaded profile {path} with {len(preset_paths)} preset(s)")
 
     def _save_profile(self) -> None:
         selected_paths = [Path(path) for path in self._selected_preset_paths()]
@@ -555,7 +555,7 @@ class MainController(QObject):
         except Exception as exc:  # noqa: BLE001 - show user-facing write failure
             self._show_error(str(exc))
             return
-        log.info("Saved profile %s with %d preset(s)", written, len(selected_paths))
+        log.info(f"Saved profile {written} with {len(selected_paths)} preset(s)")
 
     def _preset_item_for_path(self, path: Path) -> PresetItem:
         path = Path(path)
@@ -695,17 +695,17 @@ class MainController(QObject):
         self._set_status(summary)
         log.info(summary)
         for csv in outputs:
-            log.info("CSV: %s", csv)
+            log.info(f"CSV: {csv}")
         if result.output_traceability is not None:
-            log.info("Traceability: %s", result.output_traceability)
+            log.info(f"Traceability: {result.output_traceability}")
         if result.output_warnings is not None:
-            log.info("Warnings report: %s", result.output_warnings)
+            log.info(f"Warnings report: {result.output_warnings}")
 
     def _on_process_failed(self, tb: str) -> None:
         self._set_running(False)
         last = tb.strip().splitlines()[-1] if tb.strip() else "Processing failed"
         self._set_status("Failed")
-        log.error("Processing failed:\n%s", tb)
+        log.error(f"Processing failed:\n{tb}")
         self._show_error(last)
 
     def _set_running(self, running: bool) -> None:
