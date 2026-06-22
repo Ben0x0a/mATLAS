@@ -34,6 +34,12 @@ ADVICE = "advice"
 # Column names that are row counters, not stable UIDs (used to flag `row_uid`).
 _ROWID_NAMES = {"z_pk", "rowid", "oid", "_id", "id", "pk"}
 
+# A path segment that is a literal UUID — i.e. a hardcoded device/app id that the {uuid}
+# token should generalise.
+_UUID_SEGMENT = re.compile(
+    r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+)
+
 
 @dataclass(frozen=True)
 class LintFinding:
@@ -89,6 +95,9 @@ def lint_spec(spec: PresetSpec, *, preset_label: str | None = None) -> list[Lint
         _check_expected_columns,
         _check_mapped_columns_declared,
         _check_assertions,
+        _check_unfilled_placeholders,
+        _check_literal_uuid_in_path,
+        _check_multi_role,
     ):
         findings.extend(check(spec, label))
     return findings
@@ -99,8 +108,11 @@ def _plain_columns(spec: PresetSpec) -> set[str]:
     names: set[str] = set()
 
     def add(ref) -> None:
-        if ref.kind == "column" and not any(ch in str(ref.arg) for ch in "*?["):
-            names.add(str(ref.arg))
+        arg = str(ref.arg)
+        # Skip TODO placeholders — they are flagged by _check_unfilled_placeholders with a
+        # clearer message, not as a phantom "undeclared column".
+        if ref.kind == "column" and "TODO" not in arg and not any(ch in arg for ch in "*?["):
+            names.add(arg)
 
     if spec.source_record_uid is not None:
         add(spec.source_record_uid.ref)
@@ -209,7 +221,9 @@ def _check_mapped_columns_declared(spec: PresetSpec, label: str) -> list[LintFin
         if not any(fnmatch.fnmatch(name, pattern) for pattern in patterns):
             out.append(LintFinding(
                 WARNING, "mapped-not-declared",
-                f"mapping reads column {name!r}, which is not in expected_columns", label))
+                f"mapping reads column {name!r}, which is not in expected_columns — likely a typo "
+                f"or a missing declaration; an unknown column resolves to None silently, so fix "
+                f"the name or add it to expected_columns", label))
     return out
 
 
@@ -222,13 +236,20 @@ def _check_assertions(spec: PresetSpec, label: str) -> list[LintFinding]:
         if ("latitude_wgs84" in fields) != ("longitude_wgs84" in fields):
             out.append(LintFinding(
                 WARNING, "half-coordinate",
-                "only one of latitude_wgs84/longitude_wgs84 is mapped", label, f"{where}.position"))
+                "only one of latitude_wgs84/longitude_wgs84 is mapped — a point needs both; map "
+                "the missing one or drop the partial coordinate", label, f"{where}.position"))
         # An assertion's three links are its semantics; a missing one is incomplete.
+        _link_example = {
+            "entity_position": "at", "entity_time": "observed_at", "spatial_temporal": "instant",
+        }
         for link in ("entity_position_link", "entity_time_link", "spatial_temporal_link"):
             if link not in fields:
+                edge = link.replace("_link", "")
                 out.append(LintFinding(
                     WARNING, "missing-link",
-                    f"assertion has no {link.replace('_link', '')} link", label, f"{where}.links"))
+                    f"assertion declares no {edge} link — that edge's meaning is undefined; add it "
+                    f"under links (e.g. {edge}: {_link_example[edge]}) so the row is interpretable",
+                    label, f"{where}.links"))
         # A naive strptime parsed as UTC is a silent trap for non-UTC exports.
         for time in tmpl.temporal:
             if time.format and time.zone is None and "%z" not in time.format:
@@ -237,3 +258,83 @@ def _check_assertions(spec: PresetSpec, label: str) -> list[LintFinding]:
                     "time uses format without a zone or %z; values are parsed as UTC — "
                     "declare zone if the source is not UTC", label, f"{where}.time"))
     return out
+
+
+def _author_values(spec: PresetSpec) -> list[tuple[str, str]]:
+    """Every author-supplied string (with a location label) that could hold a placeholder:
+    selector values + all reference args + timestamp formats."""
+    out: list[tuple[str, str]] = []
+
+    def addref(ref, where: str) -> None:
+        out.append((str(ref.arg), where))
+
+    for selector in spec.input_selectors:
+        for value, key in (
+            (selector.name, "name"), (selector.path, "path"), (selector.table, "table"),
+            (selector.sql, "sql"), (selector.sheet, "sheet"),
+        ):
+            if value:
+                out.append((str(value), f"input_selector.{key}"))
+    if spec.source_record_uid is not None:
+        addref(spec.source_record_uid.ref, "source_record_uid")
+    for field in spec.common:
+        addref(field.ref, f"common.{field.model_field}")
+    for index, tmpl in enumerate(spec.assertions):
+        for field in tmpl.fields:
+            addref(field.ref, f"assertions[{index}].{field.model_field}")
+        for time in tmpl.temporal:
+            addref(time.lower, f"assertions[{index}].time")
+            addref(time.upper, f"assertions[{index}].time")
+            if time.format:
+                out.append((time.format, f"assertions[{index}].time.format"))
+            if time.zone is not None:
+                addref(time.zone.ref, f"assertions[{index}].time.zone")
+            for override in time.overrides:
+                addref(override.ref, f"assertions[{index}].{override.model_field}")
+    return out
+
+
+def _check_unfilled_placeholders(spec: PresetSpec, label: str) -> list[LintFinding]:
+    """A generated starter still carrying a TODO placeholder must not be run as-is."""
+    out: list[LintFinding] = []
+    seen: set[tuple[str, str]] = set()
+    for value, where in _author_values(spec):
+        # Dedup per (value, location) so every distinct field carrying a TODO is surfaced
+        # — identical placeholders in different fields are each the analyst's to fill.
+        if "TODO" in value and (value, where) not in seen:
+            seen.add((value, where))
+            out.append(LintFinding(
+                WARNING, "unfilled-placeholder",
+                f"{value!r} is still a generator TODO placeholder — replace it with the real "
+                f"column/value before use (the parser leaves every mapping to the analyst)",
+                label, where))
+    return out
+
+
+def _check_literal_uuid_in_path(spec: PresetSpec, label: str) -> list[LintFinding]:
+    """A hardcoded UUID in a selector path only matches the one acquisition it was copied
+    from — the {uuid} token generalises it across devices/apps."""
+    out: list[LintFinding] = []
+    for selector in spec.input_selectors:
+        if not selector.path:
+            continue
+        for segment in selector.path.replace("\\", "/").split("/"):
+            if _UUID_SEGMENT.match(segment):
+                out.append(LintFinding(
+                    WARNING, "literal-uuid-in-path",
+                    f"selector path hardcodes a UUID segment {segment!r}; it will only match "
+                    f"this one acquisition — use the {{uuid}} token instead",
+                    label, "input_selector.path"))
+                break
+    return out
+
+
+def _check_multi_role(spec: PresetSpec, label: str) -> list[LintFinding]:
+    """Distinct roles mean a multi-source (AND) join, which needs the python extract
+    engine — not yet implemented, so flag it rather than let it fail only at run time."""
+    if len(spec.roles) > 1:
+        return [LintFinding(
+            WARNING, "multi-role-unsupported",
+            f"preset declares multiple roles {list(spec.roles)} (multi-source AND); this needs "
+            f"a python extract engine, which is not yet implemented", label, "input_selector")]
+    return []
