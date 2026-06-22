@@ -114,3 +114,45 @@ def test_lint_paths_over_shipped_presets_has_no_errors() -> None:
     findings = lint_paths([presets_dir])
     errors = [f for f in findings if f.severity == ERROR]
     assert errors == [], f"shipped presets have lint errors: {[f.format() for f in errors]}"
+
+
+# --- new-schema checks ----------------------------------------------------
+
+def test_clean_preset_is_free_of_new_warnings() -> None:
+    codes = _codes(lint_spec(_spec(_CLEAN)), WARNING)
+    assert {"unfilled-placeholder", "literal-uuid-in-path", "multi-role-unsupported"} & codes == set()
+
+
+def test_unfilled_placeholder_is_flagged() -> None:
+    text = _CLEAN.replace("longitude_wgs84: column(Lon)", 'longitude_wgs84: column("TODO")')
+    findings = lint_spec(_spec(text))
+    assert "unfilled-placeholder" in _codes(findings, WARNING)
+
+
+def test_literal_uuid_in_path_is_flagged() -> None:
+    text = _CLEAN.replace(
+        "input_selector: {format: csv, name: c.csv}",
+        "input_selector: {format: sqlite, "
+        "path: '/private/var/mobile/Containers/Data/Application/"
+        "005DDA28-C17A-4079-BBB6-E6255870D163/Documents/store.sqlite', table: T}",
+    )
+    assert "literal-uuid-in-path" in _codes(lint_spec(_spec(text)), WARNING)
+
+
+def test_uuid_token_in_path_is_not_flagged() -> None:
+    text = _CLEAN.replace(
+        "input_selector: {format: csv, name: c.csv}",
+        "input_selector: {format: sqlite, "
+        "path: '/private/var/mobile/Containers/Data/Application/{uuid}/Documents/store.sqlite', table: T}",
+    )
+    assert "literal-uuid-in-path" not in _codes(lint_spec(_spec(text)))
+
+
+def test_multi_role_preset_is_flagged() -> None:
+    text = _CLEAN.replace(
+        "input_selector: {format: csv, name: c.csv}",
+        "input_selector:\n"
+        "  - {role: messages, format: csv, name: a.csv}\n"
+        "  - {role: account, format: csv, name: b.csv}\n",
+    )
+    assert "multi-role-unsupported" in _codes(lint_spec(_spec(text)), WARNING)

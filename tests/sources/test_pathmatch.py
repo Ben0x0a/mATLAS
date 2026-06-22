@@ -58,3 +58,54 @@ def test_double_star_rejected() -> None:
 def test_bad_placeholder_rejected() -> None:
     with pytest.raises(ValueError):
         validate_selector_path("/a/{id}/c")
+
+
+# --- depth window edge cases ----------------------------------------------
+
+def test_depth_zero_is_strict_no_prefix_skip() -> None:
+    assert path_matches("/private/x", PurePosixPath("private/x"), root_prefix_depth=0)
+    assert not path_matches("/private/x", PurePosixPath("filesystem1/private/x"), root_prefix_depth=0)
+
+
+def test_depth_two_allows_two_segment_prefix() -> None:
+    assert path_matches("/private/x", PurePosixPath("a/b/private/x"), root_prefix_depth=2)
+    assert not path_matches("/private/x", PurePosixPath("a/b/c/private/x"), root_prefix_depth=2)
+
+
+def test_selector_backslashes_are_normalised() -> None:
+    assert path_matches("\\private\\x", PurePosixPath("filesystem1/private/x"))
+
+
+def test_uuid_token_with_real_app_container_path() -> None:
+    sel = "/private/var/mobile/Containers/Data/Application/{uuid}/Documents/store.sqlite"
+    good = PurePosixPath(
+        "filesystem1/private/var/mobile/Containers/Data/Application/"
+        "005DDA28-C17A-4079-BBB6-E6255870D163/Documents/store.sqlite"
+    )
+    bad = PurePosixPath(
+        "filesystem1/private/var/mobile/Containers/Data/Application/"
+        "not-a-uuid/Documents/store.sqlite"
+    )
+    assert path_matches(sel, good)
+    assert not path_matches(sel, bad)
+
+
+def test_name_matches_rejects_directory_component() -> None:
+    assert name_matches("Cache.sqlite", PurePosixPath("a/b/Cache.sqlite"))
+    assert not name_matches("b/Cache.sqlite", PurePosixPath("a/b/Cache.sqlite"))
+
+
+# --- case sensitivity is deliberate (forensic correctness) ----------------
+# Source filesystems (iOS/Android) are case-sensitive, and a differently-cased
+# basename may be a genuinely different artifact, so matching is case-sensitive by
+# design — for both `name` and `path`. A mismatch is a clean miss (reported as
+# unmatched), the analyst's call to fix, never a silent wrong-file match.
+
+def test_name_match_is_case_sensitive() -> None:
+    assert name_matches("Cache.sqlite", PurePosixPath("a/Cache.sqlite"))
+    assert not name_matches("Cache.sqlite", PurePosixPath("a/cache.sqlite"))
+
+
+def test_path_match_is_case_sensitive() -> None:
+    assert path_matches("/private/Cache.sqlite", PurePosixPath("filesystem1/private/Cache.sqlite"))
+    assert not path_matches("/private/Cache.sqlite", PurePosixPath("filesystem1/private/cache.sqlite"))
