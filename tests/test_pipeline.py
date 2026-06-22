@@ -13,9 +13,9 @@ from model_atlas.pipeline import process
 
 _PRESET = """
 preset: {id: t.t, name: T, version: 1.0, tier: secondary}
-match: {type: csv, as_file: data.csv}
+input_selector: {format: csv, name: data.csv}
 expected_columns: [Lat, Lon, TS, Loc, Item, Notes, Gone]
-record_uid: column(Item)
+source_record_uid: column(Item)
 common: {entity: const(device), input_record_id: column(Loc)}
 assertions:
   - position: {latitude_wgs84: column(Lat), longitude_wgs84: column(Lon)}
@@ -72,8 +72,8 @@ def test_pipeline_prov_traceability(tmp_path: Path) -> None:
 
 _PRESET_B = """
 preset: {id: t.u, name: U, version: 1.0, tier: secondary}
-match: {type: csv, as_file: other.csv}
-record_uid: column(Item)
+input_selector: {format: csv, name: other.csv}
+source_record_uid: column(Item)
 common: {entity: const(device), input_record_id: column(Loc)}
 assertions:
   - position: {latitude_wgs84: column(Lat), longitude_wgs84: column(Lon)}

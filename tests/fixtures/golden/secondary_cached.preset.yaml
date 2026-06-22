@@ -1,5 +1,5 @@
-# Golden fixture: a SECONDARY (tool export) preset that maps record_uid to the tool's
-# own id column, so record_uid is the tool value verbatim.
+# Golden fixture: a SECONDARY (tool export) preset that maps source_record_uid to the tool's
+# own id column, so source_record_uid is the tool value verbatim.
 preset:
   id: golden.secondary.cached
   name: Golden Secondary Cached
@@ -9,9 +9,9 @@ preset:
   version: 1.0
   tier: secondary
 
-match:
-  type: csv
-  as_file: cached.csv
+input_selector:
+  format: csv
+  name: cached.csv
 
 expected_columns:
   - Latitude
@@ -23,7 +23,7 @@ expected_columns:
   - Location
   - "Item ID"
 
-record_uid: 'column("Item ID")'
+source_record_uid: 'column("Item ID")'
 
 common:
   entity:          const(device)

@@ -2,12 +2,12 @@
 
 Runs ``process()`` end-to-end on tiny committed fixtures and compares the produced
 CSV byte-for-byte against a committed expected CSV. This is a safeguard: any change
-that alters the output — a renamed column (e.g. record_uid), a new/removed column, a
+that alters the output — a renamed column (e.g. source_record_uid), a new/removed column, a
 reordering, or a changed value — fails here with a readable diff, so output-shape
 drift across script versions is caught deliberately rather than silently.
 
-Covers both UID modes: SECONDARY (record_uid mapped to the tool's id, verbatim) and
-PRIMARY (record_uid generated as a deterministic, content-addressed uuid5).
+Covers both UID modes: SECONDARY (source_record_uid mapped to the tool's id, verbatim) and
+PRIMARY (source_record_uid generated as a deterministic, content-addressed uuid5).
 
 To intentionally update the goldens after a reviewed change:
     MATLAS_REGEN_GOLDEN=1 pytest tests/test_golden_pipeline.py
@@ -59,13 +59,18 @@ def _diff_report(expected: str, actual: str) -> str:
 @pytest.mark.parametrize("case", _CASES)
 def test_pipeline_output_matches_golden(case: str, tmp_path: Path) -> None:
     produced = tmp_path / "out.csv"
+    input_path = _GOLDEN / "cached.csv"
     process(
-        _GOLDEN / "cached.csv",
+        input_path,
         _GOLDEN / f"{case}_cached.preset.yaml",
         produced,
         linked_entity="subject",
     )
     actual = produced.read_text(encoding="utf-8")
+    # §7.1: input_file_path is the full filesystem path of the opened artifact, which is
+    # machine-specific. Assert it appears, then normalise it so the golden stays portable.
+    assert str(input_path) in actual
+    actual = actual.replace(str(input_path), "<input_file_path>")
     golden = _GOLDEN / f"expected_{case}.csv"
 
     if os.environ.get("MATLAS_REGEN_GOLDEN"):
@@ -88,7 +93,7 @@ def test_golden_uid_modes_differ() -> None:
 
     def first_uid(case: str) -> str:
         with (_GOLDEN / f"expected_{case}.csv").open(encoding="utf-8", newline="") as f:
-            return next(csv.DictReader(f))["record_uid"]
+            return next(csv.DictReader(f))["source_record_uid"]
 
     secondary, primary = first_uid("secondary"), first_uid("primary")
     assert secondary == "1001"                    # the tool's Item ID, verbatim

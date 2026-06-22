@@ -1,6 +1,6 @@
 """Tests for the v3 assembly engine (transforms.assemble).
 
-Covers fan-out across assertions, NaN normalisation, record_uid sourcing +
+Covers fan-out across assertions, NaN normalisation, source_record_uid sourcing +
 uniqueness guard, glob columns, header() timezone capture, unit conversion + inferred
 cast, regex extract, and lat/lon source-field capture.
 Used by:    pytest.
@@ -17,12 +17,12 @@ import yaml
 from model_atlas.presets.spec import preset_spec_from_yaml
 from model_atlas.transforms.assemble import BuildEnv, build_rows, to_records
 
-_ENV = BuildEnv(input_file="v.csv", source_fingerprint="fp123", source_file_path="/dev/file", source_tier="secondary")
+_ENV = BuildEnv(input_file_path="/dev/v.csv", input_file_name="v.csv", source_fingerprint="fp123", source_file_path="/dev/file", source_tier="secondary")
 
 _VISITS = """
 preset: {id: t.visits, name: Visits, version: 1.0, tier: secondary}
-match: {type: csv, as_file: v.csv}
-record_uid: column(ItemID)
+input_selector: {format: csv, name: v.csv}
+source_record_uid: column(ItemID)
 common:
   entity: const(device)
   input_record_id: column(Loc)
@@ -53,7 +53,9 @@ def test_two_assertions_share_source_row_id_and_capture_provenance() -> None:
     assert warnings == []
     assert len(frame) == 2
     interval, instant = frame.iloc[0], frame.iloc[1]
-    assert interval["record_uid"] == instant["record_uid"] == "A1"
+    assert interval["source_record_uid"] == instant["source_record_uid"] == "A1"
+    # row_uid differs per output row even though they share the source record.
+    assert interval["row_uid"] != instant["row_uid"]
     assert interval["latitude_wgs84"] == 1.5 and interval["longitude_wgs84"] == 2.5   # inferred float cast
     assert interval["time_lower_unix_us"] == 100 and interval["time_upper_unix_us"] == 200  # raw us
     assert interval["spatial_temporal_link"] == "continuous_during_interval"
@@ -87,39 +89,55 @@ def test_to_records_normalises_nan_to_none() -> None:
     assert records[1]["a"] is None and records[1]["b"] is None
 
 
-def test_uniqueness_guard_fires_on_coarse_input_record_id() -> None:
-    # No record_uid mapped, so the UID is generated over input_record_id (here mapped to a
-    # non-unique Loc column) — two identical Loc values must collide and raise.
-    no_uid = _VISITS.replace("record_uid: column(ItemID)\n", "")
+def test_uniqueness_guard_fires_on_mapped_duplicate_source_record_uid() -> None:
+    # A preset that MAPS source_record_uid to a non-unique column is an authoring error: two
+    # rows sharing that "stable id" must raise (do not silently merge evidence).
     records = [
-        {"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1", "Loc": "SAME"},
-        {"Lat": "3", "Lon": "4", "Entry": "1", "Exit": "2", "Created": "1", "Loc": "SAME"},
+        {"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1", "Loc": "L1", "ItemID": "DUP"},
+        {"Lat": "3", "Lon": "4", "Entry": "1", "Exit": "2", "Created": "1", "Loc": "L2", "ItemID": "DUP"},
     ]
     with pytest.raises(ValueError, match="not unique"):
-        build_rows(records, _preset(no_uid), _ENV)
+        build_rows(records, _preset(_VISITS), _ENV)
 
 
-def test_generated_uid_is_unique_per_row_without_mapping() -> None:
-    # No record_uid and no mapped input_record_id: the engine falls back to the row ordinal,
-    # so distinct rows get distinct, deterministic UIDs (no collision).
-    text = _VISITS.replace("record_uid: column(ItemID)\n", "").replace("  input_record_id: column(Loc)\n", "")
+def test_generated_uid_disambiguates_identical_rows_by_record_number() -> None:
+    # No source_record_uid mapped and IDENTICAL row data: the generated UID is keyed on the
+    # physical source record number, so the two records still get distinct UIDs (no crash),
+    # and every output row gets a distinct row_uid.
+    text = _VISITS.replace("source_record_uid: column(ItemID)\n", "").replace("  input_record_id: column(Loc)\n", "")
     records = [
         {"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1"},
-        {"Lat": "3", "Lon": "4", "Entry": "1", "Exit": "2", "Created": "1"},
+        {"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1"},   # identical data
     ]
     frame, _ = build_rows(records, _preset(text), _ENV)
-    uids = set(frame["record_uid"])
-    assert len(uids) == 2  # one uid per source row, shared across its two assertions
-    # Deterministic: a re-run yields the same ids.
+    assert list(frame["source_record_number"]) == [1, 1, 2, 2]  # 1-based, two assertions per record
+    assert len(set(frame["source_record_uid"])) == 2   # disambiguated by record number
+    assert len(set(frame["row_uid"])) == 4             # every output row distinct
+    # Deterministic: a re-run yields the same ids (both columns).
     frame2, _ = build_rows(records, _preset(text), _ENV)
-    assert list(frame["record_uid"]) == list(frame2["record_uid"])
+    assert list(frame["source_record_uid"]) == list(frame2["source_record_uid"])
+    assert list(frame["row_uid"]) == list(frame2["row_uid"])
+
+
+def test_row_uid_is_content_addressed() -> None:
+    # row_uid folds in the row's own data: changing a cell changes that row's row_uid,
+    # while a row whose data is unchanged keeps its row_uid.
+    text = _VISITS.replace("source_record_uid: column(ItemID)\n", "")
+    base = [{"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1", "Loc": "A"},
+            {"Lat": "9", "Lon": "8", "Entry": "1", "Exit": "2", "Created": "1", "Loc": "B"}]
+    changed = [dict(base[0]), {**base[1], "Lat": "7"}]   # second record's Lat edited
+    frame_a, _ = build_rows(base, _preset(text), _ENV)
+    frame_b, _ = build_rows(changed, _preset(text), _ENV)
+    # Record 0 is untouched -> same row_uids; record 1's data changed -> different row_uids.
+    assert list(frame_a["row_uid"])[:2] == list(frame_b["row_uid"])[:2]
+    assert list(frame_a["row_uid"])[2:] != list(frame_b["row_uid"])[2:]
 
 
 _WILDCARD = """
 preset: {id: t.wc, name: WC, version: 1.0, tier: secondary}
-match: {type: csv, as_file: w.csv}
+input_selector: {format: csv, name: w.csv}
 patterns: {tz: "(?P<z>UTC[+-][0-9]{2}:[0-9]{2})"}
-record_uid: column(ItemID)
+source_record_uid: column(ItemID)
 common: {entity: const(device), input_record_id: column(Loc)}
 assertions:
   - position: {latitude_wgs84: column(Lat)}
@@ -152,9 +170,9 @@ def test_ambiguous_glob_is_a_hard_error() -> None:
 
 _UNITS = """
 preset: {id: t.u, name: U, version: 1.0, tier: secondary}
-match: {type: csv, as_file: u.csv}
+input_selector: {format: csv, name: u.csv}
 patterns: {coords: "(?P<lat>-?[0-9.]+) - (?P<lon>-?[0-9.]+)"}
-record_uid: column(ItemID)
+source_record_uid: column(ItemID)
 common: {entity: const(device)}
 assertions:
   - position:

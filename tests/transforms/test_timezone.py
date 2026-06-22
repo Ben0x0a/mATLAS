@@ -13,9 +13,9 @@ from model_atlas.pipeline import process
 
 _PRESET = """
 preset: {id: t.tz, name: TZ, version: 1.0, tier: secondary}
-match: {type: csv, as_file: tz.csv}
+input_selector: {format: csv, name: tz.csv}
 patterns: {tz: "(?P<z>UTC[+-]\\\\d{2}:\\\\d{2})"}
-record_uid: column(Item)
+source_record_uid: column(Item)
 assertions:
   - position: {latitude_wgs84: column(Lat)}
     time:

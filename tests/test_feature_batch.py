@@ -1,9 +1,9 @@
 """Tests for the feature batch: temp staging, force-preset, from_file mapping,
-entity/linked_entity run-level defaults, selector OR-matching, and a synthetic
-SQLite round-trip (regression guard for the Windows connection-close fix).
+entity/linked_entity run-level defaults, and a synthetic SQLite round-trip (regression
+guard for the Windows connection-close fix).
 
 Used by:    pytest.
-Depends on: pipeline, presets.matcher, models, sqlite (via the adapter), pandas.
+Depends on: pipeline, sources.discover, sqlite reader, pandas.
 """
 from __future__ import annotations
 
@@ -12,16 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from model_atlas.models import DiscoveredElement, ElementType
-from model_atlas.presets.matcher import _matches_sqlite
 from model_atlas.pipeline import process
 
 # A CSV preset whose selector intentionally points at a DIFFERENT file name, so it
 # only runs under force-preset mode.
 _PRESET_OTHER_NAME = """
 preset: {id: t.t, name: T, version: 1.0, tier: secondary}
-match: {type: csv, as_file: "does-not-match.csv"}
-record_uid: column(Item)
+input_selector: {format: csv, name: "does-not-match.csv"}
+source_record_uid: column(Item)
 common:
   input_record_id: filename(name)
   source_label: filename(stem)
@@ -120,64 +118,10 @@ def test_preset_entity_used_when_no_arg(tmp_path: Path) -> None:
     assert row["entity"] == "preset-entity"
 
 
-def _zip_element(archive: str, internal_path: str) -> DiscoveredElement:
-    """SQLite discovered inside a ZIP: path is the archive, original path is internal."""
-    name = Path(internal_path).name
-    return DiscoveredElement(
-        source_type=ElementType.SQLITE,
-        path=Path(archive),
-        source_file=f"{Path(archive).name}::{internal_path.lstrip('/')}",
-        source_original_path=internal_path,
-        logical_name=name,
-        preview_supported=False,
-    )
-
-
-def _direct_element(db_path: str) -> DiscoveredElement:
-    """SQLite discovered as a direct file: original path equals the on-disk path."""
-    return DiscoveredElement(
-        source_type=ElementType.SQLITE,
-        path=Path(db_path),
-        source_file=Path(db_path).name,
-        source_original_path=db_path,
-        logical_name=Path(db_path).name,
-    )
-
-
-_BOTH_SELECTOR = {
-    "source_type": "sqlite",
-    "file_name": "Cache.sqlite",
-    "db_relpath": "/private/var/mobile/Library/Caches/com.apple.routined/Cache.sqlite",
-}
-
-
-def test_zip_source_matches_on_db_relpath() -> None:
-    element = _zip_element(
-        "/evidence/dump.zip",
-        "/private/var/mobile/Library/Caches/com.apple.routined/Cache.sqlite",
-    )
-    assert _matches_sqlite(_BOTH_SELECTOR, element) is True
-
-
-def test_zip_source_does_not_match_other_cache_sqlite() -> None:
-    """The collision guard: a different app's Cache.sqlite inside the ZIP must NOT
-    match, even though the bare file name is identical."""
-    element = _zip_element(
-        "/evidence/dump.zip",
-        "/private/var/mobile/Containers/Data/Application/XYZ/Library/Caches/Cache.sqlite",
-    )
-    assert _matches_sqlite(_BOTH_SELECTOR, element) is False
-
-
-def test_direct_file_matches_on_filename() -> None:
-    element = _direct_element("/tmp/Cache.sqlite")
-    assert _matches_sqlite(_BOTH_SELECTOR, element) is True
-
-
 _SQLITE_PRESET = """
 preset: {id: t.s, name: S, version: 1.0, tier: secondary}
-match: {type: sqlite, as_file: loc.sqlite, table: LOCATIONS}
-record_uid: column(id)
+input_selector: {format: sqlite, name: loc.sqlite, table: LOCATIONS}
+source_record_uid: column(id)
 common: {entity: const(device)}
 assertions:
   - position: {latitude_wgs84: column(lat), longitude_wgs84: column(lon)}
@@ -212,7 +156,7 @@ def test_discovery_never_creates_sidecars_next_to_original(tmp_path: Path) -> No
     """A WAL-mode database must not gain -wal/-shm/-journal siblings when mATLAS reads
     it: the original evidence is opened immutably, never mutated. Regression guard for
     the discovery probe (mode=ro alone leaks sidecars; immutable=1 does not)."""
-    from model_atlas.sources.folder import discover_elements
+    from model_atlas.sources.discover import discover
 
     db = tmp_path / "loc.sqlite"
     conn = sqlite3.connect(db)
@@ -228,9 +172,9 @@ def test_discovery_never_creates_sidecars_next_to_original(tmp_path: Path) -> No
     for suffix in ("-wal", "-shm", "-journal"):
         db.with_name(db.name + suffix).unlink(missing_ok=True)
 
-    elements = discover_elements(db)
+    files = discover(db)
 
-    assert len(elements) == 1
+    assert len(files) == 1
     for suffix in ("-wal", "-shm", "-journal"):
         sidecar = db.with_name(db.name + suffix)
         assert not sidecar.exists(), f"discovery created {sidecar.name} next to the original"

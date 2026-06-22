@@ -1,6 +1,6 @@
-# Golden fixture: a PRIMARY preset with NO record_uid, so the engine generates a
-# deterministic, content-addressed uuid5 (fingerprint | raw_source_path | input_file |
-# input_record_id). input_record_id is unmapped here, so it defaults to "#<ordinal>".
+# Golden fixture: a PRIMARY preset with NO source_record_uid, so the engine generates a
+# deterministic, content-addressed uuid5 (fingerprint | raw_source_path | input_record_id).
+# input_record_id is unmapped here, so it defaults to "#<ordinal>".
 preset:
   id: golden.primary.cached
   name: Golden Primary Cached
@@ -9,9 +9,9 @@ preset:
   version: 1.0
   tier: primary
 
-match:
-  type: csv
-  as_file: cached.csv
+input_selector:
+  format: csv
+  name: cached.csv
 
 expected_columns:
   - Latitude

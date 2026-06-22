@@ -70,7 +70,7 @@ def test_axiom_model_parser_writes_valid_template(tmp_path: Path) -> None:
     assert data["preset"]["id"] == "ios.axiom.example_sheet"
     assert data["preset"]["name"] == "Example Sheet"
     assert data["preset"]["os"] == "iOS" and data["preset"]["tool"] == "AXIOM"
-    assert data["match"] == {"type": "csv", "as_file": "Example Sheet.csv", "encoding": "utf-8-sig"}
+    assert data["input_selector"] == {"format": "csv", "name": "Example Sheet.csv", "encoding": "utf-8-sig"}
     # The full attribute inventory is declared up front, before the mapping.
     assert data["expected_columns"] == ["Created Date/Time - UTC", "Origin Latitude", "Origin Longitude"]
     assertion = data["assertions"][0]
@@ -99,7 +99,7 @@ def test_axiom_model_parser_diffs_expected_columns(tmp_path: Path) -> None:
     presets.mkdir()
     existing = """
 preset: {id: ios.axiom.example_sheet, name: Example Sheet, os: iOS, tool: AXIOM, version: 1.0, tier: secondary}
-match: {type: csv, as_file: "Example Sheet.csv"}
+input_selector: {format: csv, name: "Example Sheet.csv"}
 expected_columns: [Timestamp, Latitude]
 assertions:
   - position: {latitude_wgs84: 'column("Latitude")'}

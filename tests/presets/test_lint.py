@@ -16,9 +16,9 @@ from model_atlas.presets.spec import preset_spec_from_yaml
 
 _CLEAN = """
 preset: {id: ios.demo.clean, name: Clean, os: iOS, tool: AXIOM, os_version: ">=15", version: 1.0, tier: secondary}
-match: {type: csv, as_file: c.csv}
+input_selector: {format: csv, name: c.csv}
 expected_columns: [Lat, Lon, TS, Loc, "Item ID", Source]
-record_uid: 'column("Item ID")'
+source_record_uid: 'column("Item ID")'
 common: {entity: const(device), input_record_id: column(Loc), raw_source_path: column(Source)}
 assertions:
   - position: {latitude_wgs84: column(Lat), longitude_wgs84: column(Lon)}
@@ -43,14 +43,14 @@ def test_clean_preset_has_no_errors_or_warnings() -> None:
 
 def test_unparseable_preset_yields_one_error(tmp_path: Path) -> None:
     bad = tmp_path / "bad.yaml"
-    bad.write_text("preset: {id: x.y, name: N, version: 1.0}\nmatch: {type: parquet}\n", encoding="utf-8")
+    bad.write_text("preset: {id: x.y, name: N, version: 1.0}\ninput_selector: {format: parquet, name: x.csv}\n", encoding="utf-8")
     findings = lint_file(bad)
     assert [f.severity for f in findings] == [ERROR]
     assert findings[0].code == "parse-error"
 
 
 def test_rowid_as_uid_warns() -> None:
-    text = _CLEAN.replace("record_uid: 'column(\"Item ID\")'", "record_uid: column(Z_PK)")
+    text = _CLEAN.replace("source_record_uid: 'column(\"Item ID\")'", "source_record_uid: column(Z_PK)")
     assert "rowid-as-uid" in _codes(lint_spec(_spec(text)), WARNING)
 
 
