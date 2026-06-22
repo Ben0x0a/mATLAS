@@ -100,18 +100,19 @@ def test_uniqueness_guard_fires_on_mapped_duplicate_source_record_uid() -> None:
         build_rows(records, _preset(_VISITS), _ENV)
 
 
-def test_generated_uid_disambiguates_identical_rows_by_record_number() -> None:
+def test_generated_uid_disambiguates_identical_rows_by_line_number() -> None:
     # No source_record_uid mapped and IDENTICAL row data: the generated UID is keyed on the
-    # physical source record number, so the two records still get distinct UIDs (no crash),
-    # and every output row gets a distinct row_uid.
+    # physical source LINE number (carried by input_record_id's default), so the two records
+    # still get distinct UIDs (no crash), and every output row gets a distinct row_uid.
     text = _VISITS.replace("source_record_uid: column(ItemID)\n", "").replace("  input_record_id: column(Loc)\n", "")
     records = [
         {"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1"},
         {"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1"},   # identical data
     ]
     frame, _ = build_rows(records, _preset(text), _ENV)
-    assert list(frame["source_record_number"]) == [1, 1, 2, 2]  # 1-based, two assertions per record
-    assert len(set(frame["source_record_uid"])) == 2   # disambiguated by record number
+    # input_record_id is the single 1-based source-line column (no separate record number).
+    assert list(frame["input_record_id"]) == ["#1", "#1", "#2", "#2"]
+    assert len(set(frame["source_record_uid"])) == 2   # disambiguated by line number
     assert len(set(frame["row_uid"])) == 4             # every output row distinct
     # Deterministic: a re-run yields the same ids (both columns).
     frame2, _ = build_rows(records, _preset(text), _ENV)

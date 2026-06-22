@@ -27,8 +27,8 @@ from model_atlas.model.families import (
 
 
 def test_output_columns_count_and_uniqueness() -> None:
-    assert len(OUTPUT_COLUMNS) == 46
-    assert len(set(OUTPUT_COLUMNS)) == 46  # no duplicate column names
+    assert len(OUTPUT_COLUMNS) == 45
+    assert len(set(OUTPUT_COLUMNS)) == 45  # no duplicate column names
 
 
 def test_entity_time_link_genesis_for_every_member() -> None:

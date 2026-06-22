@@ -35,12 +35,14 @@ log = logging.getLogger(__name__)
 
 def _input_file_path(file: SourceFile) -> str:
     """Full path of the OUTERMOST on-disk artifact matlas opened: the input archive when
-    reading from one (outermost if nested), else the leaf file's own filesystem path."""
-    outermost = file.containers[0]
-    if isinstance(outermost, ZipContainer) and outermost.path is not None:
-        return str(outermost.path)
-    if isinstance(outermost, FilesystemContainer):
-        return str(outermost.root.joinpath(*file.logical_path.parts))
+    reading from one (outermost if nested — including a zip sitting inside an input
+    folder), else the leaf file's own filesystem path."""
+    for container in file.containers:                       # outermost .. innermost
+        if isinstance(container, ZipContainer) and container.path is not None:
+            return str(container.path)
+    top = file.containers[0]
+    if isinstance(top, FilesystemContainer):
+        return str(top.root.joinpath(*file.logical_path.parts))
     return str(file.logical_path)
 
 

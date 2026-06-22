@@ -215,28 +215,41 @@ heading_deg: { from: column(Raw), pipe: "split(';', index=0) | cast(float)" }
 `regex` requires named groups; the author names which group to extract. Each step
 accepts `on_error=null|raw|error` (default `null`).
 
-## `source_record_uid` and `row_uid`
+## Record identity: `input_record_id`, `source_record_uid`, `row_uid`
 
-Two identifiers — only `source_record_uid` is preset-facing:
+Three columns, three jobs — read them together:
+
+| Column | Granularity | Job |
+| --- | --- | --- |
+| `input_record_id` | one per source line | **Trace back** to the input: which line/record in the source (the 1-based source line number by default, or a mapped tool locator). |
+| `source_record_uid` | one per source line | **Group** output rows that came from the same source record (a record can fan out into several rows, e.g. a trip → start/end). Shared by all of them. |
+| `row_uid` | one per output line | **Distinguish / count** every emitted output row. Unique across the whole output. |
+
+So: `input_record_id` is the human handle back to the source, `source_record_uid` links
+the rows of one source record together, and `row_uid` is the unique key of each output row.
+Only `source_record_uid` is preset-facing (mappable); the other two are engine-set.
 
 - **`source_record_uid`** (optional, mappable) — one UID per SOURCE record, **shared** by
   every output row the record fans out into (e.g. a trip emitting start/end rows). Reference
   a genuine source UID (a tool's Item ID, a real UUID column) when one exists; the value is
   used verbatim so output rows link back to the tool artefact. Omit it for a device DB so
   the engine generates a deterministic, content-addressed UID
-  (`uuid5(content_fingerprint | raw_source_path | source_record_number)`), independent of the
+  (`uuid5(content_fingerprint | raw_source_path | source_line_number)`), independent of the
   input file name/path so the SAME db read from a folder or a zip yields the SAME UID
   (folder == zip parity). A bare rowid (`Z_PK`) is not a stable UID and should not be mapped
   here. A *mapped* duplicate `source_record_uid` across distinct source records is a hard
-  error; the generated one never collides (it is keyed on the unique record number).
-- **`source_record_number`** (engine-only) — the 1-based ordinal of the record within its
-  extracted source. Surfaced as an output column so an analyst can jump straight to the
-  source record, and used as the always-unique disambiguator behind the generated UIDs.
+  error; the generated one never collides (it is keyed on the unique source line number).
 - **`row_uid`** (engine-only, never mapped) — **unique per OUTPUT row**, a deterministic
-  uuid5 over the row's own DATA + `source_record_number` + the output-row ordinal (scoped by
-  the source identity), so it is content-addressed yet the record number keeps two
-  identical-data rows distinct and the output ordinal keeps a record's fan-out rows distinct. Use it to differentiate every
-  emitted row; use `source_record_uid` to group the rows that came from one source record.
+  uuid5 over the output row's own MODEL data + the source line number + the output-row
+  ordinal (scoped by the source identity). It is content-addressed yet always unique: the
+  line number keeps two identical-data records distinct, and the output ordinal keeps a
+  record's fan-out rows distinct (those differ in their model fields anyway). Use it to
+  differentiate every emitted row; use `source_record_uid` to group the rows that came from
+  one source record.
+
+The source's 1-based line number is **not a separate column** — `input_record_id` carries
+it by default (`<table-or-sheet>#<line>`); it is used internally for the UIDs even when a
+preset maps `input_record_id` to a tool locator.
 
 ## `preset(...)` reference
 
@@ -266,5 +279,5 @@ preset targets regardless of how the file was read.
 - A glob must resolve to exactly one source column.
 - A duplicate `source_record_uid` (generated or mapped) across distinct source records is a hard error.
 - Engine-owned columns (the `time_*`, `latitude_source_field`, `longitude_source_field`,
-  `input_file_path`, `source_record_number`, `source_record_uid`, `row_uid`, `preset_id`, `preset_name`, `record_*`) are not assignable
+  `input_file_path`, `source_record_uid`, `row_uid`, `preset_id`, `preset_name`, `record_*`) are not assignable
   in a mapping.

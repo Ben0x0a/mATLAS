@@ -70,6 +70,7 @@ class Container(Protocol):
 
     def files(self) -> Iterable[SourceFile]: ...
     def open(self, file: SourceFile) -> BinaryIO: ...
+    def ondisk_path(self, file: SourceFile) -> "Path | None": ...
     def stage(self, file: SourceFile) -> StagedFile: ...
     def stage_group(
         self, file: SourceFile, sibling_suffixes: tuple[str, ...] = DEFAULT_SIBLING_SUFFIXES
@@ -79,6 +80,36 @@ class Container(Protocol):
 
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+class _ClosingZipStream:
+    """An open zip entry that also closes its parent ``ZipFile`` when closed.
+
+    ``ZipFile.open`` returns a stream over an entry, but closing that stream does NOT
+    close the ``ZipFile`` itself — so a bare ``zf.open(info)`` leaks the archive handle
+    until GC. The matcher and discovery open entries once per candidate file, so on a
+    large acquisition that leak can exhaust file descriptors. This wrapper delegates every
+    stream operation to the entry (preserving its capabilities) and closes both on exit."""
+
+    def __init__(self, inner: BinaryIO, zf: zipfile.ZipFile) -> None:
+        self._inner = inner
+        self._zf = zf
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+    def __enter__(self) -> "_ClosingZipStream":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        self.close()
+        return False
+
+    def close(self) -> None:
+        try:
+            self._inner.close()
+        finally:
+            self._zf.close()
 
 
 # --- Filesystem -----------------------------------------------------------
@@ -105,6 +136,9 @@ class FilesystemContainer:
 
     def open(self, file: SourceFile) -> BinaryIO:
         return self._abspath(file).open("rb")
+
+    def ondisk_path(self, file: SourceFile) -> Path | None:
+        return self._abspath(file)
 
     def stage(self, file: SourceFile) -> StagedFile:
         original = self._abspath(file)
@@ -204,8 +238,15 @@ class ZipContainer:
 
     def open(self, file: SourceFile) -> BinaryIO:
         zf = self._zipfile()
-        info = self._find_info(zf, file.logical_path)
-        return zf.open(info)
+        try:
+            info = self._find_info(zf, file.logical_path)
+            return _ClosingZipStream(zf.open(info), zf)
+        except BaseException:
+            zf.close()
+            raise
+
+    def ondisk_path(self, file: SourceFile) -> Path | None:
+        return None  # a file inside an archive has no independent on-disk path
 
     def _extract_entry(self, zf: zipfile.ZipFile, info: zipfile.ZipInfo, dest: Path) -> str:
         h = hashlib.sha256()

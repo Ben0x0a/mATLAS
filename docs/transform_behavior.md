@@ -31,9 +31,9 @@ For each source row:
 1. Start with every canonical output column set to `None`.
 2. Apply preset `common` fields.
 3. Apply run-level `entity`/`linked_entity` overrides (when supplied).
-4. Set engine provenance: `input_file_path`, `source_record_number` (the record's 1-based
-   ordinal), `preset_id`, `preset_name`; default `raw_source_path` (inner-container logical
-   path) and `source_tier`; default `input_record_id` to `<table-or-sheet>#<ordinal>` when
+4. Set engine provenance: `input_file_path`, `preset_id`, `preset_name`; default
+   `raw_source_path` (inner-container logical path) and `source_tier`; default
+   `input_record_id` to the 1-based source line number `<table-or-sheet>#<line>` when
    unmapped.
 5. Resolve `source_record_uid` (a mapped tool id, verbatim) or generate a deterministic,
    content-addressed UID for the source record.
@@ -91,21 +91,21 @@ lower and upper bounds. An `interval` uses separate `lower`/`upper` column refer
 
 ## Record & row UIDs
 
-Two distinct identifiers:
+Two distinct identifiers, plus the source line number that backs them (carried by
+`input_record_id`, not a separate column):
 
-- **`source_record_number`** — the engine-set 1-based ordinal of the record within its
-  extracted source. Surfaced as a column so an analyst can jump to the record, and the
-  always-unique disambiguator behind the UIDs.
 - **`source_record_uid`** — one per SOURCE record, **shared** by every output row a record
   fans out into. A preset may map it to a genuine source UID (a tool's Item ID); a *mapped*
   value that repeats across distinct records is a hard error (a non-unique "stable id" is a
   preset bug). When the preset maps none, mATLAS generates a deterministic uuid5 from
-  provenance (fingerprint + raw_source_path + source_record_number) — never colliding, since
-  the record number is unique.
-- **`row_uid`** — engine-generated, **unique per OUTPUT row** by construction: a
-  deterministic uuid5 over the row's own DATA + `source_record_number` + the output-row
-  ordinal (scoped by the source identity): content-addressed, yet identical-data rows stay
-  distinct via the record number and a record's fan-out rows via the output ordinal. Never mapped by a preset.
+  provenance (fingerprint + raw_source_path + source line number) — never colliding, since
+  the physical line number is unique (it is used even when `input_record_id` is mapped to a
+  non-unique locator).
+- **`row_uid`** — engine-generated, **unique per OUTPUT row**: a deterministic uuid5 over
+  the output row's own MODEL data + the source line number + the output-row ordinal (scoped
+  by the source identity): content-addressed, yet identical-data records stay distinct via
+  the line number and a record's fan-out rows via the output ordinal (they also differ in
+  their model fields). Never mapped by a preset.
 
 ## Merge And Split Output
 

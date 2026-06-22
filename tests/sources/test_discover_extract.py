@@ -190,3 +190,45 @@ def test_loose_file_container_chain_empty(tmp_path: Path) -> None:
     process(folder, presets, out, linked_entity="subj", traceability_format="prov")
     prov = json.loads(out.with_suffix(".matlas.traceability.json").read_text())
     assert prov["entity"]["matlas:source/0"]["matlas:container_chain"] == []
+
+
+# --- container depth: folder=0, archive input=1 ---------------------------
+
+def test_folder_of_archives_is_descended(tmp_path: Path) -> None:
+    """A folder is depth 0, so at the default depth the zip acquisitions inside it are
+    opened and treated as sources (the bug: a folder of FFS zips must just work)."""
+    db = _make_wal_db(tmp_path / "src")
+    folder = tmp_path / "case"
+    (folder / "devices").mkdir(parents=True)
+    archive = folder / "devices" / "EXTRACTION_FFS.zip"
+    _zip_with_db(archive, db)
+    presets = tmp_path / "p.yaml"
+    presets.write_text(_SQLITE_PRESET_PATH, encoding="utf-8")
+    out = tmp_path / "out.csv"
+
+    result = process(folder, presets, out, linked_entity="subj", traceability_format="prov")
+
+    assert result.row_counts["rows"] == 2                  # descended into the zip in the folder
+    prov = json.loads(out.with_suffix(".matlas.traceability.json").read_text())
+    source = prov["entity"]["matlas:source/0"]
+    assert source["matlas:container_chain"] == ["EXTRACTION_FFS.zip"]
+    assert source["matlas:input_file_path"] == str(archive)  # the zip, not the folder
+
+
+def test_nested_archive_in_zip_not_explored_by_default(tmp_path: Path) -> None:
+    """A direct zip is depth 1, so archives nested inside it are NOT explored at the
+    default depth (nested-archive exploration stays off unless asked for)."""
+    db = _make_wal_db(tmp_path / "src")
+    inner = tmp_path / "inner.zip"
+    _zip_with_db(inner, db)
+    outer = tmp_path / "outer.zip"
+    with zipfile.ZipFile(outer, "w") as zf:
+        zf.write(inner, "filesystem1/private/var/inner.zip")
+    presets = tmp_path / "p.yaml"
+    presets.write_text(_SQLITE_PRESET_PATH, encoding="utf-8")
+    out = tmp_path / "out.csv"
+
+    result = process(outer, presets, out, linked_entity="subj")
+
+    assert result.row_counts["rows"] == 0                  # inner.zip left unopened at depth 1
+    assert result.matched == []

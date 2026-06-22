@@ -11,13 +11,14 @@ raw values and source fields, and the lat/lon source columns, are captured
 automatically so an author can never forget the value<->provenance pairing.
 ``source_record_uid`` is a UID shared by every output row of one source record: the tool's
 own uid when a preset maps ``source_record_uid`` (so the rows link back to the tool
-artefact), else a deterministic uuid5 over the source content fingerprint + path +
-``source_record_number`` (the physical record position) — globally unique and portable; a
-mapped one is guarded for uniqueness. ``source_record_number`` is the 1-based ordinal of the
-record within its extracted source. ``row_uid`` is generated per OUTPUT row (deterministic
-uuid5 over the ROW'S DATA + the source record number + the output ordinal, scoped by the
-source identity): content-addressed, yet the record number keeps identical-data rows
-distinct and the output ordinal keeps a record's fan-out rows distinct.
+artefact), else a deterministic uuid5 over the source content fingerprint + path + the
+physical source line number — globally unique and portable; a
+mapped one is guarded for uniqueness. The 1-based source line number is carried by
+``input_record_id`` (its default ``<table>#<line>``) and used internally for the UIDs.
+``row_uid`` is generated per OUTPUT row (deterministic uuid5 over the output row's MODEL
+data + the source line number + the output ordinal, scoped by the source identity):
+content-addressed, yet the line number keeps identical-data records distinct and the output
+ordinal keeps a record's fan-out rows distinct.
 """
 from __future__ import annotations
 
@@ -222,7 +223,7 @@ def _source_record_uid(
     # — the physical line number is always unique within the source, so identical-data rows
     # never collide.
     identity = "|".join(str(part) for part in (
-        env.source_fingerprint, base.get("raw_source_path"), source_record_number,
+        env.source_fingerprint, base.get("raw_source_path"), source_line_number,
     ))
     return str(uuid.uuid5(_SOURCE_ROW_NAMESPACE, identity)), False
 
@@ -345,19 +346,20 @@ def build_rows(
         # raw_source_path defaults to the inner-container logical path when unmapped.
         if base.get("raw_source_path") is None:
             base["raw_source_path"] = env.raw_source_path
-        # The physical 1-based ordinal of this record within the extracted source — the
-        # analyst's "jump to this record" handle, and the always-unique disambiguator.
-        record_number = position + 1
-        base["source_record_number"] = record_number
-        # input_record_id defaults to "<table-or-sheet>#<number>" when the preset maps none.
+        # The physical 1-based line number of this record within the extracted source. It is
+        # NOT a column (input_record_id carries it by default); it is the always-unique
+        # disambiguator used internally for the UIDs, even when a preset maps input_record_id
+        # to a non-unique tool locator.
+        source_line_number = position + 1
+        # input_record_id defaults to "<table-or-sheet>#<line>" (1-based) when the preset maps none.
         if base.get("input_record_id") is None:
-            base["input_record_id"] = f"{container}#{record_number}" if container else f"#{record_number}"
+            base["input_record_id"] = f"{container}#{source_line_number}" if container else f"#{source_line_number}"
 
         source_record_uid, was_mapped = _source_record_uid(
-            preset, base, record, warnings, resolve, file_values, env, ctx, preset_values, record_number)
-        # Only an explicitly MAPPED source_record_uid can collide: the generated one is
-        # keyed on the unique source record number. A non-unique mapped "stable id" is a
-        # preset authoring error, so flag it loudly rather than silently merge evidence.
+            preset, base, record, warnings, resolve, file_values, env, ctx, preset_values, source_line_number)
+        # Only an explicitly MAPPED source_record_uid can collide: the generated one is keyed
+        # on the unique source line number. A non-unique mapped "stable id" is a preset
+        # authoring error, so flag it loudly rather than silently merge evidence.
         if was_mapped:
             previous = seen_ids.get(source_record_uid)
             if previous is not None and previous != position:
@@ -374,16 +376,12 @@ def build_rows(
             base[name] = record.get(col)
 
         # Each source record fans out into one or more output rows; row_uid uniquely
-        # identifies each. It is a deterministic uuid5 over the ROW'S OWN DATA + the source
-        # record number + the output-row ordinal, scoped by the source identity (fingerprint
-        # + path). Folding in the data makes the id content-addressed; the record number
-        # guarantees uniqueness even for two rows with identical data; the output ordinal
-        # separates the rows one record fans out into. Reproducible across runs and identical
-        # for the same db read from a folder vs a zip.
-        record_digest = "|".join(f"{key}={record[key]!r}" for key in sorted(record, key=str))
-        row_uid_base = (
-            f"{env.source_fingerprint}|{base.get('raw_source_path')}|{record_number}|{record_digest}"
-        )
+        # identifies each. It is a deterministic uuid5 over: the OUTPUT row's own MODEL data
+        # (the assertion content — which differs between a record's fan-out rows), the source
+        # LINE number (input), and the OUTPUT ordinal — scoped by the source identity
+        # (fingerprint + path). Content-addressed yet unique: the line number separates
+        # identical-data records, the output ordinal separates a record's fan-out rows.
+        source_scope = f"{env.source_fingerprint}|{base.get('raw_source_path')}|{source_line_number}"
         output_ordinal = 0
         for template in preset.assertions:
             shared = dict(base)
@@ -399,7 +397,12 @@ def build_rows(
             for time_spec in template.temporal:
                 flat = dict(shared)
                 _apply_time(flat, time_spec, record, warnings, resolve, file_values, env, ctx, preset_values)
-                flat["row_uid"] = str(uuid.uuid5(_OUTPUT_ROW_NAMESPACE, f"{row_uid_base}|{output_ordinal}"))
+                # Content digest over the output row's MODEL fields (excludes volatile
+                # provenance + the ids + untangle ranks); computed now that the row is fully
+                # assembled. Combined with the source scope/line and the output ordinal.
+                content_digest = "|".join(f"{c}={flat.get(c)!r}" for c in _ROW_UID_CONTENT_COLUMNS)
+                flat["row_uid"] = str(uuid.uuid5(
+                    _OUTPUT_ROW_NAMESPACE, f"{source_scope}|{output_ordinal}|{content_digest}"))
                 output_ordinal += 1
                 rows.append(flat)
 

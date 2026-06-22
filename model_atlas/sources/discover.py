@@ -5,8 +5,14 @@ Used by:    the pipeline (replaces the old folder.discover_elements).
 Depends on: container, format_detect.
 
 A folder and an archive are both Containers. ``max_container_depth`` counts ARCHIVE
-NESTING only: ``1`` opens the input archive (or reads the input folder tree) but does
-not descend into archives found inside it; folder-tree depth is unbounded.
+NESTING only. A **folder input is depth 0** (not itself an archive), an **archive input is
+depth 1** (opening it already spends one level). So at the default ``1``:
+  - a folder input is walked AND the archives inside it are opened and treated as
+    acquisitions (depth 0 -> 1), but archives nested inside those are not (would be 2);
+  - a direct archive input is opened (it is depth 1) but archives nested inside it are
+    NOT explored (would be 2) — a direct zip is deliberately not depth 0 so nested-archive
+    exploration stays off by default.
+Folder-tree depth is unbounded throughout (a folder + all subfolders is ONE container).
 """
 from __future__ import annotations
 
@@ -54,9 +60,16 @@ def _walk(
             if head[:4] == b"PK\x03\x04" and detect_format(head, lambda: _peek_zip_names(container, file), file.logical_path.suffix) == "archive":
                 # TODO: zip-bomb max-depth guard — bound total decompressed bytes here.
                 try:
-                    with container.open(file) as fh:
-                        data = fh.read()
-                    nested = ZipContainer(data=data, label=file.name)
+                    # A zip on the filesystem keeps its on-disk path (lazy reads, and the
+                    # path backs input_file_path); a zip nested in another zip has no path,
+                    # so fall back to its decompressed bytes.
+                    disk = container.ondisk_path(file)
+                    if disk is not None:
+                        nested = ZipContainer(path=disk, label=file.name)
+                    else:
+                        with container.open(file) as fh:
+                            data = fh.read()
+                        nested = ZipContainer(data=data, label=file.name)
                     yield from _walk(nested, prefix + (container,), depth + 1, max_container_depth)
                     continue
                 except (OSError, zipfile.BadZipFile):
@@ -76,8 +89,10 @@ def _peek_zip_names(container: Container, file: SourceFile) -> list[str]:
 def discover(input_path: Path, *, max_container_depth: int = 1) -> tuple[SourceFile, ...]:
     input_path = Path(input_path)
     if input_path.is_dir():
+        # A folder is depth 0 (not an archive): at the default depth 1 the archives it
+        # contains are opened and treated as acquisitions.
         top: Container = FilesystemContainer(input_path)
-        files = tuple(_walk(top, (), 1, max_container_depth))
+        files = tuple(_walk(top, (), 0, max_container_depth))
         log.info(f"Discovered {len(files)} file(s) from folder {input_path}")
         return files
     if not input_path.is_file():
