@@ -180,6 +180,12 @@ input_selector:
 expected_columns:
 {cols_block}
 
+# AXIOM embeds the export timezone in each Date/Time header (e.g. "... - UTC+00:00 (dd.MM.yyyy)").
+# This pattern captures that offset so the time block can record/apply it. (A "Local Time"
+# header carries no offset — that needs the device zone in matlas_config.toml, handled later.)
+patterns:
+  tz: '(?P<z>UTC[+-]\\d{{2}}:\\d{{2}})'
+
 # Row-level fields shared by every assertion. Delete those you do not map.
 common:
   entity: const("TODO_device_or_account")        # who/what the rows are about
@@ -200,9 +206,13 @@ assertions:
     # horizontal_speed_kmh: {{ from: column("TODO"), unit: "m/s" }}
     # heading_deg: column("TODO")
   time:
+    # For AXIOM use the wildcard form so it matches any export offset:
+    #   column("Timestamp Date/Time - * (dd.MM.yyyy)")
     instant: column("TODO")
-    format: {_TODO_FORMAT}          # OR replace these two lines with:  epoch: unix_s | unix_ms | cocoa | webkit
-    # zone: const("UTC")            # set if the source timestamps are not UTC
+    format: {_TODO_FORMAT}          # e.g. "%d.%m.%Y %H:%M:%S.%f" for a (dd.MM.yyyy) header; OR use  epoch: unix_s | cocoa | ...
+    # AXIOM Date/Time headers carry the export offset — capture it from the SAME column as
+    # `instant` so UTC+00:00 records utc_offset_hours = 0.0 (and any offset is applied):
+    zone: {{ from: 'header("TODO_same_DateTime_column")', pipe: "regex(tz, group=z)" }}
   links:
     entity_position: at             # at | within_range_of | at_fixed_detector | references | claimed_at | inferred
     entity_time: observed_at        # observed_at | event_at | recorded_at | reported_for | intended_for
@@ -217,6 +227,7 @@ assertions:
 #       lower: column("TODO_start_time")
 #       upper: column("TODO_end_time")
 #     format: {_TODO_FORMAT}
+#     zone: {{ from: 'header("TODO_start_DateTime_column")', pipe: "regex(tz, group=z)" }}
 #   links:
 #     entity_position: at
 #     entity_time: event_at
