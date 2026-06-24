@@ -200,4 +200,4 @@ def test_sqlite_roundtrip_releases_file(tmp_path: Path) -> None:
     assert result.row_counts["rows"] == 1
     row = _read_rows(output)[0]
     assert row["latitude_wgs84"] == "1.5"
-    assert row["time_lower_unix_us"] == "1700000000000000"
+    assert row["time_lower_unix_utc_us"] == "1700000000000000"

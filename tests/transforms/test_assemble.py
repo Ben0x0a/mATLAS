@@ -57,9 +57,9 @@ def test_two_assertions_share_source_row_id_and_capture_provenance() -> None:
     # row_uid differs per output row even though they share the source record.
     assert interval["row_uid"] != instant["row_uid"]
     assert interval["latitude_wgs84"] == 1.5 and interval["longitude_wgs84"] == 2.5   # inferred float cast
-    assert interval["time_lower_unix_us"] == 100 and interval["time_upper_unix_us"] == 200  # raw us
+    assert interval["time_lower_unix_utc_us"] == 100 and interval["time_upper_unix_utc_us"] == 200  # raw us
     assert interval["spatial_temporal_link"] == "continuous_during_interval"
-    assert instant["time_lower_unix_us"] == instant["time_upper_unix_us"] == 150
+    assert instant["time_lower_unix_utc_us"] == instant["time_upper_unix_utc_us"] == 150
     assert instant["entity_time_link"] == "recorded_at"
     assert interval["time_lower_raw"] == "100" and interval["time_lower_source_field"] == "Entry"
     # lat/lon source columns captured automatically.
@@ -156,7 +156,7 @@ def test_glob_column_and_header_capture_timezone() -> None:
     frame, warnings = build_rows(records, _preset(_WILDCARD), _ENV, columns=cols)
     row = frame.iloc[0]
     assert row["time_lower_source_field"] == "Timestamp - UTC+02:00 (dd)"
-    assert row["time_zone"] == "UTC+02:00"
+    assert row["utc_offset_hours"] == 2.0                     # nominal zone as signed-hours float
     assert warnings == []
 
 
@@ -192,5 +192,5 @@ def test_unit_conversion_extract_and_cocoa_epoch() -> None:
     assert row["latitude_wgs84"] == 38.4 and row["longitude_wgs84"] == -0.45
     assert row["latitude_source_field"] == "C" and row["longitude_source_field"] == "C"
     assert row["horizontal_speed_kmh"] == 36.0                  # 10 m/s -> km/h
-    assert row["time_lower_unix_us"] == 978_307_200 * 1_000_000  # cocoa 0
+    assert row["time_lower_unix_utc_us"] == 978_307_200 * 1_000_000  # cocoa 0
     assert warnings == []

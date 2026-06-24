@@ -81,7 +81,7 @@ def test_invalid_edge_value_rejected() -> None:
 
 
 def test_engine_owned_field_not_assignable() -> None:
-    bad = _VALID.replace("latitude_wgs84: column(ZLATITUDE)", "time_lower_unix_us: column(ZLATITUDE)")
+    bad = _VALID.replace("latitude_wgs84: column(ZLATITUDE)", "time_lower_unix_utc_us: column(ZLATITUDE)")
     with pytest.raises(ValueError):
         _parse(bad)
 
