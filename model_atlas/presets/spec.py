@@ -61,8 +61,8 @@ from model_atlas.sources.pathmatch import validate_selector_path
 # ``raw_source_path`` and ``input_record_id`` are intentionally NOT engine-owned: a preset maps
 # them (e.g. AXIOM Source / Location), and the engine only fills a default when it does not.
 _ENGINE_OWNED_FIELDS: frozenset[str] = frozenset({
-    "time_lower_raw", "time_lower_source_field", "time_lower_unix_us",
-    "time_upper_raw", "time_upper_source_field", "time_upper_unix_us",
+    "time_lower_raw", "time_lower_source_field", "time_lower_unix_utc_us",
+    "time_upper_raw", "time_upper_source_field", "time_upper_unix_utc_us",
     "latitude_source_field", "longitude_source_field",
     "input_file_path", "source_record_uid", "row_uid", "preset_id", "preset_name",
     "record_type", "record_rank",
@@ -175,7 +175,7 @@ class TimeSpec:
     upper: Ref
     epoch: str | None = None
     format: str | None = None
-    zone: FieldSpec | None = None   # const or header(...) -> time_zone, applied to parsing
+    zone: FieldSpec | None = None   # const or header(...) -> utc_offset_hours, applied to parsing
     overrides: tuple[FieldSpec, ...] = ()  # other temporal model fields (accuracy, ...)
 
     # compat for reporting._column_refs (it reads lower_column/upper_column)
@@ -336,7 +336,7 @@ def _parse_time(raw: Any, path: Path, patterns: dict[str, str]) -> TimeSpec:
         if not isinstance(interval, dict) or "lower" not in interval or "upper" not in interval:
             raise ValueError(f"{path}: interval needs 'lower' and 'upper'")
         lower, upper = parse_ref(interval["lower"]), parse_ref(interval["upper"])
-    zone = _parse_field("time_zone", raw["zone"], path, patterns) if "zone" in raw else None
+    zone = _parse_field("utc_offset_hours", raw["zone"], path, patterns) if "zone" in raw else None
     overrides = tuple(
         _parse_field(key, value, path, patterns)
         for key, value in raw.items()

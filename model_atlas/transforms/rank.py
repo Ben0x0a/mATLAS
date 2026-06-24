@@ -22,8 +22,8 @@ from model_atlas.model.families import RecordType
 
 log = logging.getLogger(__name__)
 
-_LOWER_US = "time_lower_unix_us"
-_UPPER_US = "time_upper_unix_us"
+_LOWER_US = "time_lower_unix_utc_us"
+_UPPER_US = "time_upper_unix_utc_us"
 _ENTITY = "entity"
 _LOWER_FIELD = "time_lower_source_field"
 _UPPER_FIELD = "time_upper_source_field"
@@ -36,8 +36,8 @@ DEFAULT_RESOLUTION_US = 1_000_000
 
 # Fields that count towards completeness when breaking an accuracy tie.
 _COMPLETENESS_COLUMNS: tuple[str, ...] = (
-    "entity", "linked_entity", "time_lower_raw", "time_lower_unix_us",
-    "time_upper_raw", "time_upper_unix_us", "time_zone", "time_accuracy_us", "temporal_source",
+    "entity", "linked_entity", "time_lower_raw", "time_lower_unix_utc_us",
+    "time_upper_raw", "time_upper_unix_utc_us", "utc_offset_hours", "time_accuracy_us", "temporal_source",
     "latitude_wgs84", "longitude_wgs84", "altitude_m", "raw_position", "position_source",
     "horizontal_accuracy_m", "vertical_accuracy_m", "horizontal_speed_kmh",
     "vertical_speed_kmh", "heading_deg", "heading_accuracy_deg", "beam_azimuth_deg",

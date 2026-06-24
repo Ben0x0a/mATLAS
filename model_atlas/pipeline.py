@@ -19,6 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from model_atlas import reporting
+from model_atlas.config import get_settings
 from model_atlas.export import traceability_path_for, warnings_path_for, write_csv, write_json
 from model_atlas.model.families import OUTPUT_COLUMNS
 from model_atlas.presets.matcher import detect_file_format, match_file
@@ -154,8 +155,9 @@ def process(
     merge: bool = True,
     entity: str | None = None,
     include_source_columns: bool = True,
-    root_prefix_depth: int = 1,
-    max_container_depth: int = 1,
+    root_prefix_depth: int | None = None,
+    max_container_depth: int | None = None,
+    local_zone: str | None = None,
 ) -> ProcessResult:
     """Run the full pipeline.
 
@@ -178,6 +180,15 @@ def process(
                               an ``orig_<col>`` column after the canonical schema. False →
                               canonical columns only.
     """
+    # Per-run args win; otherwise fall back to matlas_config.toml (or built-in defaults).
+    settings = get_settings()
+    if root_prefix_depth is None:
+        root_prefix_depth = settings.discovery.root_prefix_depth
+    if max_container_depth is None:
+        max_container_depth = settings.discovery.max_container_depth
+    if local_zone is None:
+        local_zone = settings.timezone.local_zone
+
     started_at = reporting.now_iso()
     presets = load_preset_specs(presets_path)
     files = discover(input_path, max_container_depth=max_container_depth)
@@ -235,6 +246,7 @@ def process(
             entity=entity,
             linked_entity=linked_entity,
             source_file_name=file.name,
+            local_zone=local_zone,
         )
         frame, frame_warnings = build_rows(
             records, preset, env, selector=selector, columns=list(extracted.source_columns),

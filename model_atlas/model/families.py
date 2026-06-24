@@ -146,7 +146,11 @@ class Temporal:
 
     lower: TemporalBound = field(default_factory=TemporalBound)
     upper: TemporalBound = field(default_factory=TemporalBound)
-    time_zone: str | None = None        # shared by both bounds, e.g. "UTC+00:00"
+    # Shared by both bounds. The nominal ZONE as a signed-hours float (0.0, 2.0, 6.5, -2.5),
+    # NOT the actual UTC offset at the instant: it ignores daylight saving (a zone that is +1
+    # in winter / +2 in summer is recorded by its standard offset). DST-aware resolution of
+    # the true offset is future work.
+    utc_offset_hours: float | None = None
     accuracy_us: int | float | None = None
     temporal_source: str | None = None  # mechanism: NTP, internal_clock, ...
 
@@ -233,11 +237,11 @@ OUTPUT_COLUMNS: tuple[str, ...] = (
     # temporal
     "time_lower_raw",
     "time_lower_source_field",
-    "time_lower_unix_us",
+    "time_lower_unix_utc_us",
     "time_upper_raw",
     "time_upper_source_field",
-    "time_upper_unix_us",
-    "time_zone",
+    "time_upper_unix_utc_us",
+    "utc_offset_hours",
     "time_accuracy_us",
     "temporal_source",
     # spatial
@@ -375,11 +379,11 @@ class SpatioTemporalAssertion:
             "linked_entity": self.entity.linked_entity,
             "time_lower_raw": self.temporal.lower.raw,
             "time_lower_source_field": self.temporal.lower.source_field,
-            "time_lower_unix_us": self.temporal.lower.unix_us,
+            "time_lower_unix_utc_us": self.temporal.lower.unix_us,
             "time_upper_raw": self.temporal.upper.raw,
             "time_upper_source_field": self.temporal.upper.source_field,
-            "time_upper_unix_us": self.temporal.upper.unix_us,
-            "time_zone": self.temporal.time_zone,
+            "time_upper_unix_utc_us": self.temporal.upper.unix_us,
+            "utc_offset_hours": self.temporal.utc_offset_hours,
             "time_accuracy_us": self.temporal.accuracy_us,
             "temporal_source": self.temporal.temporal_source,
             "latitude_wgs84": self.spatial.latitude_wgs84,

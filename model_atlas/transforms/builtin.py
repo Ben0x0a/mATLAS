@@ -71,6 +71,17 @@ def tz_offset_to_hours(value: Any) -> float:
     return sign * (int(match.group(2)) + int(match.group(3) or 0) / 60)
 
 
+def zone_offset_hours_at(zone_name: str, unix_us: int) -> float:
+    """The DST-aware UTC offset (signed hours) of an IANA ``zone_name`` at a given absolute
+    instant. Because the instant is absolute UTC, ``zoneinfo`` gives the exact offset for
+    that date — +1 in winter, +2 in summer for a +1/+2 zone — with no nominal guess."""
+    from zoneinfo import ZoneInfo
+
+    instant = dt.datetime.fromtimestamp(unix_us / 1_000_000, tz=dt.timezone.utc)
+    offset = instant.astimezone(ZoneInfo(zone_name)).utcoffset()
+    return offset.total_seconds() / 3600 if offset is not None else 0.0
+
+
 def parse_datetime_to_us(value: Any, fmt: str, tz_offset_hours: Any = 0.0) -> int | None:
     """Parse a formatted datetime string to Unix microseconds (None -> None).
 
