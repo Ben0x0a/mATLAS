@@ -21,11 +21,11 @@ The current CSV uses snake_case column names.
 | `linked_entity` | string or null | none | Optional secondary entity linked to the assertion. |
 | `time_lower_raw` | source scalar or null | source-defined | Original source value for the lower temporal bound. |
 | `time_lower_source_field` | string or null | source column | Source column that supplied the lower bound. |
-| `time_lower_unix_us` | integer or null | Unix microseconds | Normalized lower temporal bound. |
+| `time_lower_unix_utc_us` | integer or null | Unix microseconds (**UTC**) | Normalized lower temporal bound, in absolute UTC. Local wall-clock = this + `utc_offset_hours`. |
 | `time_upper_raw` | source scalar or null | source-defined | Original source value for the upper temporal bound. |
 | `time_upper_source_field` | string or null | source column | Source column that supplied the upper bound. |
-| `time_upper_unix_us` | integer or null | Unix microseconds | Normalized upper temporal bound. |
-| `time_zone` | string or null | none | Timezone declared or extracted for the temporal value. |
+| `time_upper_unix_utc_us` | integer or null | Unix microseconds (**UTC**) | Normalized upper temporal bound, in absolute UTC. Local wall-clock = this + `utc_offset_hours`. |
+| `utc_offset_hours` | float or null | signed hours | The source's UTC offset as a signed-hours float (`0.0`, `2.0`, `6.5`, `-2.5`), by the ISO convention **local = `time_*_unix_utc_us` (UTC) + `utc_offset_hours`**. It is metadata describing how the absolute UTC instant relates to the source's local wall-clock — `null` when the source zone is unknown. (Currently the nominal offset; DST-aware resolution is future work.) |
 | `time_accuracy_us` | integer or null | microseconds | Temporal uncertainty or resolution when known. |
 | `temporal_source` | string or null | none | Source/mechanism behind the temporal value. |
 | `latitude_wgs84` | float or null | decimal degrees | WGS84 latitude. |

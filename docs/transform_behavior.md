@@ -79,10 +79,14 @@ the value is assumed to already be Unix µs. For `format`, a naive datetime uses
 (a number of hours or an offset string like `"UTC+02:00"`), and a `%z` in the format is
 honoured as parsed.
 
-When the `time` block captures `zone` (a constant, or `header(...)` + `regex` on a
-header), that offset is applied during parsing — so a zone embedded in a column header
-is *applied*, not merely recorded into `time_zone`. An unparseable captured zone is
-ignored (the value still parses as UTC).
+The decoded `time_lower_unix_utc_us` / `time_upper_unix_utc_us` are always **absolute UTC**.
+When the `time` block captures `zone` (a constant, or `header(...)` + `regex` on a header),
+that offset is what converts the source's local wall-clock to UTC — it is *applied* during
+parsing, and also recorded in **`utc_offset_hours`** (a signed-hours float: `UTC+02:00` →
+`2.0`, `+06:30` → `6.5`) by the convention **local = unix_utc_us + utc_offset_hours**. So the
+offset column is metadata on how the absolute instant maps back to local time, never a second
+source of truth. An unparseable captured zone is recorded as null (the value parses as UTC).
+The offset is currently the nominal one (daylight saving is future work).
 
 ## Temporal Expansion
 
@@ -127,8 +131,8 @@ python matlas.py process --input ./evidence --presets ./presets --output ./out/b
 
 Untangle groups comparable rows by:
 
-- `time_lower_unix_us` truncated to seconds
-- `time_upper_unix_us` truncated to seconds
+- `time_lower_unix_utc_us` truncated to seconds
+- `time_upper_unix_utc_us` truncated to seconds
 - `entity`
 - `entity_time_link`
 - `spatial_temporal_link`
