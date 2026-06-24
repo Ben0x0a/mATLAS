@@ -104,12 +104,16 @@ def test_generated_template_loads_but_lints_with_guidance(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     written = write_templates(html, tmp_path / "out", "iOS")
+    text = written[0].read_text(encoding="utf-8")
     codes = {f.code for f in lint_file(written[0])}
 
     assert "parse-error" not in codes                      # it still loads
     assert "unfilled-placeholder" in codes                 # TODO filename/columns/format/entity
-    assert "naive-timezone" in codes                       # format set, no zone -> analyst confirms
     assert "no-os-version" in codes                        # os_version left commented
+    # AXIOM timezone capture is pre-wired (the header carries the export offset), so the
+    # naive-timezone advice does NOT fire — the zone is declared, not missing.
+    assert "naive-timezone" not in codes
+    assert "tz:" in text and "regex(tz, group=z)" in text  # zone-from-header scaffold present
     assert "mapped-not-declared" not in codes              # TODO placeholders are not phantom columns
 
 

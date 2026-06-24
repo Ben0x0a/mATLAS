@@ -1,4 +1,4 @@
-"""End-to-end: a temporal spec's captured time_zone is applied during parsing (v3).
+"""End-to-end: a temporal spec's captured utc_offset_hours is applied during parsing (v3).
 
 Used by:    pytest.
 Depends on: pipeline.
@@ -38,5 +38,5 @@ def test_captured_timezone_is_applied_end_to_end(tmp_path: Path) -> None:
 
     # 13:00 at the captured +02:00 == 11:00:00 UTC.
     expected = int(dt.datetime(2025, 6, 6, 11, 0, 0, tzinfo=dt.timezone.utc).timestamp()) * 1_000_000
-    assert int(row["time_lower_unix_us"]) == expected
-    assert row["time_zone"] == "UTC+02:00"
+    assert int(row["time_lower_unix_utc_us"]) == expected
+    assert row["utc_offset_hours"] == "2.0"                   # CSV cell of the signed-hours float (+02:00)

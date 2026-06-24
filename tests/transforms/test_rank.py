@@ -15,12 +15,12 @@ def _frame() -> pd.DataFrame:
     return pd.DataFrame(
         [
             # two records of the same second (1.0s and 1.4s in us), different accuracy
-            {"time_lower_unix_us": 1_000_000, "time_upper_unix_us": 1_000_000, "entity": "device",
+            {"time_lower_unix_utc_us": 1_000_000, "time_upper_unix_utc_us": 1_000_000, "entity": "device",
              "time_lower_source_field": "T", "time_upper_source_field": "T", "horizontal_accuracy_m": 50.0},
-            {"time_lower_unix_us": 1_400_000, "time_upper_unix_us": 1_400_000, "entity": "device",
+            {"time_lower_unix_utc_us": 1_400_000, "time_upper_unix_utc_us": 1_400_000, "entity": "device",
              "time_lower_source_field": "T", "time_upper_source_field": "T", "horizontal_accuracy_m": 10.0},
             # a lone record in a different second (5.0s)
-            {"time_lower_unix_us": 5_000_000, "time_upper_unix_us": 5_000_000, "entity": "device",
+            {"time_lower_unix_utc_us": 5_000_000, "time_upper_unix_utc_us": 5_000_000, "entity": "device",
              "time_lower_source_field": "T", "time_upper_source_field": "T", "horizontal_accuracy_m": 5.0},
         ]
     )

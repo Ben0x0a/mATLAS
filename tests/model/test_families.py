@@ -82,7 +82,7 @@ def test_temporal_bounds_expand_to_prefixed_columns() -> None:
         temporal=Temporal(
             lower=TemporalBound(raw="694223890", source_field="FIRST_SEEN", unix_us=1672531200000000),
             upper=TemporalBound(raw="694223990", source_field="LAST_SEEN", unix_us=1672531300000000),
-            time_zone="UTC+00:00",
+            utc_offset_hours=0.0,
             accuracy_us=500,
             temporal_source="internal_clock",
         ),
@@ -90,12 +90,12 @@ def test_temporal_bounds_expand_to_prefixed_columns() -> None:
     row = assertion.to_flat_row()
     assert row["time_lower_raw"] == "694223890"
     assert row["time_lower_source_field"] == "FIRST_SEEN"
-    assert row["time_lower_unix_us"] == 1672531200000000
+    assert row["time_lower_unix_utc_us"] == 1672531200000000
     assert row["time_upper_raw"] == "694223990"
     assert row["time_upper_source_field"] == "LAST_SEEN"
-    assert row["time_upper_unix_us"] == 1672531300000000
-    # time_zone is shared by both bounds (a single column).
-    assert row["time_zone"] == "UTC+00:00"
+    assert row["time_upper_unix_utc_us"] == 1672531300000000
+    # utc_offset_hours is shared by both bounds (a single column), a signed-hours float.
+    assert row["utc_offset_hours"] == 0.0
     assert row["time_accuracy_us"] == 500
     assert row["temporal_source"] == "internal_clock"
 
