@@ -113,6 +113,27 @@ The canonical model is documented in `docs/integration_model.md`; preset YAML
 logic is documented in `docs/preset_schema.md` and
 `docs/preset_authoring_quickstart.md`.
 
+## Configuration (`matlas_config.toml`)
+
+Set-once preferences (not per-run options) live in an optional `matlas_config.toml` in the
+directory you run from. Copy `matlas_config.toml.example` to start. It is **optional** —
+when absent, built-in defaults are used; a present-but-invalid value (bad IANA zone, unknown
+key) is a hard error.
+
+The most important key is the **local timezone**, used to record `utc_offset_hours`:
+
+```toml
+[timezone]
+local_zone = "Europe/Paris"   # IANA name; unset => unknown => utc_offset_hours = null
+```
+
+For an absolute-UTC source (e.g. a Cocoa-epoch `Cache.sqlite`), mATLAS records that zone's
+**DST-aware** offset at each row's instant (`1.0` in winter, `2.0` in summer for Paris) in
+`utc_offset_hours`. The canonical `time_*_unix_utc_us` columns stay UTC regardless, so
+`local = time_*_unix_utc_us + utc_offset_hours`. Other sections set logging
+(`level`/`format`), discovery depths, and the `orig_` passthrough prefix. Security safeguards
+(zip-bomb guards) are deliberately **not** configurable here.
+
 ## Profiles
 
 Profiles are `.mATLAS-profile` JSON files that store selected preset YAML paths.
