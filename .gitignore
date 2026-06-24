@@ -1,5 +1,7 @@
 # User data
 out/
+# Local mATLAS config (copy from matlas_config.toml.example); only the example is tracked.
+matlas_config.toml
 # Generated AXIOM starter templates (regenerate from the parser; not tracked).
 utils/AXIOM_model_parser/results/
 
@@ -37,3 +39,6 @@ tasks/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Local performance/parity benchmark (not shipped)
+benchmark/
