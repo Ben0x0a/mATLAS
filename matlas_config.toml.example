@@ -1,0 +1,26 @@
+# mATLAS configuration — copy to `matlas_config.toml` (in the directory you run from).
+#
+# These are set-once preferences, not per-run options. The file is OPTIONAL: if it is
+# absent, built-in defaults are used (and `[timezone].local_zone` being unset means the
+# local zone is unknown, so `utc_offset_hours` is left null). A present-but-invalid value
+# (e.g. a bad IANA zone or an unknown key) is a hard error, on purpose.
+#
+# Security safeguards (zip-bomb guards) are intentionally NOT configurable here — they stay
+# as code defaults so they cannot be weakened from a working-directory file.
+
+[timezone]
+# IANA zone used to record `utc_offset_hours` for absolute-UTC (epoch) sources, DST-aware
+# per row (e.g. +1 in winter, +2 in summer). Unset => unknown => utc_offset_hours = null.
+# The canonical `time_*_unix_utc_us` columns are always UTC regardless of this.
+local_zone = "Europe/Paris"
+
+[logging]
+level  = "INFO"                                          # overridden by --log-level
+format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+[discovery]
+root_prefix_depth   = 1     # leading path segments a selector `path` may skip (filesystem1/, _/)
+max_container_depth = 1     # archive-nesting levels to open (folder=0, input archive=1)
+
+[output]
+source_column_prefix = "orig_"     # prefix for verbatim source-column passthrough
