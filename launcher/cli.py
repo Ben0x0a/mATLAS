@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from model_atlas import __version__
+from model_atlas.config import get_settings
 from model_atlas.pipeline import process
 from launcher.profiles import build_profile_preset_folder, load_profile
 
@@ -31,8 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
-        default="INFO",
-        help="Logging verbosity. Use DEBUG for a precise step-by-step trace.",
+        default=None,
+        help="Logging verbosity (overrides matlas_config.toml [logging].level; default INFO). "
+             "Use DEBUG for a precise step-by-step trace.",
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -124,12 +126,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _configure_logging(log_file: Path | None, log_level: str) -> None:
+def _configure_logging(log_file: Path | None, log_level: str | None) -> None:
+    settings = get_settings()
     root_logger = logging.getLogger()
     for handler in list(root_logger.handlers):
         root_logger.removeHandler(handler)
-    level = getattr(logging, log_level.upper(), logging.INFO)
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # CLI --log-level wins; otherwise the config default (then INFO). Format from config.
+    level_name = (log_level or settings.logging.level).upper()
+    level = getattr(logging, level_name, logging.INFO)
+    formatter = logging.Formatter(settings.logging.format)
     handlers: list[logging.Handler] = [logging.StreamHandler()]
     if log_file is not None:
         log_file.parent.mkdir(parents=True, exist_ok=True)

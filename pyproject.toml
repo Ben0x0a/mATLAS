@@ -23,6 +23,8 @@ dependencies = [
     "pandas>=2.0",
     "openpyxl>=3.1",
     "pyyaml>=6.0",
+    # zoneinfo needs the IANA tz database; Windows has no system copy, so ship it there.
+    "tzdata; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]
@@ -32,10 +34,17 @@ dev = [
 gui = [
     "PySide6>=6.7",
 ]
+# ufdr_parser is a standalone side package; its lxml/psutil deps are kept out of the
+# model_atlas core so a core install stays lean.
+ufdr = [
+    "lxml>=5.0",
+    "psutil>=5.9",
+]
 
 [project.scripts]
 matlas = "launcher.cli:run"
 matlas-gui = "launcher.gui:run"
+ufdr-parser = "ufdr_parser.cli:main"
 
 # Explicit package list: the repo uses a flat layout with three top-level
 # packages. Auto-discovery refuses flat-layout multi-package projects, so we
@@ -51,6 +60,8 @@ packages = [
     "model_atlas.sources",
     "model_atlas.sqlite",
     "model_atlas.transforms",
+    "ufdr_parser",
+    "ufdr_parser.model_signatures",
 ]
 
 [tool.setuptools.package-data]

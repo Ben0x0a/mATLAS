@@ -95,7 +95,10 @@ def configure_accessibility(controller: Any) -> None:
         "When checked, write one merged CSV. When unchecked, write one CSV per preset."
     )
     controller.dump_full_ufdr_check.setAccessibleName("Dump full UFDR")
-    controller.dump_full_ufdr_check.setAccessibleDescription("Future option. Currently disabled.")
+    controller.dump_full_ufdr_check.setAccessibleDescription(
+        "When checked, switch to the standalone UFDR parser, which dumps every Cellebrite "
+        "model to CSV. The centre title changes to UFDR Parser."
+    )
 
     controller.traceability_combo.setAccessibleName("Traceability format")
     controller.traceability_combo.setAccessibleDescription("Choose readable traceability or PROV JSON traceability.")

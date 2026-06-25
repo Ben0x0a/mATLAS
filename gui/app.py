@@ -43,6 +43,12 @@ from model_atlas.presets.spec_loader import load_preset_specs
 
 log = logging.getLogger("model_atlas.gui")
 
+# The centre header title swaps between these two modes via the "Dump full UFDR"
+# checkbox: unchecked = the mATLAS transform pipeline, checked = the standalone UFDR
+# parser. Consumed by _sync_ufdr_mode (gui.app).
+APP_TITLE_DEFAULT = "mATLAS Transformer"
+APP_TITLE_UFDR = "UFDR Parser"
+
 DESKTOP_ICON_ASSET = "matlas_transformer_desktop_icon.svg"
 TRANSITION_ASSETS = {
     2: "matlas_transition_01_standby.svg",
@@ -167,6 +173,7 @@ class MainController(QObject):
         self.preset_status_label: QLabel = child(QLabel, "presetStatusLabel")
         self.single_preset_notice_label: QLabel = child(QLabel, "singlePresetNoticeLabel")
         self.output_label: QLabel = child(QLabel, "outputLabel")
+        self.app_title_label: QLabel = child(QLabel, "appTitleLabel")
 
         self.source_file_button: QPushButton = child(QPushButton, "sourceFileButton")
         self.source_folder_button: QPushButton = child(QPushButton, "sourceFolderButton")
@@ -200,7 +207,7 @@ class MainController(QObject):
         self.window.setWindowIcon(QIcon(str(_asset_path(DESKTOP_ICON_ASSET))))
         self.window.setStyleSheet(build_stylesheet())
         self._configure_header_assets()
-        self._hide_unreleased_options()
+        self._configure_ufdr_toggle()
         self.single_preset_notice_label.setVisible(False)
         accessibility.configure_status_label(self)
         self._stabilize_form_labels()
@@ -230,6 +237,7 @@ class MainController(QObject):
         self.auto_preset_check.toggled.connect(lambda _checked: self._sync_single_preset_notice())
         self.log_level_combo.currentTextChanged.connect(self._apply_log_level)
         self.merge_outputs_check.toggled.connect(lambda _checked: self._sync_output_mode(clear_output=True))
+        self.dump_full_ufdr_check.toggled.connect(lambda _checked: self._sync_ufdr_mode())
 
     def _stabilize_form_labels(self) -> None:
         label_names = (
@@ -245,10 +253,22 @@ class MainController(QObject):
             if label is not None:
                 label.setMinimumWidth(125)
 
-    def _hide_unreleased_options(self) -> None:
+    def _configure_ufdr_toggle(self) -> None:
+        """Reflect the UFDR-parser checkbox state in the title; hidden pending testing.
+
+        The toggle logic and signal wiring stay in place — re-enabling the feature is just
+        flipping these two flags back to True (and the label visible).
+        """
         self.dump_full_ufdr_check.setVisible(False)
+        self.dump_full_ufdr_check.setEnabled(False)
         if (label := self.window.findChild(QLabel, "dumpFullUfdrLabel")) is not None:
             label.setVisible(False)
+        self._sync_ufdr_mode()
+
+    def _sync_ufdr_mode(self) -> None:
+        """Swap the centre header title between the transform and UFDR-parser modes."""
+        title = APP_TITLE_UFDR if self.dump_full_ufdr_check.isChecked() else APP_TITLE_DEFAULT
+        self.app_title_label.setText(title)
 
     def eventFilter(self, watched: QObject, event: object) -> bool:
         accessibility.handle_status_resize(self, watched, event)
