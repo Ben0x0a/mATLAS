@@ -42,3 +42,6 @@ htmlcov/
 
 # Local performance/parity benchmark (not shipped)
 benchmark/
+
+# Runtime UFDR model-drift baseline (accumulated per deployment, not shipped)
+ufdr_parser/model_signatures/baseline.db
