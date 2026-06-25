@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from model_atlas.transforms.expression import evaluate
@@ -80,6 +81,76 @@ def zone_offset_hours_at(zone_name: str, unix_us: int) -> float:
     instant = dt.datetime.fromtimestamp(unix_us / 1_000_000, tz=dt.timezone.utc)
     offset = instant.astimezone(ZoneInfo(zone_name)).utcoffset()
     return offset.total_seconds() / 3600 if offset is not None else 0.0
+
+
+@dataclass(frozen=True)
+class ZoneToken:
+    """A source zone declaration parsed from a captured header/const token.
+
+    ``base_offset_hours`` is the fixed/standard offset (None for ``local`` or unparseable);
+    ``dst`` is True when the source applies daylight saving (AXIOM's ``[DST]`` marker, or the
+    ``local`` keyword) — i.e. the per-row offset varies and a single number is not enough."""
+
+    base_offset_hours: float | None
+    dst: bool
+    raw: str | None
+
+
+def parse_zone_token(value: Any) -> "ZoneToken | None":
+    """Parse a source-zone token: ``UTC+01:00`` / ``UTC+01:00[DST]`` / ``local`` / a number.
+
+    AXIOM writes the standard offset plus a ``[DST]`` suffix when daylight saving is applied;
+    ``local`` means device-local (resolve via the configured zone). None/empty -> None."""
+    if value is None:
+        return None
+    token = str(value).strip()
+    if not token:
+        return None
+    if token.casefold() == "local":
+        return ZoneToken(base_offset_hours=None, dst=True, raw=token)
+    dst = False
+    core = token
+    if core.upper().endswith("[DST]"):
+        dst, core = True, core[:-5].strip()
+    try:
+        base = tz_offset_to_hours(core)
+    except ValueError:
+        return ZoneToken(base_offset_hours=None, dst=dst, raw=token)
+    return ZoneToken(base_offset_hours=base, dst=dst, raw=token)
+
+
+def zone_standard_offset_hours(zone_name: str) -> float:
+    """The zone's STANDARD (non-DST) offset in hours — for the header-vs-config consistency
+    check. Probes January and July and returns the offset when DST is not in effect."""
+    from zoneinfo import ZoneInfo
+
+    z = ZoneInfo(zone_name)
+    for month in (1, 7):
+        probe = dt.datetime(2025, month, 15, tzinfo=z)
+        if probe.dst() == dt.timedelta(0):
+            return probe.utcoffset().total_seconds() / 3600
+    return dt.datetime(2025, 1, 15, tzinfo=z).utcoffset().total_seconds() / 3600
+
+
+def local_naive_to_utc_us(naive: dt.datetime, zone_name: str) -> tuple[int, float, str | None]:
+    """Convert a naive LOCAL datetime in ``zone_name`` to (unix_us, offset_hours, anomaly),
+    DST-aware. ``anomaly`` is ``'ambiguous'`` (DST fall-back overlap — the wall-clock occurs
+    twice; the earlier instant is chosen), ``'imaginary'`` (spring-forward gap — the
+    wall-clock never existed), or None. The caller warns on a non-None anomaly."""
+    from zoneinfo import ZoneInfo
+
+    z = ZoneInfo(zone_name)
+    aware = naive.replace(tzinfo=z)                       # fold=0 -> earlier instant at a fold
+    anomaly: str | None = None
+    if aware.utcoffset() != naive.replace(tzinfo=z, fold=1).utcoffset():
+        # The offset depends on fold => a transition. Distinguish gap from overlap by a
+        # round-trip: an imaginary (gap) time does not survive local->UTC->local.
+        roundtrip = aware.astimezone(dt.timezone.utc).astimezone(z).replace(tzinfo=None)
+        anomaly = "imaginary" if roundtrip != naive else "ambiguous"
+    delta = aware.astimezone(dt.timezone.utc) - _UNIX_EPOCH
+    unix_us = (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
+    off = aware.utcoffset().total_seconds() / 3600
+    return unix_us, off, anomaly
 
 
 def parse_datetime_to_us(value: Any, fmt: str, tz_offset_hours: Any = 0.0) -> int | None:

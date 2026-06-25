@@ -184,7 +184,7 @@ expected_columns:
 # This pattern captures that offset so the time block can record/apply it. (A "Local Time"
 # header carries no offset — that needs the device zone in matlas_config.toml, handled later.)
 patterns:
-  tz: '(?P<z>UTC[+-]\\d{{2}}:\\d{{2}})'
+  tz: '(?P<z>UTC[+-]\\d{{2}}:\\d{{2}}(?:\\[DST\\])?)'
 
 # Row-level fields shared by every assertion. Delete those you do not map.
 common:

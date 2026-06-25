@@ -32,7 +32,7 @@ expected_columns:
   - "Item ID"
 
 patterns:
-  tz: "(?P<z>UTC[+-]\\d{2}:\\d{2})"
+  tz: "(?P<z>UTC[+-]\\d{2}:\\d{2}(?:\\[DST\\])?)"
 
 source_record_uid: 'column("Item ID")'
 
