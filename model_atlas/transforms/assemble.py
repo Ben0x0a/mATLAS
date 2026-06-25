@@ -22,6 +22,7 @@ ordinal keeps a record's fan-out rows distinct.
 """
 from __future__ import annotations
 
+import datetime as dt
 import fnmatch
 import re
 import uuid
@@ -36,10 +37,13 @@ from model_atlas.model.families import OUTPUT_COLUMNS, column_cast, unit_factor
 from model_atlas.presets.expr import Ref
 from model_atlas.presets.spec import FieldSpec, InputSelector, PresetSpec, TimeSpec
 from model_atlas.transforms.builtin import (
+    ZoneToken,
     epoch_to_us,
+    local_naive_to_utc_us,
     parse_datetime_to_us,
-    tz_offset_to_hours,
+    parse_zone_token,
     zone_offset_hours_at,
+    zone_standard_offset_hours,
 )
 from model_atlas.transforms.registry import PipeContext, run_pipe
 
@@ -237,16 +241,54 @@ def _source_record_uid(
     return str(uuid.uuid5(_SOURCE_ROW_NAMESPACE, identity)), False
 
 
-def _decode_time(value: Any, spec: TimeSpec, zone_hours: float | None, warnings: list[str]) -> int | None:
+def _decode_time(
+    value: Any, spec: TimeSpec, zone_token: "ZoneToken | None", local_zone: str | None,
+    warnings: list[str],
+) -> tuple[int | None, float | None]:
+    """Decode one bound to (unix_utc_us, source_offset_hours). The unix is always absolute
+    UTC; source_offset is the offset actually used to reach it (None for epoch/unknown).
+
+    Source-zone modes (see the proposal):
+    - epoch                          -> already UTC.
+    - format + ``%z``                -> the value carries its own offset.
+    - format + fixed offset (no DST) -> subtract the fixed offset.
+    - format + ``[DST]``/``local``   -> resolve the naive local value in ``local_zone`` via
+      zoneinfo (per-row, DST-aware), warning on a base/zone mismatch and on the DST
+      overlap (ambiguous) / gap (imaginary) hours. No ``local_zone`` -> warn + base offset."""
     if value is None:
-        return None
+        return None, None
     if spec.epoch is not None:
-        return epoch_to_us(value, spec.epoch)
+        return epoch_to_us(value, spec.epoch), None
     if spec.format is not None:
-        # zone_hours is the already-normalised offset (see _apply_time); None -> parse as UTC.
-        return parse_datetime_to_us(value, spec.format, zone_hours if zone_hours is not None else 0.0)
+        naive = dt.datetime.strptime(str(value), spec.format)
+        if naive.tzinfo is not None:                          # %z: the value carries its offset
+            return parse_datetime_to_us(value, spec.format), naive.utcoffset().total_seconds() / 3600
+        dst = bool(zone_token and zone_token.dst)
+        base = zone_token.base_offset_hours if zone_token else None
+        if dst and local_zone:
+            std = zone_standard_offset_hours(local_zone)
+            if base is not None and abs(std - base) > 1e-9:
+                warnings.append(
+                    f"time-zone header base offset {base}h does not match configured local_zone "
+                    f"{local_zone!r} standard offset {std}h; check the zone")
+            unix_us, off, anomaly = local_naive_to_utc_us(naive, local_zone)
+            if anomaly == "ambiguous":
+                warnings.append(
+                    f"ambiguous local time {value!r} in {local_zone} (DST fall-back overlap); "
+                    f"recorded as the earlier instant")
+            elif anomaly == "imaginary":
+                warnings.append(
+                    f"nonexistent local time {value!r} in {local_zone} (DST spring-forward gap); "
+                    f"check the zone")
+            return unix_us, off
+        if dst and not local_zone:
+            warnings.append(
+                f"DST/local timestamp {value!r} but no local_zone configured; using base offset "
+                f"{base if base is not None else 0.0}h — DST-period rows may be off by an hour")
+        off = base if base is not None else 0.0
+        return parse_datetime_to_us(value, spec.format, off), (base if base is not None else None)
     # Neither epoch nor format: the column is already Unix microseconds.
-    return int(value)
+    return int(value), None
 
 
 def _apply_time(
@@ -256,34 +298,31 @@ def _apply_time(
 ) -> None:
     lower_raw, lower_col = _resolve_ref(spec.lower, row, resolve, file_values, env, preset_values)
     upper_raw, upper_col = _resolve_ref(spec.upper, row, resolve, file_values, env, preset_values)
-    # The time_*_unix_utc_us columns are absolute UTC; utc_offset_hours records the source's
-    # signed-hours offset (local = UTC + utc_offset_hours) used to reach UTC. Normalise the
-    # zone once here and reuse it for both bounds' parsing. (Nominal offset; DST is future work.)
-    zone_hours: float | None = None
+    # Parse the source's zone declaration (UTC+01:00 / UTC+01:00[DST] / local / a const).
+    zone_token = None
     if spec.zone is not None:
-        zone, _ = _resolve_field(spec.zone, row, warnings, resolve, file_values, env, ctx, preset_values)
-        if zone is not None:
-            try:
-                zone_hours = tz_offset_to_hours(zone)
-            except ValueError:
-                warnings.append(f"unparseable time-zone offset {zone!r}; recording null and parsing as UTC")
-        flat["utc_offset_hours"] = zone_hours
+        zone_raw, _ = _resolve_field(spec.zone, row, warnings, resolve, file_values, env, ctx, preset_values)
+        zone_token = parse_zone_token(zone_raw)
     for override in spec.overrides:
         flat[override.model_field], _ = _resolve_field(override, row, warnings, resolve, file_values, env, ctx, preset_values)
+
+    lower_us, src_off = _decode_time(lower_raw, spec, zone_token, env.local_zone, warnings)
+    upper_us, _ = _decode_time(upper_raw, spec, zone_token, env.local_zone, warnings)
     flat["time_lower_raw"] = lower_raw
     flat["time_lower_source_field"] = lower_col or _ref_label(spec.lower)
-    lower_us = _decode_time(lower_raw, spec, zone_hours, warnings)
     flat["time_lower_unix_utc_us"] = lower_us
     flat["time_upper_raw"] = upper_raw
     flat["time_upper_source_field"] = upper_col or _ref_label(spec.upper)
-    flat["time_upper_unix_utc_us"] = _decode_time(upper_raw, spec, zone_hours, warnings)
+    flat["time_upper_unix_utc_us"] = upper_us
 
-    # Easy DST case — an absolute-UTC (epoch) source with no preset-declared zone: record the
-    # configured local zone's DST-aware offset AT THIS INSTANT (exact, not nominal). unix is
-    # untouched. No local zone configured => leave utc_offset_hours null (unknown zone). For an
-    # interval crossing a DST boundary the lower bound's offset is used (one shared column).
-    if spec.zone is None and spec.epoch is not None and env.local_zone and lower_us is not None:
-        flat["utc_offset_hours"] = zone_offset_hours_at(env.local_zone, lower_us)
+    # utc_offset_hours = the analyst's configured DISPLAY zone (DST-aware) if set; else the
+    # source's own resolved offset; else null. (local = time_*_unix_utc_us + utc_offset_hours.)
+    # For an interval crossing a DST boundary, the lower bound's instant fixes the offset.
+    if lower_us is not None:
+        if env.local_zone:
+            flat["utc_offset_hours"] = zone_offset_hours_at(env.local_zone, lower_us)
+        elif src_off is not None:
+            flat["utc_offset_hours"] = src_off
 
 
 def _ref_label(ref: Ref) -> str | None:
