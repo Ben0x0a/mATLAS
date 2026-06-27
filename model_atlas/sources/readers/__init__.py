@@ -13,11 +13,13 @@ from model_atlas.sources.readers.base import (
     registered_readers,
 )
 
-# Imported for their registration side effect.
+# Imported for their registration side effect. xml_reader registers the XmlReader but does
+# NOT import lxml/ufdr_parser at module load — those arrive only when an XML source is read.
 from model_atlas.sources.readers import (  # noqa: E402,F401
     csv_reader,
     excel_reader,
     sqlite_reader,
+    xml_reader,
 )
 
 __all__ = [

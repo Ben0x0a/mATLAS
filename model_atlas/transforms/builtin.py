@@ -153,6 +153,35 @@ def local_naive_to_utc_us(naive: dt.datetime, zone_name: str) -> tuple[int, floa
     return unix_us, off, anomaly
 
 
+def datetime_to_us(parsed: dt.datetime) -> int:
+    """Unix microseconds for an aware datetime (assumes tzinfo is set)."""
+    delta = parsed - _UNIX_EPOCH
+    return (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
+
+
+def parse_iso8601(value: Any) -> dt.datetime | None:
+    """Parse an ISO-8601 string to a datetime (aware if it carries an offset, else naive).
+
+    Handles the Cellebrite ``TimeStamp`` forms: zone-qualified (``...+00:00``, full ms) and
+    naive (``DateTimeOnly``). A naive result is resolved against the preset ``zone:`` by the
+    caller, never silently assumed UTC. Returns None for empty/unparseable input.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return dt.datetime.fromisoformat(text)
+    except ValueError:
+        try:  # tolerate variants (e.g. trailing 'Z' on older runtimes) when dateutil is present
+            from dateutil import parser as _dateutil_parser
+
+            return _dateutil_parser.isoparse(text)
+        except Exception:  # noqa: BLE001 - unparseable: caller treats as missing
+            return None
+
+
 def parse_datetime_to_us(value: Any, fmt: str, tz_offset_hours: Any = 0.0) -> int | None:
     """Parse a formatted datetime string to Unix microseconds (None -> None).
 

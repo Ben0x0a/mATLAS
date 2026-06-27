@@ -7,8 +7,9 @@ from typing import Any
 
 import pandas as pd
 
-from model_atlas.sources.container import SourceFile
+from model_atlas.sources.container import SourceFile, acquire_source
 from model_atlas.sources.readers.base import RECOVERY_LIVE, ReadResult, register_reader
+from model_atlas.sources.staging import STAGING_TIER, should_copy
 
 log = logging.getLogger(__name__)
 
@@ -16,13 +17,14 @@ log = logging.getLogger(__name__)
 @register_reader
 class ExcelReader:
     format = "excel"
+    staging_mode = STAGING_TIER  # copy primary-tier evidence; read others in place
 
     def read(self, file: SourceFile, params: dict) -> ReadResult:
         sheet = params["sheet"]
         skip_rows = int(params.get("skip_rows", 0) or 0)
         header_row = int(params.get("header_row", 0) or 0)
         container = file.container
-        staged = container.stage(file)
+        staged = acquire_source(container, file, copy=should_copy(self.staging_mode, params.get("_tier")))
         try:
             df = pd.read_excel(
                 staged.path, sheet_name=sheet, skiprows=skip_rows,
@@ -47,8 +49,10 @@ class ExcelReader:
         )
 
     def _staged_path(self, file: SourceFile):
+        # Peeks are read-only and quick, so read in place where possible (a zip entry still
+        # needs a real file, so acquire_source copies it then).
         container = file.container
-        staged = container.stage(file)
+        staged = acquire_source(container, file, copy=False)
         return container, staged
 
     def peek_columns(self, file: SourceFile, selector: Any = None) -> set[str] | None:

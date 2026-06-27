@@ -25,10 +25,18 @@ def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime(_ISO)
 
 
-def _column_refs(preset: PresetSpec) -> list[str]:
+def _column_refs(preset: PresetSpec, *, include_optional: bool = True) -> list[str]:
+    """Column/header names a preset references in its mappings.
+
+    ``include_optional=False`` drops fields flagged ``optional: true`` — used to compute the
+    REQUIRED columns (a preset's hard dependencies). The time bounds are always required (an
+    assertion without its instant cannot be built), so they are included regardless.
+    """
     refs: list[str] = []
 
-    def add(spec: FieldSpec) -> None:
+    def add(spec: FieldSpec | None) -> None:
+        if spec is None or (not include_optional and spec.optional):
+            return
         if spec.column is not None:
             refs.append(spec.column)
         if spec.from_name_pattern is not None:
@@ -42,10 +50,17 @@ def _column_refs(preset: PresetSpec) -> list[str]:
         for spec in template.fields:
             add(spec)
         for temporal in template.temporal:
-            refs.extend([temporal.lower_column, temporal.upper_column])
+            refs.extend([temporal.lower_column, temporal.upper_column])  # time is required
+            add(temporal.zone)
             for override in temporal.overrides:
                 add(override)
     return refs
+
+
+def required_columns(preset: PresetSpec) -> set[str]:
+    """The columns a preset hard-depends on (mapped, non-optional). A source missing any of
+    these cannot be faithfully mapped by this preset, so it does not match."""
+    return {ref for ref in _column_refs(preset, include_optional=False) if ref is not None}
 
 
 def frontier_report(preset: PresetSpec, present_columns: list[str]) -> dict[str, Any]:
@@ -56,7 +71,11 @@ def frontier_report(preset: PresetSpec, present_columns: list[str]) -> dict[str,
     patterns = list(preset.expected_columns)
     # Present columns covered by some expected entry (exact or glob).
     expected_present = {c for c in present if any(fnmatch.fnmatch(c, p) for p in patterns)}
-    mapped = {resolved for ref in _column_refs(preset) if (resolved := resolve(ref)) is not None}
+    refs = [ref for ref in _column_refs(preset) if ref is not None]
+    mapped = {resolved for ref in refs if (resolved := resolve(ref)) is not None}
+    # Referenced column names that resolve to nothing present (an exact name absent from the
+    # source, or a glob matching no column) — a preset authoring error or a schema drift.
+    mapped_absent = {ref for ref in refs if resolve(ref) is None}
     return {
         "present_count": len(present),
         "expected_count": len(patterns),
@@ -67,8 +86,8 @@ def frontier_report(preset: PresetSpec, present_columns: list[str]) -> dict[str,
         "frontier_new": sorted(present - expected_present - mapped),
         # Expected entry that matches no present column — schema drift.
         "drift_missing": sorted(p for p in patterns if not any(fnmatch.fnmatch(c, p) for c in present)),
-        # Mapped but absent — a preset authoring error.
-        "mapped_absent": sorted(mapped - present),
+        # Mapped but absent — a preset authoring error (now actually detected).
+        "mapped_absent": sorted(mapped_absent),
     }
 
 

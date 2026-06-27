@@ -116,6 +116,12 @@ _ETLINK_GENESIS: dict[EntityTimeLink, Genesis] = {
 }
 
 
+# Sentinel for utc_offset_hours when a naive timestamp was materialised by ASSUMING UTC:
+# the instant is recorded, but the true offset is unknown. Distinct from None (not
+# applicable) and from a real 0.0, so an examiner sees the assumption loudly.
+UTC_OFFSET_UNKNOWN = "N/A"
+
+
 # --- The six column families ----------------------------------------------
 
 @dataclass(frozen=True)
@@ -150,7 +156,10 @@ class Temporal:
     # NOT the actual UTC offset at the instant: it ignores daylight saving (a zone that is +1
     # in winter / +2 in summer is recorded by its standard offset). DST-aware resolution of
     # the true offset is future work.
-    utc_offset_hours: float | None = None
+    # A float offset (known), None (not applicable — e.g. an absolute-UTC epoch source), or
+    # UTC_OFFSET_UNKNOWN (a naive timestamp materialised by ASSUMING UTC — the true offset is
+    # unknown; flagged loudly so it is never mistaken for a real 0.0 or a benign null).
+    utc_offset_hours: float | str | None = None
     accuracy_us: int | float | None = None
     temporal_source: str | None = None  # mechanism: NTP, internal_clock, ...
 

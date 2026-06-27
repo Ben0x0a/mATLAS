@@ -1,0 +1,58 @@
+preset:
+  id: cellebrite.xml.wirelessnetwork
+  name: Cellebrite XML Wireless Network
+  tool: Cellebrite UFED
+  version: 1.0
+  tier: secondary
+
+input_selector:
+  format: xml
+  name: report.xml
+  namespace: http://pa.cellebrite.com/report/2.0
+  model: WirelessNetwork
+
+source_record_uid: column(uuid)
+
+lookup_tables:
+  recovery: {Intact: intact, Deleted: deleted, Unknown: unknown}
+
+expected_columns:
+  - uuid
+  - deleted_state
+  - decoding_confidence
+  - UserMapping
+  - Source
+  - SSId
+  - BSSId
+  - SecurityMode
+  - NWConnectionType
+  - LastConnection
+  - LastAutoConnection
+  - TimeStamp
+  - TimeStamp.format
+  - Position.Latitude
+  - Position.Longitude
+  - Position.GpsHorizontalAccuracy
+
+common:
+  entity:          param(entity)
+  entity_type:     const(device)
+  source_label:    const(WirelessNetwork)
+  position_source: const(wifi)
+  raw_source_path: column(source_path)
+  deleted:         { from: column(deleted_state), pipe: "lookup(recovery, on_unknown=null)" }
+
+assertions:
+  # A network's geolocation is often absent (lat/lon null) — the row is still a temporal
+  # observation of the device seeing that SSID/BSSID.
+  - position:
+      latitude_wgs84:        column(Position.Latitude)
+      longitude_wgs84:       column(Position.Longitude)
+      horizontal_accuracy_m: { from: column(Position.GpsHorizontalAccuracy), optional: true }
+    time:
+      instant: column(TimeStamp)
+      format:  iso8601
+    links:
+      entity_position:  at
+      entity_time:      observed_at
+      spatial_temporal: instant

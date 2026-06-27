@@ -17,8 +17,9 @@ SQLITE_MAGIC = b"SQLite format 3\x00"
 BPLIST_MAGIC = b"bplist00"
 ZIP_MAGIC = b"PK\x03\x04"
 
-# Formats a preset may target in this task (a reader exists for each).
-TARGETABLE_FORMATS: frozenset[str] = frozenset({"csv", "excel", "sqlite"})
+# Formats a preset may target (a reader exists for each). ``xml`` covers forensic XML
+# reports (Cellebrite UFED, AXIOM, …), discriminated further by namespace in the selector.
+TARGETABLE_FORMATS: frozenset[str] = frozenset({"csv", "excel", "sqlite", "xml"})
 
 
 def _looks_like_excel(names: list[str]) -> bool:

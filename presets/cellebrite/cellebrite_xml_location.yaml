@@ -1,0 +1,68 @@
+preset:
+  id: cellebrite.xml.location
+  name: Cellebrite XML Location
+  tool: Cellebrite UFED
+  version: 1.0
+  tier: secondary             # a tool export (read in place, not copied)
+
+# Selected from a Cellebrite UFED report by its XML namespace + model type. The same
+# report.xml feeds one preset per model type (see the sibling cellebrite_* presets).
+input_selector:
+  format: xml
+  name: report.xml
+  namespace: http://pa.cellebrite.com/report/2.0
+  model: Location
+
+# The model's own stable Cellebrite id (captured as the ``uuid`` column) is the per-record UID.
+source_record_uid: column(uuid)
+
+lookup_tables:
+  recovery: {Intact: intact, Deleted: deleted, Unknown: unknown}
+
+# Inventory of the inline-flattened columns (1:1 modelField children appear as Parent.Child).
+# Present-but-unmapped columns are the research frontier (warnings sidecar).
+expected_columns:
+  - uuid
+  - deleted_state
+  - decoding_confidence
+  - UserMapping
+  - Source
+  - Position.Latitude
+  - Position.Longitude
+  - Position.Elevation
+  - Position.GpsHorizontalAccuracy
+  - TimeStamp
+  - TimeStamp.format
+  - Name
+  - Origin
+  - Category
+  - Confidence
+  - Address.Street1
+  - Address.City
+  - Address.State
+  - Address.Country
+  - Address.PostalCode
+
+common:
+  entity:          param(entity)
+  entity_type:     const(device)
+  source_label:    const(Location)
+  raw_source_path: column(source_path)        # on-device source file, joined from extraInfos
+  deleted:         { from: column(deleted_state), pipe: "lookup(recovery, on_unknown=null)" }
+
+assertions:
+  - position:
+      latitude_wgs84:        column(Position.Latitude)         # required
+      longitude_wgs84:       column(Position.Longitude)        # required
+      # Enrichments some schema versions omit — optional, so their absence yields a null
+      # cell rather than disqualifying the preset.
+      altitude_m:            { from: column(Position.Elevation), optional: true }
+      horizontal_accuracy_m: { from: column(Position.GpsHorizontalAccuracy), optional: true }
+    time:
+      instant: column(TimeStamp)
+      format:  iso8601        # zone-qualified values keep their offset; naive ones are
+                              # materialised as UTC with utc_offset_hours flagged "N/A".
+    links:
+      entity_position:  at
+      entity_time:      observed_at
+      spatial_temporal: instant

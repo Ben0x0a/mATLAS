@@ -27,6 +27,7 @@ from model_atlas.sqlite.dedup import (
 )
 from model_atlas.sqlite.extractor import extract_query, extract_table
 from model_atlas.sqlite.sql_query import validate_custom_sql
+from model_atlas.sources.staging import STAGING_ALWAYS
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,9 @@ def _sidecar_label(members: dict) -> str:
 @register_reader
 class SqliteReader:
     format = "sqlite"
+    # Always copy: the WAL/journal two-pass merge needs a stable staged group (db + WAL/SHM/
+    # journal siblings) on disk, which cannot be done by reading the original in place.
+    staging_mode = STAGING_ALWAYS
 
     def read(self, file: SourceFile, params: dict) -> ReadResult:
         table = params.get("table")

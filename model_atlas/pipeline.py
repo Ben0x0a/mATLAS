@@ -22,7 +22,7 @@ from model_atlas import reporting
 from model_atlas.config import get_settings
 from model_atlas.export import traceability_path_for, warnings_path_for, write_csv, write_json
 from model_atlas.model.families import OUTPUT_COLUMNS
-from model_atlas.presets.matcher import detect_file_format, match_file
+from model_atlas.presets.matcher import detect_file_format, match_files_detailed
 from model_atlas.presets.spec import InputSelector, PresetSpec
 from model_atlas.presets.spec_loader import load_preset_specs
 from model_atlas.sources import SingleSourceExtractor, SourceFile, ZipContainer, discover
@@ -222,56 +222,72 @@ def process(
     for file in files:
         label = str(file.full_logical_path)
         if force_preset:
-            preset = presets[0]
-            selector = _resolve_force_selector(file, preset, detect_file_format(file))
+            selector = _resolve_force_selector(file, presets[0], detect_file_format(file))
+            file_matches = [(presets[0], selector)]
         else:
-            match = match_file(file, presets, root_prefix_depth=root_prefix_depth, peek=_peek)
-            if match is None:
-                log.debug(f"No preset matched {label}")
-                unmatched.append(label)
+            # A file may feed several presets — one per distinct in-file unit (e.g. one
+            # preset per Cellebrite model type, or per SQLite table).
+            file_matches, unsatisfied = match_files_detailed(
+                file, presets, root_prefix_depth=root_prefix_depth, peek=_peek)
+            # A unit that was located + type-matched but whose mapped columns are absent
+            # cannot be faithfully mapped — fail it LOUDLY (per source), then keep going.
+            for preset, selector, missing in unsatisfied:
+                msg = (f"{label}: matched {preset.name} but required column(s) "
+                       f"{sorted(missing)} are absent — not mapped (author a variant preset "
+                       f"or mark them optional)")
+                log.error(msg)
+                warnings.append(msg)
+                unmatched.append(f"{label} -> {preset.name} [missing required: {sorted(missing)}]")
+            if not file_matches:
+                if not unsatisfied:
+                    log.debug(f"No preset matched {label}")
+                    unmatched.append(label)
                 continue
-            preset, selector = match
-        if len(preset.roles) > 1:
-            raise NotImplementedError("multi-source python extract not yet implemented")
-        matched.append(f"{label} -> {preset.name}")
-        extracted = extractor.extract({selector.role: (file, selector)}, preset)
-        records = to_records(extracted.dataframe)
-        env = BuildEnv(
-            input_file_path=_input_file_path(file),
-            input_file_name=Path(_input_file_path(file)).name,
-            source_fingerprint=extracted.source_fingerprint,
-            source_file_path=extracted.source_original_path,
-            raw_source_path=extracted.source_original_path,
-            source_tier=preset.source_tier,
-            entity=entity,
-            linked_entity=linked_entity,
-            source_file_name=file.name,
-            local_zone=local_zone,
-        )
-        frame, frame_warnings = build_rows(
-            records, preset, env, selector=selector, columns=list(extracted.source_columns),
-            include_source_columns=include_source_columns)
-        log.info(f"{label}: {len(records)} source row(s) -> {len(frame)} assertion row(s)")
-        frames_by_preset.setdefault(preset.name, []).append(frame)
-        sources_by_preset.setdefault(preset.name, []).append({
-            "source_file": extracted.source_file,
-            "raw_source_path": extracted.source_original_path,
-            "input_file_path": env.input_file_path,
-            "input_file_name": env.input_file_name,
-            "container_chain": file.container_chain,
-            "format": selector.format,
-            "table": selector.table,
-            "sheet": selector.sheet,
-            "source_fingerprint": extracted.source_fingerprint,
-            "preset_id": preset.meta.id,
-            "matched_preset": preset.name,
-            "parser": f"{preset.parser.name} {preset.parser.version}",
-            "source_tier": preset.source_tier,
-            "record_count": len(records),
-            "assertion_count": len(frame),
-            "frontier": reporting.frontier_report(preset, list(extracted.source_columns)),
-        })
-        warnings.extend(frame_warnings)
+        for preset, selector in file_matches:
+            if len(preset.roles) > 1:
+                raise NotImplementedError("multi-source python extract not yet implemented")
+            matched.append(f"{label} -> {preset.name}")
+            extracted = extractor.extract({selector.role: (file, selector)}, preset)
+            records = to_records(extracted.dataframe)
+            env = BuildEnv(
+                input_file_path=_input_file_path(file),
+                input_file_name=Path(_input_file_path(file)).name,
+                source_fingerprint=extracted.source_fingerprint,
+                source_file_path=extracted.source_original_path,
+                raw_source_path=extracted.source_original_path,
+                source_tier=preset.source_tier,
+                entity=entity,
+                linked_entity=linked_entity,
+                source_file_name=file.name,
+                local_zone=local_zone,
+            )
+            frame, frame_warnings = build_rows(
+                records, preset, env, selector=selector, columns=list(extracted.source_columns),
+                include_source_columns=include_source_columns)
+            log.info(f"{label}: {len(records)} source row(s) -> {len(frame)} assertion row(s)")
+            # Required columns are guaranteed present by the match gate; the frontier still
+            # records any absent OPTIONAL/expected columns for the warnings sidecar.
+            frontier = reporting.frontier_report(preset, list(extracted.source_columns))
+            frames_by_preset.setdefault(preset.name, []).append(frame)
+            sources_by_preset.setdefault(preset.name, []).append({
+                "source_file": extracted.source_file,
+                "raw_source_path": extracted.source_original_path,
+                "input_file_path": env.input_file_path,
+                "input_file_name": env.input_file_name,
+                "container_chain": file.container_chain,
+                "format": selector.format,
+                "table": selector.table,
+                "sheet": selector.sheet,
+                "source_fingerprint": extracted.source_fingerprint,
+                "preset_id": preset.meta.id,
+                "matched_preset": preset.name,
+                "parser": f"{preset.parser.name} {preset.parser.version}",
+                "source_tier": preset.source_tier,
+                "record_count": len(records),
+                "assertion_count": len(frame),
+                "frontier": frontier,
+            })
+            warnings.extend(frame_warnings)
 
     if unmatched:
         log.info(f"{len(unmatched)} file(s) matched no preset (set log level to DEBUG to list them)")

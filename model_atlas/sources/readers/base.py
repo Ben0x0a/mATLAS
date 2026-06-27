@@ -44,6 +44,7 @@ class ReadResult:
 @runtime_checkable
 class FormatReader(Protocol):
     format: str
+    staging_mode: str  # one of staging.STAGING_{ALWAYS,NEVER,TIER}
 
     def read(self, file: "SourceFile", params: dict) -> ReadResult: ...
     def peek_columns(self, file: "SourceFile", selector: Any = None) -> set[str] | None: ...
