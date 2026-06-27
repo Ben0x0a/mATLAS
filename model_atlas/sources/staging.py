@@ -17,8 +17,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from model_atlas.model.families import SourceTier
+
 if TYPE_CHECKING:
     from model_atlas.sources.container import SourceFile
+
+# How a reader's source is materialised, decided per (reader, source tier):
+#   ALWAYS  copy to a temp file always (a technical need, e.g. SQLite's WAL two-pass merge);
+#   NEVER   read in place always (e.g. a multi-GB XML report — never copied);
+#   TIER    copy only for PRIMARY-tier evidence, read in place otherwise.
+# Forensic rationale: primary (first-hand) evidence earns the full copy + before/after hash
+# chain; secondary tool exports are read in place to avoid needless multi-GB copies.
+STAGING_ALWAYS = "always"
+STAGING_NEVER = "never"
+STAGING_TIER = "tier"
+
+
+def should_copy(staging_mode: str, tier: str | None) -> bool:
+    """Whether a source should be copied to a temp file (vs read in place)."""
+    if staging_mode == STAGING_ALWAYS:
+        return True
+    if staging_mode == STAGING_NEVER:
+        return False
+    return tier == SourceTier.PRIMARY.value  # STAGING_TIER
 
 
 @dataclass(frozen=True)

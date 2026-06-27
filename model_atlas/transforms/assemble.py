@@ -33,18 +33,29 @@ from typing import Any, Callable
 import pandas as pd
 
 import model_atlas.transforms.builtin  # noqa: F401 - registers builtins
-from model_atlas.model.families import OUTPUT_COLUMNS, column_cast, unit_factor
+from model_atlas.model.families import (
+    OUTPUT_COLUMNS,
+    UTC_OFFSET_UNKNOWN,
+    column_cast,
+    unit_factor,
+)
 from model_atlas.presets.expr import Ref
 from model_atlas.presets.spec import FieldSpec, InputSelector, PresetSpec, TimeSpec
 from model_atlas.transforms.builtin import (
     ZoneToken,
+    datetime_to_us,
     epoch_to_us,
     local_naive_to_utc_us,
     parse_datetime_to_us,
+    parse_iso8601,
     parse_zone_token,
     zone_offset_hours_at,
     zone_standard_offset_hours,
 )
+
+# Recognised time codec for ISO-8601 strings (e.g. Cellebrite TimeStamp): zone-qualified
+# values parse with their own offset; naive values are resolved via the preset ``zone:``.
+ISO8601_FORMAT = "iso8601"
 from model_atlas.transforms.registry import PipeContext, run_pipe
 
 # Fixed namespaces so deterministic UIDs are stable across runs/machines.
@@ -260,9 +271,16 @@ def _decode_time(
     if spec.epoch is not None:
         return epoch_to_us(value, spec.epoch), None
     if spec.format is not None:
-        naive = dt.datetime.strptime(str(value), spec.format)
-        if naive.tzinfo is not None:                          # %z: the value carries its offset
-            return parse_datetime_to_us(value, spec.format), naive.utcoffset().total_seconds() / 3600
+        # Parse once into a datetime (aware or naive); ISO-8601 self-indicates its zone, a
+        # strptime format follows its %z. The downstream aware/naive handling is shared.
+        if spec.format == ISO8601_FORMAT:
+            naive = parse_iso8601(value)
+            if naive is None:
+                return None, None
+        else:
+            naive = dt.datetime.strptime(str(value), spec.format)
+        if naive.tzinfo is not None:                          # the value carries its own offset
+            return datetime_to_us(naive), naive.utcoffset().total_seconds() / 3600
         dst = bool(zone_token and zone_token.dst)
         base = zone_token.base_offset_hours if zone_token else None
         if dst and local_zone:
@@ -286,7 +304,10 @@ def _decode_time(
                 f"DST/local timestamp {value!r} but no local_zone configured; using base offset "
                 f"{base if base is not None else 0.0}h — DST-period rows may be off by an hour")
         off = base if base is not None else 0.0
-        return parse_datetime_to_us(value, spec.format, off), (base if base is not None else None)
+        aware = naive.replace(tzinfo=dt.timezone(dt.timedelta(hours=off)))
+        # base known -> a real offset; base unknown -> we ASSUMED UTC to materialise the
+        # instant, so flag the offset as unknown rather than report a misleading null/0.0.
+        return datetime_to_us(aware), (base if base is not None else UTC_OFFSET_UNKNOWN)
     # Neither epoch nor format: the column is already Unix microseconds.
     return int(value), None
 
@@ -319,7 +340,11 @@ def _apply_time(
     # source's own resolved offset; else null. (local = time_*_unix_utc_us + utc_offset_hours.)
     # For an interval crossing a DST boundary, the lower bound's instant fixes the offset.
     if lower_us is not None:
-        if env.local_zone:
+        if src_off == UTC_OFFSET_UNKNOWN:
+            # The source zone was unknown (a naive value assumed UTC); flag it loudly and do
+            # NOT overwrite with a display-zone offset, which would imply a known offset.
+            flat["utc_offset_hours"] = UTC_OFFSET_UNKNOWN
+        elif env.local_zone:
             flat["utc_offset_hours"] = zone_offset_hours_at(env.local_zone, lower_us)
         elif src_off is not None:
             flat["utc_offset_hours"] = src_off

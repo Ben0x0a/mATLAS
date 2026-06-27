@@ -58,6 +58,8 @@ packages = [
     "model_atlas.model",
     "model_atlas.presets",
     "model_atlas.sources",
+    "model_atlas.sources.readers",
+    "model_atlas.sources.readers.xml_specifics",
     "model_atlas.sqlite",
     "model_atlas.transforms",
     "ufdr_parser",

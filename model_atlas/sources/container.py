@@ -87,6 +87,31 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def acquire_source(container: "Container", file: SourceFile, *, copy: bool) -> StagedFile:
+    """Materialise a file for a reader: a throwaway copy, or an in-place reference.
+
+    ``copy=True`` stages (copies + hashes) as before. ``copy=False`` returns a StagedFile
+    pointing at the ORIGINAL on-disk file (no copy, ``temp_dir=None``) so the reader opens it
+    in place — used for non-primary tiers and multi-GB sources. A file with no on-disk path
+    (a zip entry a path-based reader must open) is copied regardless, since there is no
+    in-place path to hand it. ``finalize`` works unchanged for both (it re-hashes the origin).
+    """
+    if copy:
+        return container.stage(file)
+    disk = container.ondisk_path(file)
+    if disk is None:
+        return container.stage(file)
+    before = sha256_file(disk)
+    return StagedFile(
+        path=disk,
+        fingerprint=before,
+        origin=file,
+        integrity={"mode": "in_place", "ok": None, "source_hash_before": before,
+                   "verification_after": None},
+        temp_dir=None,
+    )
+
+
 class _ClosingZipStream:
     """An open zip entry that also closes its parent ``ZipFile`` when closed.
 

@@ -115,7 +115,7 @@ class PresetMeta:
         return f"{prefix} — {self.name}" if prefix else self.name
 
 
-_READER_FORMATS = ("csv", "excel", "sqlite")
+_READER_FORMATS = ("csv", "excel", "sqlite", "xml")
 _READ_KEYS = ("delimiter", "encoding", "header_row", "skip_rows")
 
 
@@ -123,15 +123,18 @@ _READ_KEYS = ("delimiter", "encoding", "header_row", "skip_rows")
 class InputSelector:
     """One ``input_selector`` entry: where the file is (``path`` XOR ``name``), its
     magic-verified ``format``, an optional ``role``, and the reader params for that
-    format (table/sql for sqlite, sheet for excel, delimiter/encoding/… for csv)."""
+    format (table/sql for sqlite, sheet for excel, namespace/model for xml,
+    delimiter/encoding/… for csv)."""
 
-    format: str                      # csv | excel | sqlite
+    format: str                      # csv | excel | sqlite | xml
     role: str = "source"
     path: str | None = None          # anchored, prefix-tolerant; XOR name
     name: str | None = None          # basename anywhere; XOR path
     table: str | None = None         # sqlite
     sql: str | None = None           # sqlite
     sheet: str | None = None         # excel
+    namespace: str | None = None     # xml — the dialect's root namespace (discriminator)
+    model: str | None = None         # xml — the model type to extract
     read: dict[str, Any] = field(default_factory=dict)
 
     def reader_params(self) -> dict[str, Any]:
@@ -139,6 +142,8 @@ class InputSelector:
             return dict(self.read)
         if self.format == "excel":
             return {"sheet": self.sheet, **self.read}
+        if self.format == "xml":
+            return {"namespace": self.namespace, "model": self.model}
         params: dict[str, Any] = {}
         if self.table:
             params["table"] = self.table
@@ -157,6 +162,8 @@ class FieldSpec:
     unit: str | None = None                       # source unit -> canonical
     extract: tuple[str, str] | None = None        # (pattern_name, group_name)
     pipe: tuple[PipeCall, ...] = ()
+    optional: bool = False                         # a mapped column absent => null, not a
+                                                   # match failure (e.g. speed before iOS 17)
 
     # --- v2-compat accessors used by reporting._column_refs ---
     @property
@@ -294,6 +301,7 @@ def _parse_field(
             unit=raw.get("unit"),
             extract=extract,
             pipe=parse_pipe(raw.get("pipe")),
+            optional=bool(raw.get("optional", False)),
         )
     else:
         spec = FieldSpec(model_field=model_field, ref=parse_ref(raw))
@@ -379,12 +387,15 @@ def _parse_one_selector(raw: Any, path: Path) -> InputSelector:
             raise ValueError(f"{path}: a sqlite input_selector needs exactly one of 'table' or 'sql'")
     if fmt == "excel" and not raw.get("sheet"):
         raise ValueError(f"{path}: an excel input_selector needs 'sheet'")
+    if fmt == "xml" and not raw.get("model"):
+        raise ValueError(f"{path}: an xml input_selector needs 'model' (the model type to extract)")
     read = {k: raw[k] for k in _READ_KEYS if k in raw}
     role = raw.get("role") or "source"
     return InputSelector(
         format=fmt, role=str(role),
         path=raw.get("path"), name=raw.get("name"),
         table=raw.get("table"), sql=raw.get("sql"), sheet=raw.get("sheet"),
+        namespace=raw.get("namespace"), model=raw.get("model"),
         read=read,
     )
 

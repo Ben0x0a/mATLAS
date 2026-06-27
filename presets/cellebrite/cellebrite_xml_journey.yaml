@@ -1,0 +1,69 @@
+preset:
+  id: cellebrite.xml.journey
+  name: Cellebrite XML Journey (Trip)
+  tool: Cellebrite UFED
+  version: 1.0
+  tier: secondary
+
+input_selector:
+  format: xml
+  name: report.xml
+  namespace: http://pa.cellebrite.com/report/2.0
+  model: Journey
+
+# All output rows of one Journey (origin + destination) share this stable id.
+source_record_uid: column(uuid)
+
+lookup_tables:
+  recovery: {Intact: intact, Deleted: deleted, Unknown: unknown}
+
+expected_columns:
+  - uuid
+  - deleted_state
+  - decoding_confidence
+  - Source
+  - Name
+  - Type
+  - StartTime
+  - StartTime.format
+  - EndTime
+  - EndTime.format
+  - FromPoint.Position.Latitude
+  - FromPoint.Position.Longitude
+  - FromPoint.TimeStamp
+  - ToPoint.Position.Latitude
+  - ToPoint.Position.Longitude
+  - ToPoint.TimeStamp
+  - ToPoint.Address.City
+  - ToPoint.Address.Country
+
+common:
+  entity:          param(entity)
+  entity_type:     const(device)
+  source_label:    const(Journey)
+  raw_source_path: column(source_path)
+  deleted:         { from: column(deleted_state), pipe: "lookup(recovery, on_unknown=null)" }
+
+# A Journey fans out to two assertions — origin at StartTime and destination at EndTime —
+# so each trip yields two output rows sharing the Journey's source_record_uid.
+assertions:
+  - position:
+      latitude_wgs84:  column(FromPoint.Position.Latitude)
+      longitude_wgs84: column(FromPoint.Position.Longitude)
+    time:
+      instant: column(StartTime)
+      format:  iso8601
+    links:
+      entity_position:  at
+      entity_time:      observed_at
+      spatial_temporal: instant
+  - position:
+      latitude_wgs84:  column(ToPoint.Position.Latitude)
+      longitude_wgs84: column(ToPoint.Position.Longitude)
+    time:
+      instant: column(EndTime)
+      format:  iso8601
+    links:
+      entity_position:  at
+      entity_time:      observed_at
+      spatial_temporal: instant

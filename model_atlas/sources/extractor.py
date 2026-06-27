@@ -38,6 +38,8 @@ def _source_label(file: "SourceFile", selector: "InputSelector") -> str:
         return f"{name}::table={selector.table}" if selector.table else f"{name}::query"
     if selector.format == "excel":
         return f"{name}::sheet={selector.sheet}"
+    if selector.format == "xml":
+        return f"{name}::model={selector.model}"
     return name
 
 
@@ -56,7 +58,10 @@ class SingleSourceExtractor:
         (file, selector), = file_to_selector.values()
         reader = get_reader(selector.format)
         log.info(f"Extracting {file.full_logical_path} via {selector.format} reader")
-        result = reader.read(file, selector.reader_params())
+        # Pass the preset's evidential tier so the reader's staging policy can decide whether
+        # to copy the source (primary) or read it in place (secondary). Reserved key.
+        params = {**selector.reader_params(), "_tier": getattr(preset, "source_tier", None)}
+        result = reader.read(file, params)
         return ExtractedData(
             dataframe=result.dataframe,
             source_file=_source_label(file, selector),
