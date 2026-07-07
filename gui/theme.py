@@ -202,6 +202,28 @@ def build_stylesheet() -> str:
         color: #94a3b8;
         border-color: #d5dee9;
     }
+    QToolButton {
+        background: #ffffff;
+        color: #1f2937;
+        border: 1px solid #b9c7d8;
+        border-radius: 5px;
+        padding: 6px 24px 6px 12px;
+        min-height: 24px;
+        font-weight: 600;
+    }
+    QToolButton:hover {
+        background: #eef4fb;
+        border-color: #9db0c5;
+    }
+    QToolButton:pressed {
+        background: #dbeafe;
+        border-color: #2563eb;
+    }
+    QToolButton::menu-indicator {
+        subcontrol-position: right center;
+        subcontrol-origin: padding;
+        right: 6px;
+    }
     QPushButton#runButton {
         background: #2563eb;
         color: #ffffff;

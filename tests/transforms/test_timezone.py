@@ -34,7 +34,7 @@ def test_captured_timezone_is_applied_end_to_end(tmp_path: Path) -> None:
     out = tmp_path / "out.csv"
 
     process(tmp_path / "tz.csv", tmp_path / "p.yaml", out, linked_entity="subject")
-    row = next(csv.DictReader(out.open(encoding="utf-8-sig")))
+    row = next(csv.DictReader(out.open(encoding="utf-8-sig"), delimiter=";"))
 
     # 13:00 at the captured +02:00 == 11:00:00 UTC.
     expected = int(dt.datetime(2025, 6, 6, 11, 0, 0, tzinfo=dt.timezone.utc).timestamp()) * 1_000_000

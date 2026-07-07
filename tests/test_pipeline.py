@@ -14,9 +14,9 @@ from model_atlas.pipeline import process
 
 
 def _read_csv(path: Path) -> tuple[list[str], list[list[str]]]:
-    """(header, data rows) parsed with the csv module so QUOTE_NONNUMERIC quoting is handled."""
+    """(header, data rows) parsed with the csv module: ';' delimiter, QUOTE_NONNUMERIC quoting."""
     with path.open(encoding="utf-8", newline="") as handle:
-        rows = list(csv.reader(handle))
+        rows = list(csv.reader(handle, delimiter=";"))
     return (rows[0], rows[1:]) if rows else ([], [])
 
 _PRESET = """
@@ -67,6 +67,26 @@ def test_pipeline_output_and_readable_sidecars(tmp_path: Path) -> None:
 
     warnings = json.loads(result.output_warnings.read_text(encoding="utf-8"))
     assert warnings["transform_warning_count"] == 0
+
+
+def test_process_reports_progress_phases(tmp_path: Path) -> None:
+    source, presets, output = _setup(tmp_path)
+    phases: list[str] = []
+    process(source, presets, output, linked_entity="subject",
+            exports=["sqlite"], progress=phases.append)
+    # Each phase is announced at its start; a long run therefore never looks stalled.
+    assert "Loading presets" in phases
+    assert "Discovering sources" in phases
+    assert "Extracting & mapping" in phases
+    assert any(phase.startswith("Untangling") for phase in phases)
+    assert "Additional exports" in phases
+
+
+def test_process_progress_is_optional(tmp_path: Path) -> None:
+    source, presets, output = _setup(tmp_path)
+    # No progress callback: must run exactly as before.
+    result = process(source, presets, output, linked_entity="subject")
+    assert result.row_counts["rows"] == 1
 
 
 def test_pipeline_prov_traceability(tmp_path: Path) -> None:

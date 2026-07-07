@@ -43,7 +43,7 @@ def _read_rows(csv_path: Path) -> list[dict[str, str]]:
     import csv
 
     with csv_path.open(encoding="utf-8-sig", newline="") as f:
-        return list(csv.DictReader(f))
+        return list(csv.DictReader(f, delimiter=";"))
 
 
 def test_force_preset_applies_despite_selector_mismatch(tmp_path: Path) -> None:

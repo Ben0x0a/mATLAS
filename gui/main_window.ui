@@ -523,6 +523,20 @@
             </widget>
            </item>
            <item>
+            <widget class="QPushButton" name="addAllPresetsButton">
+             <property name="text">
+              <string>Add all &gt;&gt;</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="removeAllPresetsButton">
+             <property name="text">
+              <string>&lt;&lt; Remove all</string>
+             </property>
+            </widget>
+           </item>
+           <item>
             <spacer name="presetButtonSpacer">
              <property name="orientation">
               <enum>Qt::Vertical</enum>

@@ -160,26 +160,31 @@ def test_builtin_kml(tmp_path: Path, sample_df: pd.DataFrame) -> None:
     assert text.count("<Placemark>") == 1
 
 
+def _read_geovis(path: Path) -> tuple[list[str], list[list[str]]]:
+    """Parse a GeoVisualizer CSV: ';' delimiter, minimal quoting (multi-line Description quoted)."""
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.reader(handle, delimiter=";"))
+    return rows[0], rows[1:]
+
+
 def test_geovisualizer_columns_and_mapping(tmp_path: Path, sample_df: pd.DataFrame) -> None:
     [out] = run_exporters(["geovisualizer"], _ctx(sample_df, tmp_path))
-    with out.open(encoding="utf-8-sig", newline="") as handle:
-        rows = list(csv.reader(handle))
-    header = rows[0]
+    header, data = _read_geovis(out)
     assert header == [
         "Target", "MSISDN", "IMEI", "Timestamp (local)", "Cell-ID", "Azimuth", "Address",
         "Latitude", "Longitude", "Description", "Source", "orig. Time", "Type", "Confidence", "Precision",
     ]
-    first = dict(zip(header, rows[1]))
+    first = dict(zip(header, data[0]))
     assert first["Target"] == "subjA"
     assert first["MSISDN"] == ""
-    assert first["IMEI"] == "490154203237518"           # picked from the entity, Luhn-valid
-    assert "+01:00" in first["Timestamp (local)"]        # local ISO with the row's offset applied
-    assert "mATLAS" in first["Description"] and "km/h" in first["Description"]
+    assert first["IMEI"] == "490154203237518"                     # picked from the entity, Luhn-valid
+    assert first["Timestamp (local)"] == "06.12.2025 14:00:00.000000+01:00"   # dd.mm.yyyy + offset
+    assert "(mATLAS)" in first["Description"] and "Speed: 10.8 km/h" in first["Description"]
     assert "Cache.sqlite" in first["Source"] and "in.csv" in first["Source"]
-    assert first["Type"] == "ZLOC"                       # source_label
+    assert first["Type"] == "P"                                   # preset_name (no source_label fallback)
     assert first["Confidence"] == ""
-    second = dict(zip(header, rows[2]))
-    assert second["IMEI"] == ""                          # no valid IMEI token in the entity
+    second = dict(zip(header, data[1]))
+    assert second["IMEI"] == ""                                   # no valid IMEI token in the entity
 
 
 # --- pipeline integration ---------------------------------------------------
@@ -270,21 +275,35 @@ def test_geovisualizer_minimal_columns_no_crash(tmp_path: Path) -> None:
     # Only Target + coordinates present; every other source column is absent.
     frame = pd.DataFrame({"linked_entity": ["x"], "latitude_wgs84": [1.0], "longitude_wgs84": [2.0]})
     [out] = run_exporters(["geovisualizer"], _ctx(frame, tmp_path))
-    with out.open(encoding="utf-8-sig", newline="") as handle:
-        rows = list(csv.reader(handle))
-    row = dict(zip(rows[0], rows[1]))
+    header, data = _read_geovis(out)
+    row = dict(zip(header, data[0]))
     assert row["Target"] == "x"
     assert row["IMEI"] == "" and row["Timestamp (local)"] == "" and row["Source"] == ""
-    assert row["Description"] == "mATLAS"
+    # No offset column at all => unknown => the warning leads, then 'Speed: null', then (mATLAS).
+    assert row["Description"] == f"{_builtin._OFFSET_UNKNOWN_NOTE}\nSpeed: null\n(mATLAS)"
 
 
 def test_geovisualizer_string_coordinates_coerced(tmp_path: Path) -> None:
-    frame = pd.DataFrame({"linked_entity": ["x"], "latitude_wgs84": ["46.5"], "longitude_wgs84": ["6.6"]})
+    frame = pd.DataFrame({
+        "linked_entity": ["x"], "latitude_wgs84": ["46.5"], "longitude_wgs84": ["6.6"],
+        "utc_offset_hours": [0.0],
+    })
     [out] = run_exporters(["geovisualizer"], _ctx(frame, tmp_path))
-    with out.open(encoding="utf-8-sig", newline="") as handle:
-        rows = list(csv.reader(handle))
-    row = dict(zip(rows[0], rows[1]))
+    header, data = _read_geovis(out)
+    row = dict(zip(header, data[0]))
     assert float(row["Latitude"]) == 46.5 and float(row["Longitude"]) == 6.6
+
+
+def test_geovisualizer_warns_when_offset_unknown(tmp_path: Path) -> None:
+    frame = pd.DataFrame({
+        "linked_entity": ["x"], "latitude_wgs84": [1.0], "longitude_wgs84": [2.0],
+        "time_lower_unix_utc_us": [1765026000000000], "utc_offset_hours": ["N/A"],
+    })
+    [out] = run_exporters(["geovisualizer"], _ctx(frame, tmp_path))
+    header, data = _read_geovis(out)
+    row = dict(zip(header, data[0]))
+    assert row["Description"].splitlines()[0] == _builtin._OFFSET_UNKNOWN_NOTE
+    assert row["Timestamp (local)"].endswith("+00:00")   # placeholder suffix, flagged as unknown
 
 
 def test_sqlite_rerun_overwrites_cleanly(tmp_path: Path, sample_df: pd.DataFrame) -> None:
@@ -307,10 +326,12 @@ def test_geojson_properties_exclude_coords(tmp_path: Path, sample_df: pd.DataFra
 
 # --- edge cases: GeoVisualizer field helpers -------------------------------
 
-def test_pick_imei_variants() -> None:
+def test_pick_imei_splits_on_dash_underscore_space() -> None:
     assert _builtin._pick_imei("dev_490154203237518_x") == "490154203237518"
-    assert _builtin._pick_imei("490154203237518") == "490154203237518"     # no underscore
-    assert _builtin._pick_imei("foo_bar_490154203237518") == "490154203237518"
+    assert _builtin._pick_imei("dev-490154203237518-x") == "490154203237518"
+    assert _builtin._pick_imei("dev 490154203237518 x") == "490154203237518"
+    assert _builtin._pick_imei("490154203237518") == "490154203237518"     # bare value
+    assert _builtin._pick_imei("foo_bar-490154203237518") == "490154203237518"
     assert _builtin._pick_imei(None) == ""
     assert _builtin._pick_imei("") == ""
     assert _builtin._pick_imei("dev_123_x") == ""                          # too short
@@ -319,33 +340,77 @@ def test_pick_imei_variants() -> None:
     assert _builtin._pick_imei("49015420323751a") == ""                    # non-digit
 
 
-def test_local_iso_offsets_and_missing() -> None:
+def test_local_timestamp_format_and_offsets() -> None:
     us = 1765026000000000   # 2025-12-06 13:00:00 UTC
+    assert _builtin._local_timestamp(us, 1.0) == "06.12.2025 14:00:00.000000+01:00"
+    assert _builtin._local_timestamp(us, 0.0) == "06.12.2025 13:00:00.000000+00:00"
+    assert _builtin._local_timestamp(us, -5.0) == "06.12.2025 08:00:00.000000-05:00"
+    assert _builtin._local_timestamp(us, 5.5) == "06.12.2025 18:30:00.000000+05:30"   # fractional zone
+    assert _builtin._local_timestamp(us, "N/A") == "06.12.2025 13:00:00.000000+00:00"  # unknown => UTC
+    assert _builtin._local_timestamp(None, 1.0) == ""
+    assert _builtin._local_timestamp(float("nan"), 1.0) == ""
+    assert _builtin._local_timestamp("not-a-number", 1.0) == ""
+
+
+def test_local_iso_still_used_by_kml() -> None:
+    us = 1765026000000000
     assert _builtin._local_iso(us, 1.0) == "2025-12-06T14:00:00+01:00"
-    assert _builtin._local_iso(us, 0.0) == "2025-12-06T13:00:00+00:00"
-    assert _builtin._local_iso(us, -5.0) == "2025-12-06T08:00:00-05:00"
-    assert _builtin._local_iso(us, 5.5) == "2025-12-06T18:30:00+05:30"     # fractional zone
-    assert _builtin._local_iso(us, "N/A") == "2025-12-06T13:00:00+00:00"   # non-numeric offset => UTC
     assert _builtin._local_iso(None, 1.0) == ""
-    assert _builtin._local_iso(float("nan"), 1.0) == ""
-    assert _builtin._local_iso("not-a-number", 1.0) == ""
 
 
-def test_description_formats() -> None:
-    both = {"time_lower_source_field": "TS", "time_upper_source_field": "TS",
-            "horizontal_speed_kmh": 10.8, "horizontal_speed_accuracy_kmh": 2.0}
-    text = _builtin._geovis_description(both)
-    assert text == "mATLAS · TS · 10.8 km/h (±2 km/h)"
+def test_description_multiline_format() -> None:
+    both = {"utc_offset_hours": 1.0, "horizontal_speed_kmh": 10.8, "horizontal_speed_accuracy_kmh": 2.0}
+    assert _builtin._geovis_description(both, "TS", None) == "Speed: 10.8 km/h (±2 km/h)\nTS\n(mATLAS)"
 
-    no_accuracy = {"time_lower_source_field": "TS", "time_upper_source_field": "TS",
-                   "horizontal_speed_kmh": 5.0, "horizontal_speed_accuracy_kmh": None}
-    assert _builtin._geovis_description(no_accuracy) == "mATLAS · TS · 5 km/h"
+    no_accuracy = {"utc_offset_hours": 1.0, "horizontal_speed_kmh": 5.0, "horizontal_speed_accuracy_kmh": None}
+    assert _builtin._geovis_description(no_accuracy, "TS", None) == "Speed: 5 km/h\nTS\n(mATLAS)"
 
-    assert _builtin._geovis_description(
-        {"time_lower_source_field": "TS", "time_upper_source_field": "TS"}) == "mATLAS · TS"
-    assert _builtin._geovis_description(
-        {"time_lower_source_field": "L", "time_upper_source_field": "U"}) == "mATLAS · L / U"
-    assert _builtin._geovis_description({}) == "mATLAS"
+    no_speed = {"utc_offset_hours": 1.0}
+    assert _builtin._geovis_description(no_speed, "TS", None) == "Speed: null\nTS\n(mATLAS)"
+
+    # An interval bound adds 'Range start' / 'Range end' before the (mATLAS) signature.
+    assert _builtin._geovis_description({"utc_offset_hours": 1.0}, "Lower", "start") == (
+        "Speed: null\nLower\nRange start\n(mATLAS)")
+    assert _builtin._geovis_description({"utc_offset_hours": 1.0}, "Upper", "end") == (
+        "Speed: null\nUpper\nRange end\n(mATLAS)")
+
+    # Unknown offset => the warning is the FIRST line, before Speed.
+    unknown = {"utc_offset_hours": "N/A", "horizontal_speed_kmh": 3.0}
+    assert _builtin._geovis_description(unknown, "TS", None) == (
+        f"{_builtin._OFFSET_UNKNOWN_NOTE}\nSpeed: 3 km/h\nTS\n(mATLAS)")
+
+
+def test_time_emissions_instant_vs_interval() -> None:
+    instant = {"time_lower_unix_utc_us": 100, "time_upper_unix_utc_us": 100,
+               "time_lower_source_field": "TS", "time_upper_source_field": "TS"}
+    assert _builtin._time_emissions(instant) == [(100, "TS", None)]
+
+    interval = {"time_lower_unix_utc_us": 100, "time_upper_unix_utc_us": 200,
+                "time_lower_source_field": "Start", "time_upper_source_field": "End"}
+    assert _builtin._time_emissions(interval) == [(100, "Start", "start"), (200, "End", "end")]
+
+    only_lower = {"time_lower_unix_utc_us": 100, "time_lower_source_field": "TS"}
+    assert _builtin._time_emissions(only_lower) == [(100, "TS", None)]
+
+    no_time = {"time_lower_source_field": "TS"}
+    assert _builtin._time_emissions(no_time) == [(None, "TS", None)]
+
+
+def test_geovisualizer_interval_expands_to_two_rows(tmp_path: Path) -> None:
+    frame = pd.DataFrame({
+        "linked_entity": ["x"], "latitude_wgs84": [1.0], "longitude_wgs84": [2.0],
+        "utc_offset_hours": [1.0], "preset_name": ["P"],
+        "time_lower_unix_utc_us": [1765026000000000], "time_upper_unix_utc_us": [1765029600000000],
+        "time_lower_source_field": ["Start TS"], "time_upper_source_field": ["End TS"],
+    })
+    [out] = run_exporters(["geovisualizer"], _ctx(frame, tmp_path))
+    header, data = _read_geovis(out)
+    assert len(data) == 2                                     # one row per time bound
+    first, second = dict(zip(header, data[0])), dict(zip(header, data[1]))
+    assert "Start TS" in first["Description"] and "Range start" in first["Description"]
+    assert "End TS" in second["Description"] and "Range end" in second["Description"]
+    assert first["Timestamp (local)"] != second["Timestamp (local)"]
+    assert first["Latitude"] == second["Latitude"] == "1.0"  # shared position across both bounds
 
 
 def test_source_formats() -> None:
@@ -355,12 +420,12 @@ def test_source_formats() -> None:
     assert _builtin._geovis_source({}) == ""
 
 
-def test_geovisualizer_type_falls_back_to_preset(tmp_path: Path) -> None:
+def test_geovisualizer_type_is_preset_name_only(tmp_path: Path) -> None:
+    # Type is the preset name; a present source_label must NOT be used.
     frame = pd.DataFrame({
         "linked_entity": ["x"], "latitude_wgs84": [1.0], "longitude_wgs84": [2.0],
-        "source_label": [None], "preset_name": ["FallbackPreset"],
+        "utc_offset_hours": [0.0], "source_label": ["ShouldBeIgnored"], "preset_name": ["ThePreset"],
     })
     [out] = run_exporters(["geovisualizer"], _ctx(frame, tmp_path))
-    with out.open(encoding="utf-8-sig", newline="") as handle:
-        rows = list(csv.reader(handle))
-    assert dict(zip(rows[0], rows[1]))["Type"] == "FallbackPreset"
+    header, data = _read_geovis(out)
+    assert dict(zip(header, data[0]))["Type"] == "ThePreset"

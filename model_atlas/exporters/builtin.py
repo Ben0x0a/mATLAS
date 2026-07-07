@@ -13,6 +13,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ from xml.etree.ElementTree import Element, ElementTree, SubElement
 
 import pandas as pd
 
+from model_atlas.export import CSV_DELIMITER
 from model_atlas.exporters.registry import ExportContext, register_exporter
 
 # Cross-platform epoch anchor (see transforms.builtin): timedelta arithmetic is valid across the
@@ -144,13 +146,17 @@ def _luhn_ok(digits: str) -> bool:
     return total % 10 == 0
 
 
+# The entity value may join several ids with '-', '_' or a space; split on any of them.
+_IMEI_SEPARATORS = re.compile(r"[-_ ]")
+
+
 def _pick_imei(entity: Any) -> str:
-    """The entity value is split on '_'; return the first token that is a valid 15-digit IMEI
-    (Luhn-checked), else '' — so a compound id like 'dev_490154203237518_x' yields the IMEI."""
+    """Split the entity on '-', '_' or space and return the FIRST token that is a valid 15-digit
+    IMEI (Luhn-checked), else '' — so a compound id like 'dev_490154203237518-x' yields the IMEI."""
     text = _clean(entity)
     if text is None:
         return ""
-    for token in text.split("_"):
+    for token in _IMEI_SEPARATORS.split(text):
         if len(token) == 15 and token.isdigit() and _luhn_ok(token):
             return token
     return ""
@@ -169,25 +175,93 @@ def _local_iso(unix_us: Any, offset_hours: Any) -> str:
     return (_UNIX_EPOCH + timedelta(microseconds=microseconds)).astimezone(tz).isoformat()
 
 
-def _geovis_description(row: dict) -> str:
-    """Short, readable, mATLAS-tagged: the timestamp source field (one name when the lower and
-    upper source fields are identical), plus speed / speed-accuracy in km/h when present."""
-    lower, upper = _clean(row.get("time_lower_source_field")), _clean(row.get("time_upper_source_field"))
-    if lower and upper and lower != upper:
-        timestamp_field = f"{lower} / {upper}"
-    else:
-        timestamp_field = lower or upper or ""
-    parts = ["mATLAS"]
-    if timestamp_field:
-        parts.append(timestamp_field)
+def _offset_suffix(delta: "timedelta | None") -> str:
+    """A '+HH:MM' / '-HH:MM' UTC-offset suffix (strftime %z has no colon)."""
+    total = int(delta.total_seconds()) if delta is not None else 0
+    sign = "-" if total < 0 else "+"
+    total = abs(total)
+    return f"{sign}{total // 3600:02d}:{(total % 3600) // 60:02d}"
+
+
+def _local_timestamp(unix_us: Any, offset_hours: Any) -> str:
+    """GeoVisualizer local timestamp: ``dd.mm.yyyy HH:MM:SS.ffffff+HH:MM`` (the UTC instant shifted
+    by the row's offset). '' when there is no timestamp. A non-numeric offset falls back to UTC —
+    a known limitation the description flags (see _geovis_description)."""
+    if _is_blank(unix_us):
+        return ""
+    try:
+        microseconds = int(unix_us)
+    except (TypeError, ValueError):
+        return ""
+    tz = timezone(timedelta(hours=_as_float(offset_hours) or 0.0))
+    local = (_UNIX_EPOCH + timedelta(microseconds=microseconds)).astimezone(tz)
+    return local.strftime("%d.%m.%Y %H:%M:%S.%f") + _offset_suffix(local.utcoffset())
+
+
+# The description's first line when utc_offset_hours is unknown: we cannot localise, so the shown
+# time is the source wall-clock value and the '+00:00' suffix is a placeholder, not verified UTC.
+_OFFSET_UNKNOWN_NOTE = "! UTC offset unknown - timestamp shown as-is (source time, not localised)"
+
+
+def _time_emissions(row: dict) -> "list[tuple[Any, Any, str | None]]":
+    """The (timestamp_us, source_field, bound) tuples this assertion row expands into.
+
+    An instant (lower == upper, or only one present) yields ONE tuple with bound=None. A genuine
+    interval (lower != upper) yields TWO — (lower, 'start') and (upper, 'end') — so each bound
+    becomes its own GeoVisualizer row carrying the timestamp and the source field that produced it.
+    A row with no timestamp still yields one tuple (empty timestamp) so its position is not lost."""
+    lower_us, upper_us = row.get("time_lower_unix_utc_us"), row.get("time_upper_unix_utc_us")
+    lower_field, upper_field = row.get("time_lower_source_field"), row.get("time_upper_source_field")
+    lower_ok, upper_ok = not _is_blank(lower_us), not _is_blank(upper_us)
+    if lower_ok and upper_ok:
+        try:
+            same = int(lower_us) == int(upper_us)
+        except (TypeError, ValueError):
+            same = str(lower_us) == str(upper_us)
+        if not same:
+            return [(lower_us, lower_field, "start"), (upper_us, upper_field, "end")]
+        return [(lower_us, lower_field, None)]
+    if lower_ok:
+        return [(lower_us, lower_field, None)]
+    if upper_ok:
+        return [(upper_us, upper_field, None)]
+    return [(None, lower_field or upper_field, None)]
+
+
+def _geovis_description(row: dict, timestamp_field: Any, bound: "str | None") -> str:
+    """Multi-line, readable, mATLAS-tagged. Line order:
+      1. (only when the UTC offset is unknown) a clear warning that the time is shown in UTC;
+      2. Speed: <value> km/h (± accuracy) — or 'Speed: null';
+      3. the source field of THE timestamp shown in this row;
+      4. (only for an interval bound) 'Range start' / 'Range end' — the paired row holds the other;
+      5. (mATLAS).
+    Lines are joined with '\\n'; the CSV writer quotes the field so it renders as a multi-line cell."""
+    lines: list[str] = []
+    # A non-numeric utc_offset_hours (e.g. 'N/A') means the local time could not be resolved and
+    # _local_timestamp fell back to UTC — flag it first, before anything else, so it is unmissable.
+    if _as_float(row.get("utc_offset_hours")) is None:
+        lines.append(_OFFSET_UNKNOWN_NOTE)
+
     speed = _as_float(row.get("horizontal_speed_kmh"))
-    if speed is not None:
-        text = f"{speed:g} km/h"
+    if speed is None:
+        lines.append("Speed: null")
+    else:
+        speed_line = f"Speed: {speed:g} km/h"
         accuracy = _as_float(row.get("horizontal_speed_accuracy_kmh"))
         if accuracy is not None:
-            text += f" (±{accuracy:g} km/h)"
-        parts.append(text)
-    return " · ".join(parts)
+            speed_line += f" (±{accuracy:g} km/h)"
+        lines.append(speed_line)
+
+    field = _clean(timestamp_field)
+    if field:
+        lines.append(field)
+    if bound == "start":
+        lines.append("Range start")
+    elif bound == "end":
+        lines.append("Range end")
+
+    lines.append("(mATLAS)")
+    return "\n".join(lines)
 
 
 def _geovis_source(row: dict) -> str:
@@ -210,24 +284,29 @@ def _num_or_blank(value: Any) -> float | str:
 def export_geovisualizer(ctx: ExportContext) -> list[Path]:
     rows: list[dict] = []
     for row in ctx.dataframe.to_dict(orient="records"):
-        rows.append({
-            "Target": _clean(row.get("linked_entity")) or "",
-            "MSISDN": "",
-            "IMEI": _pick_imei(row.get("entity")),
-            "Timestamp (local)": _local_iso(row.get("time_lower_unix_utc_us"), row.get("utc_offset_hours")),
-            "Cell-ID": "",
-            "Azimuth": "",
-            "Address": "",
-            "Latitude": _num_or_blank(row.get("latitude_wgs84")),
-            "Longitude": _num_or_blank(row.get("longitude_wgs84")),
-            "Description": _geovis_description(row),
-            "Source": _geovis_source(row),
-            "orig. Time": "",
-            "Type": _clean(row.get("source_label")) or _clean(row.get("preset_name")) or "",
-            "Confidence": "",                       # reserved for the assertion link (later)
-            "Precision": _num_or_blank(row.get("horizontal_accuracy_m")),
-        })
+        # An interval assertion (lower != upper) expands into two rows, one per time bound; an
+        # instant into one. All non-temporal columns (position, IMEI, ...) are shared by both.
+        for timestamp_us, timestamp_field, bound in _time_emissions(row):
+            rows.append({
+                "Target": _clean(row.get("linked_entity")) or "",
+                "MSISDN": "",
+                "IMEI": _pick_imei(row.get("entity")),
+                "Timestamp (local)": _local_timestamp(timestamp_us, row.get("utc_offset_hours")),
+                "Cell-ID": "",
+                "Azimuth": "",
+                "Address": "",
+                "Latitude": _num_or_blank(row.get("latitude_wgs84")),
+                "Longitude": _num_or_blank(row.get("longitude_wgs84")),
+                "Description": _geovis_description(row, timestamp_field, bound),
+                "Source": _geovis_source(row),
+                "orig. Time": "",
+                "Type": _clean(row.get("preset_name")) or "",   # preset name (should always be present)
+                "Confidence": "",                    # reserved for the assertion link (later)
+                "Precision": _num_or_blank(row.get("horizontal_accuracy_m")),
+            })
     frame = pd.DataFrame(rows, columns=list(_GEOVIS_COLUMNS))
     out = _out(ctx, "geovisualizer", "csv")
-    frame.to_csv(out, index=False, quoting=csv.QUOTE_NONNUMERIC, encoding="utf-8-sig")
+    # ';' delimiter (Excel default) and MINIMAL quoting: only fields containing the delimiter, a
+    # quote, or the newline in the multi-line Description are quoted.
+    frame.to_csv(out, index=False, sep=CSV_DELIMITER, quoting=csv.QUOTE_MINIMAL, encoding="utf-8-sig")
     return [out]

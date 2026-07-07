@@ -15,6 +15,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 
@@ -33,6 +34,21 @@ from model_atlas.transforms.assemble import BuildEnv, build_rows, to_records
 from model_atlas.transforms.rank import untangle
 
 log = logging.getLogger(__name__)
+
+# A progress reporter is called at the START of each pipeline phase with a short human phase name
+# (no percentage). The library stays UI-agnostic: the GUI passes a callback that emits a Qt signal.
+ProgressFn = Callable[[str], None]
+
+
+def _emit(progress: "ProgressFn | None", phase: str) -> None:
+    """Log the phase start and notify the optional progress reporter. A reporter that raises must
+    never break the run, so it is guarded."""
+    log.info(f"{phase}...")
+    if progress is not None:
+        try:
+            progress(phase)
+        except Exception:  # noqa: BLE001 - progress reporting is best-effort, never fatal.
+            log.debug("progress callback raised", exc_info=True)
 
 
 def _input_file_path(file: SourceFile) -> str:
@@ -161,6 +177,7 @@ def process(
     max_container_depth: int | None = None,
     local_zone: str | None = None,
     exports: list[str] | None = None,
+    progress: ProgressFn | None = None,
 ) -> ProcessResult:
     """Run the full pipeline.
 
@@ -199,8 +216,9 @@ def process(
     started_at = reporting.now_iso()
     # Announce each phase as it STARTS, not only on completion: discovery and extraction of a
     # large acquisition can take minutes, and without a start line the run looks stalled.
-    log.info("Loading presets and discovering sources...")
+    _emit(progress, "Loading presets")
     presets = load_preset_specs(presets_path)
+    _emit(progress, "Discovering sources")
     files = discover(input_path, max_container_depth=max_container_depth)
     log.info(f"Discovered {len(files)} source file(s); {len(presets)} preset(s) loaded")
 
@@ -229,7 +247,7 @@ def process(
     matched: list[str] = []
     unmatched: list[str] = []
 
-    log.info(f"Extracting and mapping {len(files)} discovered source(s)...")
+    _emit(progress, "Extracting & mapping")
     for file in files:
         label = str(file.full_logical_path)
         if force_preset:
@@ -309,13 +327,13 @@ def process(
         result = _write_merged(
             output, started_at, input_path, presets_path,
             frames_by_preset, sources_by_preset,
-            warnings, matched, unmatched, traceability_format, exports, settings,
+            warnings, matched, unmatched, traceability_format, exports, settings, progress,
         )
     else:
         result = _write_split(
             output, started_at, input_path, presets_path,
             frames_by_preset, sources_by_preset,
-            warnings, matched, unmatched, traceability_format, exports, settings,
+            warnings, matched, unmatched, traceability_format, exports, settings, progress,
         )
     log.info("Processing finished.")
     return result
@@ -380,11 +398,14 @@ def _run_exports(
     matched: list[str],
     sources: list[dict],
     settings: Settings,
+    progress: ProgressFn | None,
 ) -> list[Path]:
     """Build an ExportContext for one written artefact and run the selected additional exporters.
     No-op when nothing is selected or the frame is empty (there is nothing to export)."""
     if not exports or dataframe.empty:
         return []
+    _emit(progress, "Additional exports")
+    log.info(f"Writing additional export(s): {', '.join(exports)}")
     context = ExportContext(
         dataframe=dataframe, output_dir=output_dir, base_name=base_name, merge=merge,
         preset_name=preset_name, primary_csv=primary_csv, row_counts=row_counts,
@@ -407,12 +428,13 @@ def _write_merged(
     traceability_format: str,
     exports: list[str] | None,
     settings: Settings,
+    progress: ProgressFn | None,
 ) -> ProcessResult:
     all_frames = [f for frames in frames_by_preset.values() for f in frames]
     all_sources = [s for sources in sources_by_preset.values() for s in sources]
     merged = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame()
     if not merged.empty:
-        log.info(f"Untangling {len(merged)} merged row(s) (ranking overlapping records)...")
+        _emit(progress, f"Untangling {len(merged)} rows")
         merged = _order_columns(untangle(merged))
     written = write_csv(merged, output_csv) if not merged.empty else None
     counts = _row_counts(frames_by_preset, unmatched, matched, merged)
@@ -429,7 +451,7 @@ def _write_merged(
         exports, merged, primary_csv=written, output_dir=output_csv.parent,
         base_name=output_csv.stem, merge=True, preset_name=None, started_at=started_at,
         input_path=input_path, presets_path=presets_path, row_counts=counts,
-        warnings=warnings, matched=matched, sources=all_sources, settings=settings,
+        warnings=warnings, matched=matched, sources=all_sources, settings=settings, progress=progress,
     )
 
     return ProcessResult(
@@ -457,6 +479,7 @@ def _write_split(
     traceability_format: str,
     exports: list[str] | None,
     settings: Settings,
+    progress: ProgressFn | None,
 ) -> ProcessResult:
     output_folder.mkdir(parents=True, exist_ok=True)
     output_csvs: list[Path] = []
@@ -468,7 +491,7 @@ def _write_split(
         sources = sources_by_preset.get(preset_name, [])
         preset_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         if not preset_df.empty:
-            log.info(f"Untangling {len(preset_df)} row(s) for preset {preset_name}...")
+            _emit(progress, f"Untangling {preset_name} ({len(preset_df)} rows)")
             preset_df = _order_columns(untangle(preset_df))
         if preset_df.empty:
             log.info(f"Preset {preset_name} produced no rows; skipping output file.")
@@ -493,7 +516,7 @@ def _write_split(
             exports, preset_df, primary_csv=written, output_dir=output_folder,
             base_name=csv_path.stem, merge=False, preset_name=preset_name, started_at=started_at,
             input_path=input_path, presets_path=presets_path, row_counts=preset_counts,
-            warnings=warnings, matched=matched, sources=sources, settings=settings,
+            warnings=warnings, matched=matched, sources=sources, settings=settings, progress=progress,
         ))
 
     global_counts = {

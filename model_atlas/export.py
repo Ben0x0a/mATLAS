@@ -16,6 +16,11 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
+# Default CSV field delimiter for mATLAS output. ';' is the list separator Excel expects in many
+# European locales, so a double-clicked CSV opens in columns without an import step. Consumed by
+# write_csv (primary CSV) and the exporters that emit CSV (e.g. geovisualizer).
+CSV_DELIMITER = ";"
+
 
 def traceability_path_for(output_csv: Path) -> Path:
     return output_csv.with_suffix(".matlas.traceability.json")
@@ -30,8 +35,8 @@ def write_csv(df: pd.DataFrame, output_csv: Path) -> Path:
     log.info(f"Writing CSV: path={output_csv} rows={len(df)} columns={len(df.columns)}")
     # QUOTE_NONNUMERIC quotes every non-numeric field, so values that contain the delimiter,
     # newlines, or a leading '=' (which spreadsheets would treat as a formula) can never break
-    # the column structure of a forensic export.
-    df.to_csv(output_csv, index=False, quoting=csv.QUOTE_NONNUMERIC)
+    # the column structure of a forensic export. ';' delimiter opens straight into Excel columns.
+    df.to_csv(output_csv, index=False, sep=CSV_DELIMITER, quoting=csv.QUOTE_NONNUMERIC)
     return output_csv
 
 

@@ -137,7 +137,7 @@ def test_zip_path_match_with_wal(tmp_path: Path) -> None:
     result = process(archive, presets, out, linked_entity="subj", traceability_format="prov")
 
     assert result.row_counts["rows"] == 2
-    rows = list(csv.DictReader(out.read_text(encoding="utf-8").splitlines()))
+    rows = list(csv.DictReader(out.read_text(encoding="utf-8").splitlines(), delimiter=";"))
     # §7.1: input_file_path is the FULL path of the outermost artifact = the input zip.
     assert rows[0]["input_file_path"] == str(archive)
     assert "input_file" not in rows[0]                     # the old column is gone
@@ -178,8 +178,8 @@ def test_folder_zip_parity(tmp_path: Path) -> None:
     folder_out = tmp_path / "folder.csv"
     process(folder, presets, folder_out, linked_entity="subj")
 
-    zip_rows = list(csv.DictReader(zip_out.read_text(encoding="utf-8").splitlines()))
-    folder_rows = list(csv.DictReader(folder_out.read_text(encoding="utf-8").splitlines()))
+    zip_rows = list(csv.DictReader(zip_out.read_text(encoding="utf-8").splitlines(), delimiter=";"))
+    folder_rows = list(csv.DictReader(folder_out.read_text(encoding="utf-8").splitlines(), delimiter=";"))
     # input_file_path differs (zip path vs loose db path); everything else is identical.
     drop = ("input_file_path",)
     assert _canonical(zip_rows, drop) == _canonical(folder_rows, drop)

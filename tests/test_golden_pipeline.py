@@ -93,7 +93,7 @@ def test_golden_uid_modes_differ() -> None:
 
     def first_uid(case: str) -> str:
         with (_GOLDEN / f"expected_{case}.csv").open(encoding="utf-8", newline="") as f:
-            return next(csv.DictReader(f))["source_record_uid"]
+            return next(csv.DictReader(f, delimiter=";"))["source_record_uid"]
 
     secondary, primary = first_uid("secondary"), first_uid("primary")
     assert secondary == "1001"                    # the tool's Item ID, verbatim

@@ -81,6 +81,12 @@ class _LogBridge(QObject):
     record = Signal(str, str)
 
 
+class _ProgressBridge(QObject):
+    # Emitted (from the worker thread) at the start of each pipeline phase; a queued connection
+    # marshals it onto the GUI thread so the status label can be updated safely.
+    phase = Signal(str)
+
+
 class _GuiLogHandler(logging.Handler):
     def __init__(self, bridge: _LogBridge) -> None:
         super().__init__()
@@ -135,12 +141,21 @@ class MainController(QObject):
         self._status_text = "Idle"
         self._log_bridge: _LogBridge | None = None
         self._log_handler: _GuiLogHandler | None = None
+        self._current_phase = ""
+        self._anim_dots = 0
 
         self._bind_widgets()
         self._configure_ui_defaults()
         self._wire_signals()
         self._install_log_handler()
         self._apply_log_level()
+        # Progress reporting: the pipeline calls a plain callback per phase; the bridge turns each
+        # call into a queued signal so the animated status updates safely from the worker thread.
+        self._progress_bridge = _ProgressBridge(self)
+        self._progress_bridge.phase.connect(self._on_phase)
+        self._run_timer = QTimer(self)
+        self._run_timer.setInterval(350)
+        self._run_timer.timeout.connect(self._tick_running_animation)
         if app is not None:
             app.aboutToQuit.connect(self._wait_for_threads)
         QTimer.singleShot(0, self._load_presets_async)
@@ -189,6 +204,8 @@ class MainController(QObject):
         self.output_button: QPushButton = child(QPushButton, "outputButton")
         self.add_preset_button: QPushButton = child(QPushButton, "addPresetButton")
         self.remove_preset_button: QPushButton = child(QPushButton, "removePresetButton")
+        self.add_all_presets_button: QPushButton = child(QPushButton, "addAllPresetsButton")
+        self.remove_all_presets_button: QPushButton = child(QPushButton, "removeAllPresetsButton")
         self.run_button: QPushButton = child(QPushButton, "runButton")
         self.open_output_folder_button: QPushButton = child(QPushButton, "openOutputFolderButton")
         self.open_error_report_button: QPushButton = child(QPushButton, "openErrorReportButton")
@@ -247,9 +264,16 @@ class MainController(QObject):
         return [name for name, action in self._export_actions.items() if action.isChecked()]
 
     def _sync_export_button_text(self) -> None:
-        count = len(self._selected_exports())
-        self.additional_export_button.setText(
-            "Additional export" if count == 0 else f"Additional export ({count})")
+        """Reflect the selection on the button: 'None' when nothing is chosen, the single export's
+        label when one is chosen, or 'first label (+N)' when several are."""
+        selected = self._selected_exports()
+        if not selected:
+            self.additional_export_button.setText("None")
+        elif len(selected) == 1:
+            self.additional_export_button.setText(self._export_actions[selected[0]].text())
+        else:
+            first_label = self._export_actions[selected[0]].text()
+            self.additional_export_button.setText(f"{first_label} (+{len(selected) - 1})")
 
     def _configure_entity_completion(self) -> None:
         """Give the entity / linked_entity fields a completer: the call-form keywords, plus
@@ -278,6 +302,8 @@ class MainController(QObject):
         self.preset_search_edit.textChanged.connect(self._render_available_presets)
         self.add_preset_button.clicked.connect(self._add_selected_presets)
         self.remove_preset_button.clicked.connect(self._remove_selected_presets)
+        self.add_all_presets_button.clicked.connect(self._add_all_presets)
+        self.remove_all_presets_button.clicked.connect(self._remove_all_presets)
         self.available_preset_list.itemDoubleClicked.connect(lambda _item: self._add_selected_presets())
         self.selected_preset_list.itemDoubleClicked.connect(lambda _item: self._remove_selected_presets())
         self.run_button.clicked.connect(self._run_process)
@@ -583,6 +609,22 @@ class MainController(QObject):
         self._render_available_presets()
         self._sync_single_preset_notice()
 
+    def _add_all_presets(self) -> None:
+        """Move every loaded preset into the selected list (skipping any already selected)."""
+        selected = set(self._selected_preset_paths())
+        for preset in self._presets:
+            if str(preset.path) not in selected:
+                self._add_list_item(self.selected_preset_list, preset)
+        if self.selected_preset_list.count():
+            self.auto_preset_check.setChecked(False)
+        self._render_available_presets()
+        self._sync_single_preset_notice()
+
+    def _remove_all_presets(self) -> None:
+        self.selected_preset_list.clear()
+        self._render_available_presets()
+        self._sync_single_preset_notice()
+
     def _selected_preset_paths(self) -> list[str]:
         return [
             str(self.selected_preset_list.item(row).data(Qt.ItemDataRole.UserRole))
@@ -710,6 +752,8 @@ class MainController(QObject):
         include_source_columns = self.include_source_columns_check.isChecked()
         # Read the checked exporters on the GUI thread; the worker only uses this captured list.
         exports = self._selected_exports()
+        # The worker reports phases through this thread-safe signal emit (see _ProgressBridge).
+        progress = self._progress_bridge.phase.emit
         self._apply_log_level()
 
         def task() -> ProcessResult:
@@ -726,6 +770,7 @@ class MainController(QObject):
                         linked_entity=linked_entity,
                         include_source_columns=include_source_columns,
                         exports=exports,
+                        progress=progress,
                     )
             if not selected_mode:
                 return process(
@@ -738,6 +783,7 @@ class MainController(QObject):
                     linked_entity=linked_entity,
                     include_source_columns=include_source_columns,
                     exports=exports,
+                    progress=progress,
                 )
             with tempfile.TemporaryDirectory(prefix="matlas-presets-") as tmp:
                 tmp_path = build_profile_preset_folder(selected_paths, Path(tmp))
@@ -751,6 +797,7 @@ class MainController(QObject):
                     linked_entity=linked_entity,
                     include_source_columns=include_source_columns,
                     exports=exports,
+                    progress=progress,
                 )
 
         self._run_thread(task, self._on_process_done, self._on_process_failed)
@@ -792,7 +839,30 @@ class MainController(QObject):
     def _set_running(self, running: bool) -> None:
         self.run_button.setEnabled(not running)
         self.run_button.setText("Running..." if running else "Run")
-        self._set_status("Running..." if running else "Idle")
+        if running:
+            self._current_phase = ""
+            self._anim_dots = 0
+            self._run_timer.start()
+            self._tick_running_animation()
+        else:
+            self._run_timer.stop()
+            self._set_status("Idle")
+
+    def _running_base_text(self) -> str:
+        return f"Running - {self._current_phase}" if self._current_phase else "Running"
+
+    @Slot(str)
+    def _on_phase(self, name: str) -> None:
+        """A new pipeline phase started: announce it (accessible), and reset the dot animation."""
+        self._current_phase = name
+        self._anim_dots = 0
+        self._set_status(self._running_base_text())
+
+    def _tick_running_animation(self) -> None:
+        # Cycle '.'/'..'/'...' after the phase name. Set the label text directly (not via
+        # _set_status) so the accessible description is not re-announced three times a second.
+        self._anim_dots = (self._anim_dots % 3) + 1
+        self.status_label.setText(f"{self._running_base_text()} {'.' * self._anim_dots}")
 
     def _open_output_folder(self) -> None:
         if self._last_output_folder is None:
