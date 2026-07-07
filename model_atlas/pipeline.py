@@ -19,8 +19,9 @@ from pathlib import Path
 import pandas as pd
 
 from model_atlas import reporting
-from model_atlas.config import get_settings
+from model_atlas.config import Settings, get_settings
 from model_atlas.export import traceability_path_for, warnings_path_for, write_csv, write_json
+from model_atlas.exporters import ExportContext, load_plugins, run_exporters
 from model_atlas.model.families import OUTPUT_COLUMNS
 from model_atlas.presets.matcher import detect_file_format, match_files_detailed
 from model_atlas.presets.spec import InputSelector, PresetSpec
@@ -143,6 +144,7 @@ class ProcessResult:
     warnings: list[str] = field(default_factory=list)
     matched: list[str] = field(default_factory=list)
     unmatched: list[str] = field(default_factory=list)
+    output_extras: list[Path] = field(default_factory=list)  # files written by additional exporters
 
 
 def process(
@@ -158,6 +160,7 @@ def process(
     root_prefix_depth: int | None = None,
     max_container_depth: int | None = None,
     local_zone: str | None = None,
+    exports: list[str] | None = None,
 ) -> ProcessResult:
     """Run the full pipeline.
 
@@ -190,8 +193,13 @@ def process(
         max_container_depth = settings.discovery.max_container_depth
     if local_zone is None:
         local_zone = settings.timezone.local_zone
+    # Register any drop-in exporters before they might be selected (missing folder => builtins only).
+    load_plugins(Path(settings.export.plugins_dir))
 
     started_at = reporting.now_iso()
+    # Announce each phase as it STARTS, not only on completion: discovery and extraction of a
+    # large acquisition can take minutes, and without a start line the run looks stalled.
+    log.info("Loading presets and discovering sources...")
     presets = load_preset_specs(presets_path)
     files = discover(input_path, max_container_depth=max_container_depth)
     log.info(f"Discovered {len(files)} source file(s); {len(presets)} preset(s) loaded")
@@ -210,7 +218,7 @@ def process(
         and len(presets) == 1
     )
     if force_preset:
-        log.info(f"Force-preset mode: applying {presets[0].name!r} (location matching bypassed)")
+        log.info(f"Force-preset mode: applying {presets[0].name!r} (preset selector bypassed)")
 
     extractor = SingleSourceExtractor()
     # frames_by_preset and sources_by_preset preserve insertion order so per-preset
@@ -221,6 +229,7 @@ def process(
     matched: list[str] = []
     unmatched: list[str] = []
 
+    log.info(f"Extracting and mapping {len(files)} discovered source(s)...")
     for file in files:
         label = str(file.full_logical_path)
         if force_preset:
@@ -294,17 +303,22 @@ def process(
     if unmatched:
         log.info(f"{len(unmatched)} file(s) matched no preset (set log level to DEBUG to list them)")
 
+    # Merge and split are mutually exclusive; log the single completion line here (not inside
+    # each writer) so exactly one "finished" marker is emitted regardless of the mode.
     if merge:
-        return _write_merged(
+        result = _write_merged(
             output, started_at, input_path, presets_path,
             frames_by_preset, sources_by_preset,
-            warnings, matched, unmatched, traceability_format,
+            warnings, matched, unmatched, traceability_format, exports, settings,
         )
-    return _write_split(
-        output, started_at, input_path, presets_path,
-        frames_by_preset, sources_by_preset,
-        warnings, matched, unmatched, traceability_format,
-    )
+    else:
+        result = _write_split(
+            output, started_at, input_path, presets_path,
+            frames_by_preset, sources_by_preset,
+            warnings, matched, unmatched, traceability_format, exports, settings,
+        )
+    log.info("Processing finished.")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +363,37 @@ def _write_sidecars(
     return output_traceability, output_warnings
 
 
+def _run_exports(
+    exports: list[str] | None,
+    dataframe: pd.DataFrame,
+    *,
+    primary_csv: Path | None,
+    output_dir: Path,
+    base_name: str,
+    merge: bool,
+    preset_name: str | None,
+    started_at: str,
+    input_path: Path,
+    presets_path: Path,
+    row_counts: dict[str, int],
+    warnings: list[str],
+    matched: list[str],
+    sources: list[dict],
+    settings: Settings,
+) -> list[Path]:
+    """Build an ExportContext for one written artefact and run the selected additional exporters.
+    No-op when nothing is selected or the frame is empty (there is nothing to export)."""
+    if not exports or dataframe.empty:
+        return []
+    context = ExportContext(
+        dataframe=dataframe, output_dir=output_dir, base_name=base_name, merge=merge,
+        preset_name=preset_name, primary_csv=primary_csv, row_counts=row_counts,
+        warnings=warnings, matched=matched, sources=sources, started_at=started_at,
+        input_path=input_path, presets_path=presets_path, settings=settings,
+    )
+    return run_exporters(exports, context)
+
+
 def _write_merged(
     output_csv: Path,
     started_at: str,
@@ -360,11 +405,14 @@ def _write_merged(
     matched: list[str],
     unmatched: list[str],
     traceability_format: str,
+    exports: list[str] | None,
+    settings: Settings,
 ) -> ProcessResult:
     all_frames = [f for frames in frames_by_preset.values() for f in frames]
     all_sources = [s for sources in sources_by_preset.values() for s in sources]
     merged = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame()
     if not merged.empty:
+        log.info(f"Untangling {len(merged)} merged row(s) (ranking overlapping records)...")
         merged = _order_columns(untangle(merged))
     written = write_csv(merged, output_csv) if not merged.empty else None
     counts = _row_counts(frames_by_preset, unmatched, matched, merged)
@@ -377,6 +425,13 @@ def _write_merged(
             counts, all_sources, warnings, traceability_format,
         )
 
+    extras = _run_exports(
+        exports, merged, primary_csv=written, output_dir=output_csv.parent,
+        base_name=output_csv.stem, merge=True, preset_name=None, started_at=started_at,
+        input_path=input_path, presets_path=presets_path, row_counts=counts,
+        warnings=warnings, matched=matched, sources=all_sources, settings=settings,
+    )
+
     return ProcessResult(
         output_csv=written,
         output_traceability=output_traceability,
@@ -385,6 +440,7 @@ def _write_merged(
         warnings=warnings,
         matched=matched,
         unmatched=unmatched,
+        output_extras=extras,
     )
 
 
@@ -399,9 +455,12 @@ def _write_split(
     matched: list[str],
     unmatched: list[str],
     traceability_format: str,
+    exports: list[str] | None,
+    settings: Settings,
 ) -> ProcessResult:
     output_folder.mkdir(parents=True, exist_ok=True)
     output_csvs: list[Path] = []
+    output_extras: list[Path] = []
     total_rows = 0
     total_ranked = 0
 
@@ -409,6 +468,7 @@ def _write_split(
         sources = sources_by_preset.get(preset_name, [])
         preset_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         if not preset_df.empty:
+            log.info(f"Untangling {len(preset_df)} row(s) for preset {preset_name}...")
             preset_df = _order_columns(untangle(preset_df))
         if preset_df.empty:
             log.info(f"Preset {preset_name} produced no rows; skipping output file.")
@@ -429,6 +489,12 @@ def _write_split(
             written, started_at, input_path, presets_path,
             preset_counts, sources, warnings, traceability_format,
         )
+        output_extras.extend(_run_exports(
+            exports, preset_df, primary_csv=written, output_dir=output_folder,
+            base_name=csv_path.stem, merge=False, preset_name=preset_name, started_at=started_at,
+            input_path=input_path, presets_path=presets_path, row_counts=preset_counts,
+            warnings=warnings, matched=matched, sources=sources, settings=settings,
+        ))
 
     global_counts = {
         "sources": len(matched) + len(unmatched),
@@ -443,4 +509,5 @@ def _write_split(
         warnings=warnings,
         matched=matched,
         unmatched=unmatched,
+        output_extras=output_extras,
     )

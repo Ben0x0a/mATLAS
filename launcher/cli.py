@@ -9,6 +9,8 @@ from pathlib import Path
 from model_atlas import __version__
 from model_atlas.config import get_settings
 from model_atlas.diagnostics import install_excepthook
+from model_atlas.exporters import available_exporters
+from model_atlas.logging_setup import configure_logging
 from model_atlas.pipeline import process
 from launcher.profiles import build_profile_preset_folder, load_profile
 
@@ -126,27 +128,25 @@ def build_parser() -> argparse.ArgumentParser:
             "canonical schema (default). Use --no-source-columns for canonical columns only."
         ),
     )
+    builtin_names = ", ".join(spec.name for spec in available_exporters())
+    process_parser.add_argument(
+        "--export",
+        action="append",
+        metavar="NAME",
+        default=None,
+        help=(
+            "Write an additional export alongside the CSV; repeatable. "
+            f"Available: {builtin_names} (plus any drop-in plugins in the export plugins folder)."
+        ),
+    )
 
     return parser
 
 
 def _configure_logging(log_file: Path | None, log_level: str | None) -> None:
-    settings = get_settings()
-    root_logger = logging.getLogger()
-    for handler in list(root_logger.handlers):
-        root_logger.removeHandler(handler)
     # CLI --log-level wins; otherwise the config default (then INFO). Format from config.
-    level_name = (log_level or settings.logging.level).upper()
-    level = getattr(logging, level_name, logging.INFO)
-    formatter = logging.Formatter(settings.logging.format)
-    handlers: list[logging.Handler] = [logging.StreamHandler()]
-    if log_file is not None:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
-    root_logger.setLevel(level)
-    for handler in handlers:
-        handler.setFormatter(formatter)
-        root_logger.addHandler(handler)
+    settings = get_settings()
+    configure_logging(log_level or settings.logging.level, log_file, settings.logging.format)
 
 
 def _cmd_process(args: argparse.Namespace) -> int:
@@ -159,6 +159,7 @@ def _cmd_process(args: argparse.Namespace) -> int:
             linked_entity=args.linked_entity,
             include_source_columns=args.include_source_columns,
             root_prefix_depth=args.root_prefix_depth,
+            exports=args.export,
         )
     else:
         with tempfile.TemporaryDirectory(prefix="matlas-profile-") as tmp:
@@ -171,6 +172,7 @@ def _cmd_process(args: argparse.Namespace) -> int:
                 entity=args.entity,
                 linked_entity=args.linked_entity,
                 include_source_columns=args.include_source_columns,
+                exports=args.export,
             )
     log.info(f"Row counts: {result.row_counts}")
     for entry in result.matched:
@@ -188,6 +190,8 @@ def _cmd_process(args: argparse.Namespace) -> int:
             log.info(f"CSV: {csv}")
     else:
         log.warning("No rows produced: no discovered source matched a preset.")
+    for extra in result.output_extras:
+        log.info(f"Export: {extra}")
     return 0
 
 

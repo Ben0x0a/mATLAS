@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 import yaml
 from PySide6.QtCore import QFile, QObject, QRectF, QStringListModel, QThread, QTimer, QUrl, Qt, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import (
@@ -29,10 +29,12 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
     QTextEdit,
+    QToolButton,
 )
 
 from gui import accessibility
@@ -40,6 +42,9 @@ from gui.completion import param_completions
 from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
 from launcher.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
+from model_atlas.config import get_settings
+from model_atlas.exporters import available_exporters, load_plugins
+from model_atlas.logging_setup import build_formatter
 from model_atlas.pipeline import ProcessResult, process
 from model_atlas.presets.spec_loader import load_preset_specs
 
@@ -186,6 +191,7 @@ class MainController(QObject):
         self.remove_preset_button: QPushButton = child(QPushButton, "removePresetButton")
         self.run_button: QPushButton = child(QPushButton, "runButton")
         self.open_output_folder_button: QPushButton = child(QPushButton, "openOutputFolderButton")
+        self.open_error_report_button: QPushButton = child(QPushButton, "openErrorReportButton")
         self.clear_form_button: QPushButton = child(QPushButton, "clearFormButton")
         self.clear_log_button: QPushButton = child(QPushButton, "clearLogButton")
         self.load_profile_button: QPushButton = child(QPushButton, "loadProfileButton")
@@ -198,6 +204,7 @@ class MainController(QObject):
 
         self.traceability_combo: QComboBox = child(QComboBox, "traceabilityCombo")
         self.log_level_combo: QComboBox = child(QComboBox, "logLevelCombo")
+        self.additional_export_button: QToolButton = child(QToolButton, "additionalExportButton")
 
     def _configure_ui_defaults(self) -> None:
         default_presets = Path.cwd() / "presets"
@@ -216,7 +223,33 @@ class MainController(QObject):
         self._stabilize_preset_mode_row()
         self._sync_output_mode()
         self._configure_entity_completion()
+        self._configure_exports()
         accessibility.configure_accessibility(self)
+
+    def _configure_exports(self) -> None:
+        """Populate the 'Additional export' button with a checkable menu, one item per registered
+        exporter (built-ins + any drop-in plugins). Built with Qt's QMenu/QAction — no custom
+        widget. The selection is read at run time and passed to process()."""
+        load_plugins(Path(get_settings().export.plugins_dir))
+        menu = QMenu(self.additional_export_button)
+        self._export_actions: dict[str, QAction] = {}
+        for spec in available_exporters():
+            action = menu.addAction(spec.label)
+            action.setCheckable(True)
+            action.setToolTip(spec.description)
+            action.toggled.connect(lambda _checked: self._sync_export_button_text())
+            self._export_actions[spec.name] = action
+        self.additional_export_button.setMenu(menu)
+        self.additional_export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._sync_export_button_text()
+
+    def _selected_exports(self) -> list[str]:
+        return [name for name, action in self._export_actions.items() if action.isChecked()]
+
+    def _sync_export_button_text(self) -> None:
+        count = len(self._selected_exports())
+        self.additional_export_button.setText(
+            "Additional export" if count == 0 else f"Additional export ({count})")
 
     def _configure_entity_completion(self) -> None:
         """Give the entity / linked_entity fields a completer: the call-form keywords, plus
@@ -249,6 +282,7 @@ class MainController(QObject):
         self.selected_preset_list.itemDoubleClicked.connect(lambda _item: self._remove_selected_presets())
         self.run_button.clicked.connect(self._run_process)
         self.open_output_folder_button.clicked.connect(self._open_output_folder)
+        self.open_error_report_button.clicked.connect(self._open_error_reports)
         self.clear_form_button.clicked.connect(self._clear_form)
         self.clear_log_button.clicked.connect(self.log_edit.clear)
         self.load_profile_button.clicked.connect(self._load_profile)
@@ -266,7 +300,7 @@ class MainController(QObject):
             "presetsPathLabel",
             "outputModeLabel",
             "outputLabel",
-            "traceabilityLabel",
+            "optionsLabel",
         )
         for name in label_names:
             label = self.window.findChild(QLabel, name)
@@ -359,7 +393,7 @@ class MainController(QObject):
         bridge = _LogBridge(self)
         bridge.record.connect(self._append_log)
         handler = _GuiLogHandler(bridge)
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        handler.setFormatter(build_formatter(get_settings().logging.format))
         handler.setLevel(logging.DEBUG)
         root = logging.getLogger()
         root.setLevel(logging.DEBUG)
@@ -674,6 +708,8 @@ class MainController(QObject):
         self.open_output_folder_button.setEnabled(False)
         traceability_format = self.traceability_combo.currentText()
         include_source_columns = self.include_source_columns_check.isChecked()
+        # Read the checked exporters on the GUI thread; the worker only uses this captured list.
+        exports = self._selected_exports()
         self._apply_log_level()
 
         def task() -> ProcessResult:
@@ -689,6 +725,7 @@ class MainController(QObject):
                         entity=entity,
                         linked_entity=linked_entity,
                         include_source_columns=include_source_columns,
+                        exports=exports,
                     )
             if not selected_mode:
                 return process(
@@ -700,6 +737,7 @@ class MainController(QObject):
                     entity=entity,
                     linked_entity=linked_entity,
                     include_source_columns=include_source_columns,
+                    exports=exports,
                 )
             with tempfile.TemporaryDirectory(prefix="matlas-presets-") as tmp:
                 tmp_path = build_profile_preset_folder(selected_paths, Path(tmp))
@@ -712,6 +750,7 @@ class MainController(QObject):
                     entity=entity,
                     linked_entity=linked_entity,
                     include_source_columns=include_source_columns,
+                    exports=exports,
                 )
 
         self._run_thread(task, self._on_process_done, self._on_process_failed)
@@ -736,6 +775,8 @@ class MainController(QObject):
         log.info(summary)
         for csv in outputs:
             log.info(f"CSV: {csv}")
+        for extra in result.output_extras:
+            log.info(f"Export: {extra}")
         if result.output_traceability is not None:
             log.info(f"Traceability: {result.output_traceability}")
         if result.output_warnings is not None:
@@ -758,6 +799,21 @@ class MainController(QObject):
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_output_folder)))
 
+    def _open_error_reports(self) -> None:
+        """Open the crash-report folder (model_atlas.diagnostics writes matlas_error_*.json here
+        on any unhandled error). Always available; if nothing has failed yet the folder may not
+        exist, so tell the user rather than opening a missing path."""
+        crash_dir = Path(get_settings().diagnostics.crash_dir).expanduser()
+        if not crash_dir.is_absolute():
+            crash_dir = Path.cwd() / crash_dir
+        if not crash_dir.is_dir():
+            QMessageBox.information(
+                self.window, "Model Atlas",
+                f"No error reports yet.\nThey would be written to:\n{crash_dir}",
+            )
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(crash_dir)))
+
     def _clear_form(self) -> None:
         self.source_edit.clear()
         self.output_edit.clear()
@@ -768,6 +824,8 @@ class MainController(QObject):
         self.selected_preset_list.clear()
         self.traceability_combo.setCurrentText("readable")
         self.log_level_combo.setCurrentText("INFO")
+        for action in self._export_actions.values():
+            action.setChecked(False)
         self.merge_outputs_check.setChecked(True)
         self._sync_output_mode()
         self.auto_preset_check.setChecked(True)

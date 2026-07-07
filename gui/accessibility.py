@@ -51,7 +51,7 @@ def configure_accessibility(controller: Any) -> None:
         ("mergeOutputLabel", controller.merge_outputs_check),
         ("dumpFullUfdrLabel", controller.dump_full_ufdr_check),
         ("outputLabel", controller.output_edit),
-        ("traceabilityLabel", controller.traceability_combo),
+        ("optionsLabel", controller.traceability_combo),
         ("traceabilityOptionLabel", controller.traceability_combo),
         ("logLevelLabel", controller.log_level_combo),
         ("presetModeLabel", controller.auto_preset_check),

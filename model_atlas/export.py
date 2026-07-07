@@ -6,6 +6,7 @@ Depends on: pandas, standard library.
 """
 from __future__ import annotations
 
+import csv
 import json
 import logging
 from pathlib import Path
@@ -27,7 +28,10 @@ def warnings_path_for(output_csv: Path) -> Path:
 def write_csv(df: pd.DataFrame, output_csv: Path) -> Path:
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     log.info(f"Writing CSV: path={output_csv} rows={len(df)} columns={len(df.columns)}")
-    df.to_csv(output_csv, index=False)
+    # QUOTE_NONNUMERIC quotes every non-numeric field, so values that contain the delimiter,
+    # newlines, or a leading '=' (which spreadsheets would treat as a formula) can never break
+    # the column structure of a forensic export.
+    df.to_csv(output_csv, index=False, quoting=csv.QUOTE_NONNUMERIC)
     return output_csv
 
 

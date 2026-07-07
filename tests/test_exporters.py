@@ -1,0 +1,366 @@
+"""Tests for the additional-export subsystem (model_atlas.exporters).
+
+Covers the registry/runner contract, drop-in plugin discovery, the five built-in exporters, the
+GeoVisualizer column mapping, and end-to-end wiring through the pipeline.
+"""
+from __future__ import annotations
+
+import csv
+import json
+import sqlite3
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+from model_atlas.exporters import (
+    ExportContext,
+    available_exporters,
+    get_exporter,
+    load_plugins,
+    register_exporter,
+    run_exporters,
+)
+from model_atlas.exporters import builtin as _builtin
+from model_atlas.exporters import registry as _registry
+
+
+def _ctx(dataframe: pd.DataFrame, output_dir: Path) -> ExportContext:
+    return ExportContext(
+        dataframe=dataframe, output_dir=output_dir, base_name="out",
+        merge=True, preset_name=None, primary_csv=None,
+    )
+
+
+@pytest.fixture
+def sample_df() -> pd.DataFrame:
+    # Row 0 has coordinates + a valid IMEI embedded in entity; row 1 has neither.
+    return pd.DataFrame({
+        "linked_entity": ["subjA", "subjA"],
+        "entity": ["dev_490154203237518_x", "no_imei_here"],
+        "latitude_wgs84": [46.5197, None],
+        "longitude_wgs84": [6.6323, None],
+        "time_lower_unix_utc_us": [1765026000000000, 1765031400000000],
+        "utc_offset_hours": [1.0, 0.0],
+        "time_lower_source_field": ["TS", "TS"],
+        "time_upper_source_field": ["TS", "TS"],
+        "horizontal_speed_kmh": [10.8, None],
+        "horizontal_speed_accuracy_kmh": [2.0, None],
+        "horizontal_accuracy_m": [12.0, None],
+        "raw_source_path": ["/x/Cache.sqlite", "/x/Cache.sqlite"],
+        "input_file_path": ["in.csv", "in.csv"],
+        "source_label": ["ZLOC", "ZLOC"],
+        "preset_name": ["P", "P"],
+    })
+
+
+# --- registry / runner ------------------------------------------------------
+
+def test_register_available_and_run(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    @register_exporter("_test_ok", "Test OK", "unit test exporter")
+    def _exporter(ctx: ExportContext) -> list[Path]:
+        path = ctx.output_dir / "z.txt"
+        path.write_text("hi", encoding="utf-8")
+        return [path]
+
+    try:
+        assert any(spec.name == "_test_ok" for spec in available_exporters())
+        written = run_exporters(["_test_ok"], _ctx(sample_df, tmp_path))
+        assert len(written) == 1 and written[0].exists()
+    finally:
+        _registry._REGISTRY.pop("_test_ok", None)
+
+
+def test_unknown_export_is_skipped_not_raised(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    assert run_exporters(["does_not_exist"], _ctx(sample_df, tmp_path)) == []
+
+
+def test_failing_exporter_is_isolated(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    @register_exporter("_test_boom", "Boom", "raises")
+    def _boom(ctx: ExportContext) -> list[Path]:
+        raise RuntimeError("deliberate")
+
+    @register_exporter("_test_ok2", "OK2", "writes")
+    def _ok(ctx: ExportContext) -> list[Path]:
+        path = ctx.output_dir / "ok2.txt"
+        path.write_text("y", encoding="utf-8")
+        return [path]
+
+    try:
+        written = run_exporters(["_test_boom", "_test_ok2"], _ctx(sample_df, tmp_path))
+        assert len(written) == 1   # the failure is skipped, the following exporter still runs
+    finally:
+        _registry._REGISTRY.pop("_test_boom", None)
+        _registry._REGISTRY.pop("_test_ok2", None)
+
+
+def test_duplicate_registration_is_a_hard_error() -> None:
+    @register_exporter("_test_dup", "Dup", "")
+    def _one(ctx: ExportContext) -> list[Path]:
+        return []
+    try:
+        with pytest.raises(ValueError, match="already registered"):
+            register_exporter("_test_dup", "Dup", "")(lambda ctx: [])
+    finally:
+        _registry._REGISTRY.pop("_test_dup", None)
+
+
+# --- drop-in plugin discovery ----------------------------------------------
+
+def test_load_plugins_discovers_dropin(tmp_path: Path) -> None:
+    (tmp_path / "myplug.py").write_text(
+        "from model_atlas.exporters import register_exporter\n"
+        "@register_exporter('_test_plug', 'Plug', 'drop-in')\n"
+        "def export(ctx):\n"
+        "    p = ctx.output_dir / 'plug.txt'\n"
+        "    p.write_text('ok', encoding='utf-8')\n"
+        "    return [p]\n",
+        encoding="utf-8",
+    )
+    try:
+        load_plugins(tmp_path)
+        assert any(spec.name == "_test_plug" for spec in available_exporters())
+    finally:
+        _registry._REGISTRY.pop("_test_plug", None)
+
+
+def test_broken_plugin_is_skipped_not_fatal(tmp_path: Path) -> None:
+    (tmp_path / "broken.py").write_text("this is not valid python !!!\n", encoding="utf-8")
+    load_plugins(tmp_path)   # must not raise
+
+
+# --- built-in exporters -----------------------------------------------------
+
+def test_builtin_sqlite(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    [out] = run_exporters(["sqlite"], _ctx(sample_df, tmp_path))
+    connection = sqlite3.connect(out)
+    try:
+        count = connection.execute("SELECT COUNT(*) FROM assertions").fetchone()[0]
+    finally:
+        connection.close()
+    assert count == 2
+
+
+def test_builtin_geojson_only_located_rows(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    [out] = run_exporters(["geojson"], _ctx(sample_df, tmp_path))
+    data = json.loads(out.read_text(encoding="utf-8-sig"))
+    assert data["type"] == "FeatureCollection"
+    assert len(data["features"]) == 1   # only the row with coordinates
+    assert data["features"][0]["geometry"]["coordinates"] == [6.6323, 46.5197]
+
+
+def test_builtin_xlsx(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    [out] = run_exporters(["xlsx"], _ctx(sample_df, tmp_path))
+    assert len(pd.read_excel(out)) == 2
+
+
+def test_builtin_kml(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    [out] = run_exporters(["kml"], _ctx(sample_df, tmp_path))
+    text = out.read_text(encoding="utf-8")
+    assert text.count("<Placemark>") == 1
+
+
+def test_geovisualizer_columns_and_mapping(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    [out] = run_exporters(["geovisualizer"], _ctx(sample_df, tmp_path))
+    with out.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.reader(handle))
+    header = rows[0]
+    assert header == [
+        "Target", "MSISDN", "IMEI", "Timestamp (local)", "Cell-ID", "Azimuth", "Address",
+        "Latitude", "Longitude", "Description", "Source", "orig. Time", "Type", "Confidence", "Precision",
+    ]
+    first = dict(zip(header, rows[1]))
+    assert first["Target"] == "subjA"
+    assert first["MSISDN"] == ""
+    assert first["IMEI"] == "490154203237518"           # picked from the entity, Luhn-valid
+    assert "+01:00" in first["Timestamp (local)"]        # local ISO with the row's offset applied
+    assert "mATLAS" in first["Description"] and "km/h" in first["Description"]
+    assert "Cache.sqlite" in first["Source"] and "in.csv" in first["Source"]
+    assert first["Type"] == "ZLOC"                       # source_label
+    assert first["Confidence"] == ""
+    second = dict(zip(header, rows[2]))
+    assert second["IMEI"] == ""                          # no valid IMEI token in the entity
+
+
+# --- pipeline integration ---------------------------------------------------
+
+def test_pipeline_writes_extras(tmp_path: Path) -> None:
+    from model_atlas.pipeline import process
+
+    golden = Path(__file__).resolve().parent / "fixtures" / "golden"
+    out = tmp_path / "out.csv"
+    result = process(
+        golden / "cached.csv", golden / "secondary_cached.preset.yaml", out,
+        linked_entity="subject", exports=["sqlite", "geovisualizer"],
+    )
+    names = {path.name for path in result.output_extras}
+    assert any(name.endswith(".assertions.sqlite") for name in names)
+    assert any(name.endswith(".geovisualizer.csv") for name in names)
+    assert all(path.exists() for path in result.output_extras)
+
+
+# --- edge cases: runner / plugins ------------------------------------------
+
+def test_run_exporters_none_and_empty_names(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    assert run_exporters(None, _ctx(sample_df, tmp_path)) == []
+    assert run_exporters([], _ctx(sample_df, tmp_path)) == []
+
+
+def test_run_exporters_mixed_known_and_unknown(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    # An unknown name between two valid ones is skipped; the valid ones still write.
+    written = run_exporters(["sqlite", "nope", "geojson"], _ctx(sample_df, tmp_path))
+    assert len(written) == 2
+
+
+def test_load_plugins_missing_dir_is_noop(tmp_path: Path) -> None:
+    load_plugins(tmp_path / "does_not_exist")   # must not raise
+
+
+def test_load_plugins_ignores_underscore_files(tmp_path: Path) -> None:
+    # A leading-underscore file would raise on import if loaded; it must be ignored.
+    (tmp_path / "_hidden.py").write_text("raise RuntimeError('must not import')\n", encoding="utf-8")
+    load_plugins(tmp_path)
+
+
+def test_load_plugins_is_idempotent(tmp_path: Path) -> None:
+    (tmp_path / "p.py").write_text(
+        "from model_atlas.exporters import register_exporter\n"
+        "@register_exporter('_test_idem', 'Idem', '')\n"
+        "def export(ctx):\n"
+        "    return []\n",
+        encoding="utf-8",
+    )
+    try:
+        load_plugins(tmp_path)
+        load_plugins(tmp_path)   # second call must NOT re-import (would be a duplicate-name error)
+        assert any(spec.name == "_test_idem" for spec in available_exporters())
+    finally:
+        _registry._REGISTRY.pop("_test_idem", None)
+
+
+def test_plugin_name_colliding_with_builtin_is_logged_not_fatal(tmp_path: Path) -> None:
+    (tmp_path / "dup.py").write_text(
+        "from model_atlas.exporters import register_exporter\n"
+        "@register_exporter('sqlite', 'Impostor', '')\n"   # collides with the builtin
+        "def export(ctx):\n"
+        "    return []\n",
+        encoding="utf-8",
+    )
+    load_plugins(tmp_path)                       # the ValueError is caught inside load_plugins
+    assert get_exporter("sqlite").label == "SQLite database"   # builtin intact, not overridden
+
+
+# --- edge cases: exporters on sparse / empty frames ------------------------
+
+def _schema_zero_rows() -> pd.DataFrame:
+    return pd.DataFrame({
+        column: pd.Series(dtype="object") for column in
+        ("linked_entity", "entity", "latitude_wgs84", "longitude_wgs84",
+         "time_lower_unix_utc_us", "utc_offset_hours")
+    })
+
+
+@pytest.mark.parametrize("name", ["sqlite", "geojson", "xlsx", "kml", "geovisualizer"])
+def test_builtins_handle_zero_row_frame(tmp_path: Path, name: str) -> None:
+    [out] = run_exporters([name], _ctx(_schema_zero_rows(), tmp_path))
+    assert out.exists()
+
+
+def test_geovisualizer_minimal_columns_no_crash(tmp_path: Path) -> None:
+    # Only Target + coordinates present; every other source column is absent.
+    frame = pd.DataFrame({"linked_entity": ["x"], "latitude_wgs84": [1.0], "longitude_wgs84": [2.0]})
+    [out] = run_exporters(["geovisualizer"], _ctx(frame, tmp_path))
+    with out.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.reader(handle))
+    row = dict(zip(rows[0], rows[1]))
+    assert row["Target"] == "x"
+    assert row["IMEI"] == "" and row["Timestamp (local)"] == "" and row["Source"] == ""
+    assert row["Description"] == "mATLAS"
+
+
+def test_geovisualizer_string_coordinates_coerced(tmp_path: Path) -> None:
+    frame = pd.DataFrame({"linked_entity": ["x"], "latitude_wgs84": ["46.5"], "longitude_wgs84": ["6.6"]})
+    [out] = run_exporters(["geovisualizer"], _ctx(frame, tmp_path))
+    with out.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.reader(handle))
+    row = dict(zip(rows[0], rows[1]))
+    assert float(row["Latitude"]) == 46.5 and float(row["Longitude"]) == 6.6
+
+
+def test_sqlite_rerun_overwrites_cleanly(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    run_exporters(["sqlite"], _ctx(sample_df, tmp_path))
+    [out] = run_exporters(["sqlite"], _ctx(sample_df, tmp_path))   # second run, same path
+    connection = sqlite3.connect(out)
+    try:
+        count = connection.execute("SELECT COUNT(*) FROM assertions").fetchone()[0]
+    finally:
+        connection.close()
+    assert count == 2   # replaced, not appended
+
+
+def test_geojson_properties_exclude_coords(tmp_path: Path, sample_df: pd.DataFrame) -> None:
+    [out] = run_exporters(["geojson"], _ctx(sample_df, tmp_path))
+    properties = json.loads(out.read_text(encoding="utf-8-sig"))["features"][0]["properties"]
+    assert "latitude_wgs84" not in properties and "longitude_wgs84" not in properties
+    assert properties["linked_entity"] == "subjA"
+
+
+# --- edge cases: GeoVisualizer field helpers -------------------------------
+
+def test_pick_imei_variants() -> None:
+    assert _builtin._pick_imei("dev_490154203237518_x") == "490154203237518"
+    assert _builtin._pick_imei("490154203237518") == "490154203237518"     # no underscore
+    assert _builtin._pick_imei("foo_bar_490154203237518") == "490154203237518"
+    assert _builtin._pick_imei(None) == ""
+    assert _builtin._pick_imei("") == ""
+    assert _builtin._pick_imei("dev_123_x") == ""                          # too short
+    assert _builtin._pick_imei("490154203237517") == ""                    # 15 digits, Luhn-invalid
+    assert _builtin._pick_imei("4901542032375180") == ""                   # 16 digits
+    assert _builtin._pick_imei("49015420323751a") == ""                    # non-digit
+
+
+def test_local_iso_offsets_and_missing() -> None:
+    us = 1765026000000000   # 2025-12-06 13:00:00 UTC
+    assert _builtin._local_iso(us, 1.0) == "2025-12-06T14:00:00+01:00"
+    assert _builtin._local_iso(us, 0.0) == "2025-12-06T13:00:00+00:00"
+    assert _builtin._local_iso(us, -5.0) == "2025-12-06T08:00:00-05:00"
+    assert _builtin._local_iso(us, 5.5) == "2025-12-06T18:30:00+05:30"     # fractional zone
+    assert _builtin._local_iso(us, "N/A") == "2025-12-06T13:00:00+00:00"   # non-numeric offset => UTC
+    assert _builtin._local_iso(None, 1.0) == ""
+    assert _builtin._local_iso(float("nan"), 1.0) == ""
+    assert _builtin._local_iso("not-a-number", 1.0) == ""
+
+
+def test_description_formats() -> None:
+    both = {"time_lower_source_field": "TS", "time_upper_source_field": "TS",
+            "horizontal_speed_kmh": 10.8, "horizontal_speed_accuracy_kmh": 2.0}
+    text = _builtin._geovis_description(both)
+    assert text == "mATLAS · TS · 10.8 km/h (±2 km/h)"
+
+    no_accuracy = {"time_lower_source_field": "TS", "time_upper_source_field": "TS",
+                   "horizontal_speed_kmh": 5.0, "horizontal_speed_accuracy_kmh": None}
+    assert _builtin._geovis_description(no_accuracy) == "mATLAS · TS · 5 km/h"
+
+    assert _builtin._geovis_description(
+        {"time_lower_source_field": "TS", "time_upper_source_field": "TS"}) == "mATLAS · TS"
+    assert _builtin._geovis_description(
+        {"time_lower_source_field": "L", "time_upper_source_field": "U"}) == "mATLAS · L / U"
+    assert _builtin._geovis_description({}) == "mATLAS"
+
+
+def test_source_formats() -> None:
+    assert _builtin._geovis_source({"raw_source_path": "/a", "input_file_path": "b.csv"}) == "/a (b.csv)"
+    assert _builtin._geovis_source({"raw_source_path": "/a", "input_file_path": None}) == "/a"
+    assert _builtin._geovis_source({"raw_source_path": None, "input_file_path": "b.csv"}) == "b.csv"
+    assert _builtin._geovis_source({}) == ""
+
+
+def test_geovisualizer_type_falls_back_to_preset(tmp_path: Path) -> None:
+    frame = pd.DataFrame({
+        "linked_entity": ["x"], "latitude_wgs84": [1.0], "longitude_wgs84": [2.0],
+        "source_label": [None], "preset_name": ["FallbackPreset"],
+    })
+    [out] = run_exporters(["geovisualizer"], _ctx(frame, tmp_path))
+    with out.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.reader(handle))
+    assert dict(zip(rows[0], rows[1]))["Type"] == "FallbackPreset"
