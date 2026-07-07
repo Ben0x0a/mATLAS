@@ -41,6 +41,7 @@ _SCHEMA: dict[str, set[str]] = {
         "enabled", "crash_dir", "redact", "redact_paths", "max_string_len", "max_items",
         "max_head", "max_depth", "max_frame_bytes", "capture_env",
     },
+    "export": {"plugins_dir"},
 }
 
 # Variable-name tokens whose value is redacted (case-insensitive substring) in a crash
@@ -98,12 +99,20 @@ class DiagnosticsSettings:
 
 
 @dataclass(frozen=True)
+class ExportSettings:
+    # Folder scanned at runtime for drop-in exporter .py files (see model_atlas.exporters).
+    # Relative => resolved against the directory you run from. Missing folder => builtins only.
+    plugins_dir: str = "matlas_exports"
+
+
+@dataclass(frozen=True)
 class Settings:
     timezone: TimezoneSettings = field(default_factory=TimezoneSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     discovery: DiscoverySettings = field(default_factory=DiscoverySettings)
     output: OutputSettings = field(default_factory=OutputSettings)
     diagnostics: DiagnosticsSettings = field(default_factory=DiagnosticsSettings)
+    export: ExportSettings = field(default_factory=ExportSettings)
     source_path: Path | None = None     # where it was loaded from; None => built-in defaults
 
     def to_traceability(self) -> dict:
@@ -116,6 +125,7 @@ class Settings:
             "source_column_prefix": self.output.source_column_prefix,
             "diagnostics_enabled": self.diagnostics.enabled,
             "crash_dir": self.diagnostics.crash_dir,
+            "export_plugins_dir": self.export.plugins_dir,
         }
 
 
@@ -187,6 +197,7 @@ def load_settings(path: Path | None = None) -> Settings:
     dc = raw.get("discovery", {})
     out = raw.get("output", {})
     dg = raw.get("diagnostics", {})
+    ex = raw.get("export", {})
     settings = Settings(
         timezone=TimezoneSettings(local_zone=_validate_zone(tz.get("local_zone"))),
         logging=LoggingSettings(
@@ -199,6 +210,7 @@ def load_settings(path: Path | None = None) -> Settings:
         ),
         output=OutputSettings(source_column_prefix=str(out.get("source_column_prefix", "orig_"))),
         diagnostics=_load_diagnostics(dg),
+        export=ExportSettings(plugins_dir=str(ex.get("plugins_dir", "matlas_exports"))),
         source_path=config_path,
     )
     log.info("Loaded settings from %s (local_zone=%s)", config_path, settings.timezone.local_zone)
