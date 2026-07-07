@@ -394,6 +394,16 @@ def _passthrough_column_names(source_fields: list[str]) -> dict[str, str]:
     return names
 
 
+def _record_breadcrumb(container: str | None, position: int, record: dict[str, Any]) -> str:
+    """A concise ``exc.add_note`` breadcrumb naming which source record was being assembled
+    when a transform raised. Names the table/line and the record's column names (not values —
+    values may be sensitive and are captured, redacted, in the crash report's frame locals)."""
+    line = position + 1
+    locator = f"{container}#{line}" if container else f"#{line}"
+    columns = ", ".join(str(key) for key in list(record.keys())[:20])
+    return f"mATLAS build_rows: failed while assembling source record {locator} (columns: {columns})"
+
+
 def build_rows(
     records: list[dict[str, Any]],
     preset: PresetSpec,
@@ -433,7 +443,12 @@ def build_rows(
         "path": env.source_file_path,
     }
 
-    for position, record in enumerate(records):
+    # The per-record body is a nested function so the driving loop below can wrap each call and,
+    # on any unhandled error, attach a breadcrumb naming WHICH source record failed (exc.add_note
+    # is stdlib >= 3.11 and appears in the formatted traceback / crash report). Closures capture
+    # the resolver, context, env and the shared rows/warnings/seen_ids accumulators for free, so
+    # the body below is unchanged from the original loop body.
+    def _process_record(position: int, record: dict[str, Any]) -> None:
         # Resolve any per-row entity / linked_entity reference into a concrete literal for
         # THIS record, so both the preset's ``param(...)`` refs and the override below see
         # the same resolved value. A plain literal (expr is None) is used as-is.
@@ -523,6 +538,15 @@ def build_rows(
                     _OUTPUT_ROW_NAMESPACE, f"{source_scope}|{output_ordinal}|{content_digest}"))
                 output_ordinal += 1
                 rows.append(flat)
+
+    for position, record in enumerate(records):
+        try:
+            _process_record(position, record)
+        except Exception as exc:  # noqa: BLE001 - annotate WHICH record failed, then re-raise unchanged.
+            # add_note leaves the original exception/type intact (no wrapping): behaviour is
+            # unchanged, but the crash report gains a human-readable "which record" locator.
+            exc.add_note(_record_breadcrumb(container, position, record))
+            raise
 
     frame = pd.DataFrame(rows, columns=list(OUTPUT_COLUMNS) + list(passthrough_names.values()))
     return frame, warnings

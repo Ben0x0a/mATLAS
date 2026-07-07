@@ -37,7 +37,20 @@ _SCHEMA: dict[str, set[str]] = {
     "logging": {"level", "format"},
     "discovery": {"root_prefix_depth", "max_container_depth"},
     "output": {"source_column_prefix"},
+    "diagnostics": {
+        "enabled", "crash_dir", "redact", "redact_paths", "max_string_len", "max_items",
+        "max_head", "max_depth", "max_frame_bytes", "capture_env",
+    },
 }
+
+# Variable-name tokens whose value is redacted (case-insensitive substring) in a crash
+# report. Deliberately specific: bare "key" would over-redact legitimate forensic columns
+# (primary_key, keyword, ...), so only unambiguously sensitive tokens are defaulted here.
+# Consumed by: diagnostics._is_redacted. Operator-overridable via [diagnostics].redact.
+_DEFAULT_REDACT: tuple[str, ...] = (
+    "password", "passwd", "pwd", "passphrase",
+    "secret", "token", "credential", "api_key", "apikey", "private_key",
+)
 
 
 @dataclass(frozen=True)
@@ -64,11 +77,33 @@ class OutputSettings:
 
 
 @dataclass(frozen=True)
+class DiagnosticsSettings:
+    """Crash-report behaviour. Consumed by ``model_atlas.diagnostics``.
+
+    ``redact`` is the case-insensitive substring token list applied to VARIABLE NAMES; a
+    matched variable's value is replaced by a type + sha256 (never the plaintext). The size
+    caps keep a report useful without ever flushing a whole DataFrame/collection to disk.
+    """
+
+    enabled: bool = True
+    crash_dir: str = "crash_reports"     # relative => resolved against the CWD at crash time
+    redact: tuple[str, ...] = _DEFAULT_REDACT
+    redact_paths: bool = True            # anonymise filesystem paths (username / org / evidence dirs)
+    max_string_len: int = 512            # str/repr preview length before hashing the remainder
+    max_items: int = 20                  # collection items summarised per container
+    max_head: int = 3                    # DataFrame/Series head rows captured (never the whole frame)
+    max_depth: int = 3                   # recursion depth before a value degrades to a shallow repr
+    max_frame_bytes: int = 65_536        # per-frame locals budget; further locals are dropped past it
+    capture_env: bool = False            # include os.environ (redacted) — off by default (holds secrets)
+
+
+@dataclass(frozen=True)
 class Settings:
     timezone: TimezoneSettings = field(default_factory=TimezoneSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     discovery: DiscoverySettings = field(default_factory=DiscoverySettings)
     output: OutputSettings = field(default_factory=OutputSettings)
+    diagnostics: DiagnosticsSettings = field(default_factory=DiagnosticsSettings)
     source_path: Path | None = None     # where it was loaded from; None => built-in defaults
 
     def to_traceability(self) -> dict:
@@ -79,6 +114,8 @@ class Settings:
             "root_prefix_depth": self.discovery.root_prefix_depth,
             "max_container_depth": self.discovery.max_container_depth,
             "source_column_prefix": self.output.source_column_prefix,
+            "diagnostics_enabled": self.diagnostics.enabled,
+            "crash_dir": self.diagnostics.crash_dir,
         }
 
 
@@ -106,6 +143,33 @@ def _validate_zone(name: str | None) -> str | None:
     return name
 
 
+def _load_diagnostics(raw: dict) -> DiagnosticsSettings:
+    """Parse the optional ``[diagnostics]`` table into a DiagnosticsSettings.
+
+    ``redact``, if present, MUST be a list of strings — a scalar there is a config typo we
+    fail fast on rather than silently coercing (an unredacted secret is worse than an error).
+    """
+    redact_raw = raw.get("redact")
+    if redact_raw is None:
+        redact = _DEFAULT_REDACT
+    else:
+        if not isinstance(redact_raw, list) or not all(isinstance(t, str) for t in redact_raw):
+            raise ValueError(f"{CONFIG_FILENAME}: [diagnostics].redact must be a list of strings")
+        redact = tuple(redact_raw)
+    return DiagnosticsSettings(
+        enabled=bool(raw.get("enabled", True)),
+        crash_dir=str(raw.get("crash_dir", "crash_reports")),
+        redact=redact,
+        redact_paths=bool(raw.get("redact_paths", True)),
+        max_string_len=int(raw.get("max_string_len", 512)),
+        max_items=int(raw.get("max_items", 20)),
+        max_head=int(raw.get("max_head", 3)),
+        max_depth=int(raw.get("max_depth", 3)),
+        max_frame_bytes=int(raw.get("max_frame_bytes", 65_536)),
+        capture_env=bool(raw.get("capture_env", False)),
+    )
+
+
 def load_settings(path: Path | None = None) -> Settings:
     """Load settings from ``path`` (or ``./matlas_config.toml``). Missing -> defaults."""
     config_path = Path(path) if path is not None else Path.cwd() / CONFIG_FILENAME
@@ -122,6 +186,7 @@ def load_settings(path: Path | None = None) -> Settings:
     lg = raw.get("logging", {})
     dc = raw.get("discovery", {})
     out = raw.get("output", {})
+    dg = raw.get("diagnostics", {})
     settings = Settings(
         timezone=TimezoneSettings(local_zone=_validate_zone(tz.get("local_zone"))),
         logging=LoggingSettings(
@@ -133,6 +198,7 @@ def load_settings(path: Path | None = None) -> Settings:
             max_container_depth=int(dc.get("max_container_depth", 1)),
         ),
         output=OutputSettings(source_column_prefix=str(out.get("source_column_prefix", "orig_"))),
+        diagnostics=_load_diagnostics(dg),
         source_path=config_path,
     )
     log.info("Loaded settings from %s (local_zone=%s)", config_path, settings.timezone.local_zone)

@@ -21,8 +21,14 @@ def run(argv: list[str] | None = None) -> int:
         )
         raise SystemExit(1) from exc
 
+    from model_atlas.diagnostics import install_excepthook
+
     from gui.app import MainController
     from gui.theme import configure_application_font
+
+    # PySide6 routes unhandled exceptions in slots to sys.excepthook, so installing our hook
+    # here captures GUI-triggered crashes into the same forensic JSON artefact as the CLI.
+    install_excepthook(context={"entrypoint": "gui"})
 
     app = QApplication(sys.argv[:1] + (argv or []))
     app.setStyle("Fusion")

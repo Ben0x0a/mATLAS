@@ -1,5 +1,6 @@
 # User data
 out/
+crash_reports/
 # Local mATLAS config (copy from matlas_config.toml.example); only the example is tracked.
 matlas_config.toml
 # Generated AXIOM starter templates (regenerate from the parser; not tracked).

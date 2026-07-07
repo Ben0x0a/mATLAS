@@ -78,7 +78,11 @@ def zone_offset_hours_at(zone_name: str, unix_us: int) -> float:
     that date — +1 in winter, +2 in summer for a +1/+2 zone — with no nominal guess."""
     from zoneinfo import ZoneInfo
 
-    instant = dt.datetime.fromtimestamp(unix_us / 1_000_000, tz=dt.timezone.utc)
+    # Build the instant by epoch arithmetic, NOT datetime.fromtimestamp: on Windows the latter
+    # is backed by the CRT and raises OSError [Errno 22] for out-of-range / negative timestamps
+    # (pre-1970 or far-future values that occur in real forensic data). timedelta from the Unix
+    # epoch is pure Python and valid across the whole datetime range on every platform.
+    instant = _UNIX_EPOCH + dt.timedelta(microseconds=unix_us)
     offset = instant.astimezone(ZoneInfo(zone_name)).utcoffset()
     return offset.total_seconds() / 3600 if offset is not None else 0.0
 

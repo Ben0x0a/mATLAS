@@ -8,6 +8,7 @@ from pathlib import Path
 
 from model_atlas import __version__
 from model_atlas.config import get_settings
+from model_atlas.diagnostics import install_excepthook
 from model_atlas.pipeline import process
 from launcher.profiles import build_profile_preset_folder, load_profile
 
@@ -194,6 +195,9 @@ def run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     _configure_logging(args.log_file, args.log_level)
+    # Install the crash handler once logging is live so a report path can be logged, and
+    # before process() runs so any unhandled error produces a forensic crash artefact.
+    install_excepthook(context={"entrypoint": "cli", "command": args.command})
     if args.command == "process":
         return _cmd_process(args)
     parser.print_help()
