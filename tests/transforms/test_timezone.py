@@ -15,11 +15,11 @@ _PRESET = """
 preset: {id: t.tz, name: TZ, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: tz.csv}
 patterns: {tz: "(?P<z>UTC[+-]\\\\d{2}:\\\\d{2})"}
-source_record_uid: column(Item)
+source_record_uid: field(Item)
 assertions:
-  - position: {latitude_wgs84: column(Lat)}
+  - position: {latitude_wgs84: field(Lat)}
     time:
-      instant: 'column("Timestamp - * ")'
+      instant: 'field("Timestamp - * ")'
       format: "%Y-%m-%d %H:%M:%S"
       zone: { from: 'header("Timestamp - * ")', pipe: "regex(tz, group=z)" }
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}

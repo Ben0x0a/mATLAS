@@ -20,6 +20,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 import pytest
+
+pytest.importorskip("openpyxl")
 from openpyxl import Workbook
 
 from model_atlas.pipeline import process
@@ -62,8 +64,8 @@ preset: {{id: t.loc, name: Loc, version: 1.0, tier: primary}}
 input_selector: {{format: sqlite, path: /private/var/db.sqlite, table: {table}}}
 common: {{entity: const(device)}}
 assertions:
-  - position: {{latitude_wgs84: column(lat), longitude_wgs84: column(lon)}}
-    time: {{instant: column(ts), epoch: unix_s}}
+  - position: {{latitude_wgs84: field(lat), longitude_wgs84: field(lon)}}
+    time: {{instant: field(ts), epoch: unix_s}}
     links: {{entity_position: at, entity_time: observed_at, spatial_temporal: instant}}
 """.format(table=_DB_TABLE)
 
@@ -76,8 +78,8 @@ preset: {id: t.csv, name: Csv, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: loc.csv}
 common: {entity: const(device)}
 assertions:
-  - position: {latitude_wgs84: column(lat), longitude_wgs84: column(lon)}
-    time: {instant: column(ts), epoch: unix_s}
+  - position: {latitude_wgs84: field(lat), longitude_wgs84: field(lon)}
+    time: {instant: field(ts), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 
@@ -260,8 +262,8 @@ preset: {id: t.xl, name: Xl, version: 1.0, tier: secondary}
 input_selector: {format: excel, name: book.xlsx, sheet: Trips}
 common: {entity: const(device)}
 assertions:
-  - position: {latitude_wgs84: column(lat), longitude_wgs84: column(lon)}
-    time: {instant: column(ts), epoch: unix_s}
+  - position: {latitude_wgs84: field(lat), longitude_wgs84: field(lon)}
+    time: {instant: field(ts), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 
@@ -312,8 +314,8 @@ input_selector:
   - {format: csv, name: backup.csv}
 common: {entity: const(device)}
 assertions:
-  - position: {latitude_wgs84: column(lat), longitude_wgs84: column(lon)}
-    time: {instant: column(ts), epoch: unix_s}
+  - position: {latitude_wgs84: field(lat), longitude_wgs84: field(lon)}
+    time: {instant: field(ts), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 
@@ -324,8 +326,8 @@ input_selector:
   - {role: account, format: csv, name: b.csv}
 common: {entity: const(device)}
 assertions:
-  - position: {latitude_wgs84: column(lat), longitude_wgs84: column(lon)}
-    time: {instant: column(ts), epoch: unix_s}
+  - position: {latitude_wgs84: field(lat), longitude_wgs84: field(lon)}
+    time: {instant: field(ts), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 

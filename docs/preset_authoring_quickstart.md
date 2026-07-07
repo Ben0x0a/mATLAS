@@ -41,14 +41,14 @@ a loose folder tree and a full-filesystem ZIP alike (skipping a `filesystem1/` w
 to `--root-prefix-depth`, default 1), with `{uuid}` and `*` for variable segments. Pass a
 list of selectors for OR alternatives. `format` is always magic-verified.
 
-## 2b. Declare the columns you have (`expected_columns`)
+## 2b. Declare the fields you have (`expected_fields`)
 
-List every source column up front, then map the subset you need. The unmapped ones
+List every source field up front, then map the subset you need. The unmapped ones
 become the research frontier (reported in the warnings sidecar), and the inventory
 drives drift detection and preset tie-breaking. Entries may be exact names or globs.
 
 ```yaml
-expected_columns:
+expected_fields:
   - ZLATITUDE
   - ZLONGITUDE
   - ZTIMESTAMP
@@ -58,7 +58,7 @@ expected_columns:
 
 ## 3. Reference values explicitly
 
-Every value is one call: `column(...)`, `header(...)`, `filename(...)`,
+Every value is one call: `field(...)`, `header(...)`, `filename(...)`,
 `param(...)`, or `const(...)`.
 
 ```yaml
@@ -74,12 +74,12 @@ common:
 ```yaml
 assertions:
   - position:
-      latitude_wgs84:  column(ZLATITUDE)      # numeric cast is inferred — no cast() needed
-      longitude_wgs84: column(ZLONGITUDE)
-      altitude_m:      column(ZALTITUDE)
-      horizontal_speed_kmh: { from: column(ZSPEED), unit: m/s }   # converted to km/h
+      latitude_wgs84:  field(ZLATITUDE)      # numeric cast is inferred — no cast() needed
+      longitude_wgs84: field(ZLONGITUDE)
+      altitude_m:      field(ZALTITUDE)
+      horizontal_speed_kmh: { from: field(ZSPEED), unit: m/s }   # converted to km/h
     time:
-      instant: column(ZTIMESTAMP)
+      instant: field(ZTIMESTAMP)
       epoch:   cocoa
       zone:    const(UTC)
     links:
@@ -97,9 +97,9 @@ the row's UID automatically.
 A `time` block decodes to Unix microseconds. Pick one:
 
 ```yaml
-time: {instant: column(TS), format: "%d.%m.%Y %H:%M:%S.%f"}   # formatted string
-time: {instant: column(TS), epoch: unix_ms}                   # epoch milliseconds
-time: {instant: column(TS), epoch: cocoa, zone: const(UTC)}   # Apple Cocoa epoch
+time: {instant: field(TS), format: "%d.%m.%Y %H:%M:%S.%f"}   # formatted string
+time: {instant: field(TS), epoch: unix_ms}                   # epoch milliseconds
+time: {instant: field(TS), epoch: cocoa, zone: const(UTC)}   # Apple Cocoa epoch
 ```
 
 For a non-UTC export, capture the zone from the header and it is applied to parsing:
@@ -108,7 +108,7 @@ For a non-UTC export, capture the zone from the header and it is applied to pars
 patterns: {tz: "(?P<z>UTC[+-]\\d{2}:\\d{2})"}
 ...
     time:
-      instant: 'column("Timestamp - * (dd.MM.yyyy)")'
+      instant: 'field("Timestamp - * (dd.MM.yyyy)")'
       format:  "%d.%m.%Y %H:%M:%S.%f"
       zone:    { from: 'header("Timestamp - * (dd.MM.yyyy)")', pipe: "regex(tz, group=z)" }
 ```
@@ -122,10 +122,10 @@ in `lookup_tables` / `patterns` and is referenced by name:
 lookup_tables: {recovery: {Parsing: intact, Carving: recovered, Deleted: deleted}}
 patterns:      {coords: "(?P<lat>-?\\d+\\.\\d+) - (?P<lon>-?\\d+\\.\\d+)"}
 ...
-  deleted: { from: 'column("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
+  deleted: { from: 'field("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
   # one cell holding "lat - lon": pull each named group into its own field
-  latitude_wgs84:  { from: column(Coords), extract: coords.lat }
-  longitude_wgs84: { from: column(Coords), extract: coords.lon }
+  latitude_wgs84:  { from: field(Coords), extract: coords.lat }
+  longitude_wgs84: { from: field(Coords), extract: coords.lon }
 ```
 
 `regex` requires named groups, and you name which group to extract — so what is pulled

@@ -12,12 +12,12 @@ input_selector:
   model: Journey
 
 # All output rows of one Journey (origin + destination) share this stable id.
-source_record_uid: column(uuid)
+source_record_uid: field(uuid)
 
 lookup_tables:
   recovery: {Intact: intact, Deleted: deleted, Unknown: unknown}
 
-expected_columns:
+expected_fields:
   - uuid
   - deleted_state
   - decoding_confidence
@@ -41,27 +41,27 @@ common:
   entity:          param(entity)
   entity_type:     const(device)
   source_label:    const(Journey)
-  raw_source_path: column(source_path)
-  deleted:         { from: column(deleted_state), pipe: "lookup(recovery, on_unknown=null)" }
+  raw_source_path: field(source_path)
+  deleted:         { from: field(deleted_state), pipe: "lookup(recovery, on_unknown=null)" }
 
 # A Journey fans out to two assertions — origin at StartTime and destination at EndTime —
 # so each trip yields two output rows sharing the Journey's source_record_uid.
 assertions:
   - position:
-      latitude_wgs84:  column(FromPoint.Position.Latitude)
-      longitude_wgs84: column(FromPoint.Position.Longitude)
+      latitude_wgs84:  field(FromPoint.Position.Latitude)
+      longitude_wgs84: field(FromPoint.Position.Longitude)
     time:
-      instant: column(StartTime)
+      instant: field(StartTime)
       format:  iso8601
     links:
       entity_position:  at
       entity_time:      observed_at
       spatial_temporal: instant
   - position:
-      latitude_wgs84:  column(ToPoint.Position.Latitude)
-      longitude_wgs84: column(ToPoint.Position.Longitude)
+      latitude_wgs84:  field(ToPoint.Position.Latitude)
+      longitude_wgs84: field(ToPoint.Position.Longitude)
     time:
-      instant: column(EndTime)
+      instant: field(EndTime)
       format:  iso8601
     links:
       entity_position:  at

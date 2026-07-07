@@ -12,7 +12,7 @@ input_selector:
   delimiter: ","
   encoding: "utf-8-sig"
 
-expected_columns:
+expected_fields:
   - Record
   - Tags
   - Comments
@@ -36,30 +36,30 @@ patterns:
 lookup_tables:
   recovery: {Parsing: intact, Carving: recovered, Deleted: deleted}
 
-source_record_uid: 'column("Item ID")'
+source_record_uid: 'field("Item ID")'
 
 common:
   entity:          param(entity)
   entity_type:     const(device)
   source_label:    const(ZRTCLLOCATIONMO)
   position_source: const(GNSS)
-  input_record_id:    column(Location)
-  raw_source_path: column(Source)
-  deleted: { from: 'column("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
+  input_record_id:    field(Location)
+  raw_source_path: field(Source)
+  deleted: { from: 'field("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
 
 assertions:
   - position:
-      latitude_wgs84:        column(Latitude)
-      longitude_wgs84:       column(Longitude)
-      altitude_m:            'column("Altitude (m)")'
-      horizontal_accuracy_m: 'column("Accuracy (m)")'
-      vertical_accuracy_m:   'column("Altitude Accuracy (m)")'
-      heading_deg:           column(Direction)
-      horizontal_speed_kmh:  { from: 'column("Speed (m/s)")', unit: m/s }
+      latitude_wgs84:        field(Latitude)
+      longitude_wgs84:       field(Longitude)
+      altitude_m:            'field("Altitude (m)")'
+      horizontal_accuracy_m: 'field("Accuracy (m)")'
+      vertical_accuracy_m:   'field("Altitude Accuracy (m)")'
+      heading_deg:           field(Direction)
+      horizontal_speed_kmh:  { from: 'field("Speed (m/s)")', unit: m/s }
     time:
       # Wildcard: the header embeds the export timezone, which is captured into
       # time_zone via header() + regex and applied to parsing automatically.
-      instant: 'column("Timestamp Date/Time - * (dd.MM.yyyy)")'
+      instant: 'field("Timestamp Date/Time - * (dd.MM.yyyy)")'
       format:  "%d.%m.%Y %H:%M:%S.%f"
       zone:    { from: 'header("Timestamp Date/Time - * (dd.MM.yyyy)")', pipe: "regex(tz, group=z)" }
     links:

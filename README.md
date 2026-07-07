@@ -4,7 +4,7 @@ Model Atlas is a clone-and-run app for turning heterogeneous forensic data
 exports into one spatio-temporal integration model.
 
 The core is CLI-first and source-agnostic. It reads CSV files, Excel workbooks,
-and SQLite databases, matches them to YAML presets, maps source columns into a
+and SQLite databases, matches them to YAML presets, maps source fields into a
 flat spatio-temporal assertion model, and writes CSV output plus warning and
 traceability sidecars. A PySide6 GUI is available as an optional front-end.
 
@@ -100,7 +100,7 @@ preset has:
 - a `preset` header (id, name, os/tool, version, os_version, tier);
 - a `match` block identifying the source (CSV, Excel, or SQLite, direct or in a ZIP);
 - `common` row-level fields plus `assertions` (each a `position` + `time` + `links`);
-- explicit value references (`column()`, `header()`, `filename()`, `param()`, `const()`),
+- explicit value references (`field()`, `header()`, `filename()`, `param()`, `const()`),
   named timestamp codecs (`epoch:`), declarative `unit:` conversion, and `pipe` chains
   for the procedural cases.
 
@@ -152,8 +152,8 @@ python matlas.py process \
   to a temporary directory and read from the copy, and the original's hash is
   recorded before and after the run. (SQLite stages its WAL/SHM/journal siblings too.)
 - Unmatched source elements are warned and skipped.
-- Expected-column drift is warned.
-- Missing mapped columns resolve to `None` unless a later pipe raises.
+- Expected-field drift is warned.
+- Missing mapped fields resolve to `None` unless a later pipe raises.
 - Duplicate explicit `source_row_id` values across different source rows are
   hard errors.
 - Source file, original path, parser, preset, warning, and execution context are

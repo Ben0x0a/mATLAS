@@ -138,7 +138,7 @@ class TemporalBound:
     """One end of the interval: the raw/normalised pair plus its source field.
 
     ``raw`` and ``unix_us`` are the source-original and exploitable forms of the
-    same instant; ``source_field`` records which source column it came from.
+    same instant; ``source_field`` records which source field it came from.
     """
 
     raw: Any | None = None
@@ -175,9 +175,9 @@ class Spatial:
     """
 
     latitude_wgs84: float | None = None
-    latitude_source_field: str | None = None    # source column latitude was read from
+    latitude_source_field: str | None = None    # source field latitude was read from
     longitude_wgs84: float | None = None
-    longitude_source_field: str | None = None   # source column longitude was read from
+    longitude_source_field: str | None = None   # source field longitude was read from
     altitude_m: float | None = None
     position_type: str | None = None
     raw_position: Any | None = None      # source-original, e.g. "I'm at home"
@@ -216,7 +216,7 @@ class Provenance:
     / ``preset_name`` / ``source_label`` / ``source_tier``), and *record state* (``deleted``).
     """
 
-    raw_source_path: str | None = None    # where the trace came from (preset-mapped: device path / tool column)
+    raw_source_path: str | None = None    # where the trace came from (preset-mapped: device path / tool field)
     input_file_path: str | None = None    # full path of the outermost on-disk artifact matlas opened
     input_record_id: str | None = None    # which record in that file: "<table-or-sheet>#<line>" (1-based) or a tool locator
     source_record_uid: str | None = None  # per-source-record UID; shared by every output row of one source record

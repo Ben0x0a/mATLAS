@@ -14,14 +14,14 @@ input_selector:
   model: Location
 
 # The model's own stable Cellebrite id (captured as the ``uuid`` column) is the per-record UID.
-source_record_uid: column(uuid)
+source_record_uid: field(uuid)
 
 lookup_tables:
   recovery: {Intact: intact, Deleted: deleted, Unknown: unknown}
 
 # Inventory of the inline-flattened columns (1:1 modelField children appear as Parent.Child).
 # Present-but-unmapped columns are the research frontier (warnings sidecar).
-expected_columns:
+expected_fields:
   - uuid
   - deleted_state
   - decoding_confidence
@@ -47,19 +47,19 @@ common:
   entity:          param(entity)
   entity_type:     const(device)
   source_label:    const(Location)
-  raw_source_path: column(source_path)        # on-device source file, joined from extraInfos
-  deleted:         { from: column(deleted_state), pipe: "lookup(recovery, on_unknown=null)" }
+  raw_source_path: field(source_path)        # on-device source file, joined from extraInfos
+  deleted:         { from: field(deleted_state), pipe: "lookup(recovery, on_unknown=null)" }
 
 assertions:
   - position:
-      latitude_wgs84:        column(Position.Latitude)         # required
-      longitude_wgs84:       column(Position.Longitude)        # required
+      latitude_wgs84:        field(Position.Latitude)         # required
+      longitude_wgs84:       field(Position.Longitude)        # required
       # Enrichments some schema versions omit — optional, so their absence yields a null
       # cell rather than disqualifying the preset.
-      altitude_m:            { from: column(Position.Elevation), optional: true }
-      horizontal_accuracy_m: { from: column(Position.GpsHorizontalAccuracy), optional: true }
+      altitude_m:            { from: field(Position.Elevation), optional: true }
+      horizontal_accuracy_m: { from: field(Position.GpsHorizontalAccuracy), optional: true }
     time:
-      instant: column(TimeStamp)
+      instant: field(TimeStamp)
       format:  iso8601        # zone-qualified values keep their offset; naive ones are
                               # materialised as UTC with utc_offset_hours flagged "N/A".
     links:

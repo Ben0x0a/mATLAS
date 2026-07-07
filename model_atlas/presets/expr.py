@@ -8,8 +8,8 @@ Used by:    presets.spec (parse + validate), transforms.assemble (resolve refs),
 Depends on: standard library only.
 
 Reference forms — the value of a mapped field is ONE explicit call:
-    column(NAME)              a source column's value (NAME may be a glob; quote if spaced)
-    header("Glob *")          the matched column's header text (was v2 `from_name`)
+    field(NAME)               a source field's value (NAME may be a glob; quote if spaced)
+    header("Glob *")          the matched field's header text (was v2 `from_name`)
     filename(name|stem|path)  part of the source file identity (was v2 `from_file`)
     param(linked_entity)      a run-level parameter (entity | linked_entity)
     preset(in_archive)        a key from the CURRENT preset's own definition (match/meta)
@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-REF_KINDS = ("column", "header", "filename", "const", "param", "preset")
+REF_KINDS = ("field", "header", "filename", "const", "param", "preset")
 FILENAME_TOKENS = ("name", "stem", "path")
 PARAM_TOKENS = ("entity", "linked_entity")
 # Keys a preset(...) ref may read from the current preset (match block + meta).
@@ -42,7 +42,7 @@ _BARE_CALL_RE = re.compile(r"^\s*([a-z_]+)\s*$")
 
 @dataclass(frozen=True)
 class Ref:
-    """A typed value source. ``kind`` is one of REF_KINDS; ``arg`` is the column
+    """A typed value source. ``kind`` is one of REF_KINDS; ``arg`` is the field
     name/glob, file token, param name, or (for ``const``) the literal value."""
 
     kind: str
@@ -118,14 +118,14 @@ def _unquote(token: str) -> str:
 
 
 def parse_ref(text: Any) -> Ref:
-    """Parse a single reference expression like ``column(ZLAT)`` or ``const(device)``."""
+    """Parse a single reference expression like ``field(ZLAT)`` or ``const(device)``."""
     if not isinstance(text, str):
-        raise ValueError(f"reference must be a string call like column(...), got {text!r}")
+        raise ValueError(f"reference must be a string call like field(...), got {text!r}")
     match = _CALL_RE.match(text)
     if match is None:
         raise ValueError(
             f"reference {text!r} must be an explicit call: "
-            f"column(...), header(...), filename(...), param(...), or const(...)"
+            f"field(...), header(...), filename(...), param(...), or const(...)"
         )
     kind, raw = match.group(1), match.group(2).strip()
     if kind not in REF_KINDS:
@@ -139,8 +139,8 @@ def parse_ref(text: Any) -> Ref:
         raise ValueError(f"param(...) takes one of {PARAM_TOKENS}, got {arg!r}")
     if kind == "preset" and arg not in PRESET_TOKENS:
         raise ValueError(f"preset(...) takes one of {PRESET_TOKENS}, got {arg!r}")
-    if kind in ("column", "header") and not arg:
-        raise ValueError(f"{kind}(...) needs a column name or glob")
+    if kind in ("field", "header") and not arg:
+        raise ValueError(f"{kind}(...) needs a field name or glob")
     return Ref(kind=kind, arg=arg)
 
 

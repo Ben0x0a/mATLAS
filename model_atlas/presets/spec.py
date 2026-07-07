@@ -21,18 +21,18 @@ v3 layout (readable, examiner-first)::
       format: sqlite                       # REQUIRED, magic-verified: csv|excel|sqlite
       path: /private/.../Cache.sqlite      # XOR name; anchored, prefix-tolerant, {uuid}/*
       table: ZRTCLLOCATIONMO
-    source_record_uid: column(ArtifactID)  # optional; omit to auto-generate a deterministic per-record UID
+    source_record_uid: field(ArtifactID)   # optional; omit to auto-generate a deterministic per-record UID
     raw_source_path: preset(path)          # where the trace came from (mapped in `common:`)
     lookup_tables: {recovery: {Parsing: intact}}
     patterns: {coords: "(?P<lat>...) - (?P<lon>...)"}
     common:
       entity: const(device)
     assertions:
-      - position: {latitude_wgs84: column(ZLATITUDE), ...}
-        time:     {instant: column(ZTIMESTAMP), epoch: cocoa, zone: UTC}
+      - position: {latitude_wgs84: field(ZLATITUDE), ...}
+        time:     {instant: field(ZTIMESTAMP), epoch: cocoa, zone: UTC}
         links:    {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 
-A value is ONE explicit reference call (column/header/filename/param/const) or a
+A value is ONE explicit reference call (field/header/filename/param/const) or a
 mapping ``{from: <ref>, type:, unit:, extract:, pipe:}``. See presets.expr.
 """
 from __future__ import annotations
@@ -162,13 +162,13 @@ class FieldSpec:
     unit: str | None = None                       # source unit -> canonical
     extract: tuple[str, str] | None = None        # (pattern_name, group_name)
     pipe: tuple[PipeCall, ...] = ()
-    optional: bool = False                         # a mapped column absent => null, not a
+    optional: bool = False                         # a mapped field absent => null, not a
                                                    # match failure (e.g. speed before iOS 17)
 
-    # --- v2-compat accessors used by reporting._column_refs ---
+    # --- v2-compat accessors used by reporting._field_refs ---
     @property
-    def column(self) -> str | None:
-        return self.ref.arg if self.ref.kind == "column" else None
+    def field(self) -> str | None:
+        return self.ref.arg if self.ref.kind == "field" else None
 
     @property
     def from_name_pattern(self) -> str | None:
@@ -185,14 +185,14 @@ class TimeSpec:
     zone: FieldSpec | None = None   # const or header(...) -> utc_offset_hours, applied to parsing
     overrides: tuple[FieldSpec, ...] = ()  # other temporal model fields (accuracy, ...)
 
-    # compat for reporting._column_refs (it reads lower_column/upper_column)
+    # compat for reporting._field_refs (it reads lower_field/upper_field)
     @property
-    def lower_column(self) -> str | None:
-        return self.lower.arg if self.lower.kind in ("column", "header") else None
+    def lower_field(self) -> str | None:
+        return self.lower.arg if self.lower.kind in ("field", "header") else None
 
     @property
-    def upper_column(self) -> str | None:
-        return self.upper.arg if self.upper.kind in ("column", "header") else None
+    def upper_field(self) -> str | None:
+        return self.upper.arg if self.upper.kind in ("field", "header") else None
 
 
 @dataclass(frozen=True)
@@ -226,9 +226,9 @@ class PresetSpec:
     assertions: tuple[AssertionTemplate, ...] = ()
     lookup_tables: dict[str, dict[Any, Any]] = field(default_factory=dict)
     patterns: dict[str, str] = field(default_factory=dict)
-    # The full source-column inventory the examiner declares before mapping. Drives the
+    # The full source-field inventory the examiner declares before mapping. Drives the
     # drift/frontier report and the AXIOM differential; the mapping maps a subset of it.
-    expected_columns: tuple[str, ...] = ()
+    expected_fields: tuple[str, ...] = ()
 
     # --- compatibility accessors so adapters / matcher / reporting / pipeline
     # keep reading familiar attributes without each knowing the v3 layout. ---
@@ -449,9 +449,9 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
     if not isinstance(lookup_tables, dict) or not all(isinstance(v, dict) for v in lookup_tables.values()):
         raise ValueError(f"{path}: 'lookup_tables' must be a mapping of name -> table")
 
-    expected = raw.get("expected_columns") or []
+    expected = raw.get("expected_fields") or []
     if not isinstance(expected, list) or not all(isinstance(c, str) for c in expected):
-        raise ValueError(f"{path}: 'expected_columns' must be a list of column-name strings")
+        raise ValueError(f"{path}: 'expected_fields' must be a list of field-name strings")
 
     source_record_uid_raw = raw.get("source_record_uid")
     source_record_uid = (
@@ -474,5 +474,5 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
         source_record_uid=source_record_uid, common=common, assertions=assertions,
         lookup_tables={str(k): dict(v) for k, v in lookup_tables.items()},
         patterns=patterns,
-        expected_columns=tuple(expected),
+        expected_fields=tuple(expected),
     )

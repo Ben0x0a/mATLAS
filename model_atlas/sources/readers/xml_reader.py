@@ -152,10 +152,10 @@ class XmlReader:
             raise ValueError("an xml input_selector must define 'model'")
         copy = should_copy(self.staging_mode, params.get("_tier"))
         cache = self._prepare(file, copy=copy)
-        dataframe, source_columns = self._frame(cache, model)
+        dataframe, source_fields = self._frame(cache, model)
         return ReadResult(
             dataframe=dataframe,
-            source_columns=source_columns,
+            source_fields=source_fields,
             recovery_state=(RECOVERY_LIVE,) * len(dataframe),
             metadata={
                 "format": "xml",
@@ -167,17 +167,17 @@ class XmlReader:
             },
         )
 
-    def peek_columns(self, file: "SourceFile", selector: Any = None) -> set[str] | None:
+    def peek_fields(self, file: "SourceFile", selector: Any = None) -> set[str] | None:
         model = getattr(selector, "model", None) if selector is not None else None
         if not model:
             return None
         try:
             # Peeks are read-only probes during matching: read in place (never copy).
             cache = self._prepare(file, copy=False)
-            _dataframe, source_columns = self._frame(cache, model)
-            return set(source_columns)
+            _dataframe, source_fields = self._frame(cache, model)
+            return set(source_fields)
         except Exception:  # noqa: BLE001 - a peek failure must never abort matching
-            log.debug(f"xml peek_columns failed for {file.logical_path}", exc_info=True)
+            log.debug("xml peek_fields failed for %s", file.logical_path, exc_info=True)
             return None
 
     def list_subtables(self, file: "SourceFile") -> list[str]:

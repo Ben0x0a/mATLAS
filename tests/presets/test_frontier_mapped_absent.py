@@ -18,8 +18,8 @@ def _preset(longitude_ref: str) -> object:
         "preset": {"id": "t.x", "name": "T", "tier": "secondary", "version": 1},
         "input_selector": {"format": "csv", "name": "x.csv"},
         "assertions": [{
-            "position": {"latitude_wgs84": "column(Lat)", "longitude_wgs84": longitude_ref},
-            "time": {"instant": "column(Ts)"},
+            "position": {"latitude_wgs84": "field(Lat)", "longitude_wgs84": longitude_ref},
+            "time": {"instant": "field(Ts)"},
             "links": {"entity_position": "at", "entity_time": "observed_at",
                       "spatial_temporal": "instant"},
         }],
@@ -27,11 +27,11 @@ def _preset(longitude_ref: str) -> object:
     return preset_spec_from_yaml(yaml.safe_load(yaml.safe_dump(raw)), Path("t.yaml"))
 
 
-def test_mapped_absent_flags_missing_column() -> None:
+def test_mapped_absent_flags_missing_field() -> None:
     present = ["Lat", "Lon", "Ts"]
-    assert frontier_report(_preset("column(Nope)"), present)["mapped_absent"] == ["Nope"]
+    assert frontier_report(_preset("field(Nope)"), present)["mapped_absent"] == ["Nope"]
 
 
 def test_mapped_absent_empty_when_all_present() -> None:
     present = ["Lat", "Lon", "Ts"]
-    assert frontier_report(_preset("column(Lon)"), present)["mapped_absent"] == []
+    assert frontier_report(_preset("field(Lon)"), present)["mapped_absent"] == []

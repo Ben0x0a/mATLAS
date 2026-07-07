@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("lxml")
 import model_atlas.sources.readers.xml_specifics  # noqa: F401 - registers dialects
 from model_atlas.sources.readers.xml_reader import get_dialect, sniff_namespace
 from ufdr_parser.const import NS
@@ -72,7 +73,7 @@ def test_model_types(report: Path, tmp_path: Path) -> None:
 def test_location_inline_flatten_and_source(report: Path, tmp_path: Path) -> None:
     dialect = get_dialect(NS)
     prep = dialect.prepare(lambda: report.open('rb'), tmp_path)
-    df, source_columns = dialect.read_model(prep, "Location")
+    df, source_fields = dialect.read_model(prep, "Location")
 
     assert len(df) == 1
     row = df.iloc[0].to_dict()
@@ -85,8 +86,8 @@ def test_location_inline_flatten_and_source(report: Path, tmp_path: Path) -> Non
     # source provenance joined from extraInfos.
     assert row["source_table"] == "ZRTCLLOCATION"
     assert row["source_path"] == "zip/Cache.sqlite"
-    assert "source_path" in source_columns           # mappable (raw_source_path) + passthrough
-    assert "Position.Latitude" in source_columns
+    assert "source_path" in source_fields           # mappable (raw_source_path) + passthrough
+    assert "Position.Latitude" in source_fields
 
 
 def test_multimodelfield_is_skipped(report: Path, tmp_path: Path) -> None:

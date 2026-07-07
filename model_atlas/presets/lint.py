@@ -4,7 +4,7 @@ Defines:    Severity, LintFinding, lint_spec / lint_file / lint_paths — a publ
             that checks one or more v3 presets and returns findings instead of raising.
 Used by:    the utils/lint_presets.py CLI, and any caller wanting to validate presets
             programmatically.
-Depends on: presets.spec (parser), reporting (referenced-column derivation), pyyaml.
+Depends on: presets.spec (parser), reporting (referenced-field derivation), pyyaml.
 
 Three severities:
 - ERROR  : the preset does not parse/validate and will not load.
@@ -92,8 +92,8 @@ def lint_spec(spec: PresetSpec, *, preset_label: str | None = None) -> list[Lint
         _check_raw_source_path,
         _check_record_uid_not_rowid,
         _check_epoch_arithmetic_smell,
-        _check_expected_columns,
-        _check_mapped_columns_declared,
+        _check_expected_fields,
+        _check_mapped_fields_declared,
         _check_assertions,
         _check_unfilled_placeholders,
         _check_literal_uuid_in_path,
@@ -103,15 +103,15 @@ def lint_spec(spec: PresetSpec, *, preset_label: str | None = None) -> list[Lint
     return findings
 
 
-def _plain_columns(spec: PresetSpec) -> set[str]:
-    """Plain (non-glob) source columns the mapping reads, for the declared-vs-mapped check."""
+def _plain_fields(spec: PresetSpec) -> set[str]:
+    """Plain (non-glob) source fields the mapping reads, for the declared-vs-mapped check."""
     names: set[str] = set()
 
     def add(ref) -> None:
         arg = str(ref.arg)
         # Skip TODO placeholders — they are flagged by _check_unfilled_placeholders with a
-        # clearer message, not as a phantom "undeclared column".
-        if ref.kind == "column" and "TODO" not in arg and not any(ch in arg for ch in "*?["):
+        # clearer message, not as a phantom "undeclared field".
+        if ref.kind == "field" and "TODO" not in arg and not any(ch in arg for ch in "*?["):
             names.add(arg)
 
     if spec.source_record_uid is not None:
@@ -168,14 +168,14 @@ def _check_raw_source_path(spec: PresetSpec, label: str) -> list[LintFinding]:
         return [LintFinding(
             WARNING, "no-raw-source-path",
             "no raw_source_path mapped; map it explicitly (e.g. preset(path) for a "
-            "device DB, or column(Source) for a tool export) so a row records where it came from",
+            "device DB, or field(Source) for a tool export) so a row records where it came from",
             label, "common")]
     return []
 
 
 def _check_record_uid_not_rowid(spec: PresetSpec, label: str) -> list[LintFinding]:
     uid = spec.source_record_uid
-    if uid is None or uid.ref.kind != "column":
+    if uid is None or uid.ref.kind != "field":
         return []
     name = str(uid.ref.arg)
     if name.casefold() in _ROWID_NAMES or name.casefold().endswith("_pk"):
@@ -202,28 +202,28 @@ def _check_epoch_arithmetic_smell(spec: PresetSpec, label: str) -> list[LintFind
     return out
 
 
-def _check_expected_columns(spec: PresetSpec, label: str) -> list[LintFinding]:
-    if not spec.expected_columns:
+def _check_expected_fields(spec: PresetSpec, label: str) -> list[LintFinding]:
+    if not spec.expected_fields:
         return [LintFinding(
-            ADVICE, "no-expected-columns",
-            "declare the source columns you have in expected_columns before mapping; "
-            "it drives the drift report and the differential", label, "expected_columns")]
+            ADVICE, "no-expected-fields",
+            "declare the source fields you have in expected_fields before mapping; "
+            "it drives the drift report and the differential", label, "expected_fields")]
     return []
 
 
-def _check_mapped_columns_declared(spec: PresetSpec, label: str) -> list[LintFinding]:
-    if not spec.expected_columns:
+def _check_mapped_fields_declared(spec: PresetSpec, label: str) -> list[LintFinding]:
+    if not spec.expected_fields:
         return []  # nothing to check against
-    patterns = list(spec.expected_columns)
+    patterns = list(spec.expected_fields)
     out: list[LintFinding] = []
-    for name in sorted(_plain_columns(spec)):
-        # An expected entry may be an exact name or a glob; either may cover the column.
+    for name in sorted(_plain_fields(spec)):
+        # An expected entry may be an exact name or a glob; either may cover the field.
         if not any(fnmatch.fnmatch(name, pattern) for pattern in patterns):
             out.append(LintFinding(
                 WARNING, "mapped-not-declared",
-                f"mapping reads column {name!r}, which is not in expected_columns — likely a typo "
-                f"or a missing declaration; an unknown column resolves to None silently, so fix "
-                f"the name or add it to expected_columns", label))
+                f"mapping reads field {name!r}, which is not in expected_fields — likely a typo "
+                f"or a missing declaration; an unknown field resolves to None silently, so fix "
+                f"the name or add it to expected_fields", label))
     return out
 
 
@@ -306,7 +306,7 @@ def _check_unfilled_placeholders(spec: PresetSpec, label: str) -> list[LintFindi
             out.append(LintFinding(
                 WARNING, "unfilled-placeholder",
                 f"{value!r} is still a generator TODO placeholder — replace it with the real "
-                f"column/value before use (the parser leaves every mapping to the analyst)",
+                f"field/value before use (the parser leaves every mapping to the analyst)",
                 label, where))
     return out
 

@@ -29,16 +29,16 @@ patterns:
   coords: "(?P<lat>-?\\\\d+\\\\.\\\\d+) - (?P<lon>-?\\\\d+\\\\.\\\\d+)"
 lookup_tables:
   recovery: {Parsing: intact}
-source_record_uid: column(Z_PK)
+source_record_uid: field(Z_PK)
 common:
   entity: const(device)
   source_label: const(ZRTCLLOCATIONMO)
 assertions:
   - position:
-      latitude_wgs84: column(ZLATITUDE)
-      horizontal_speed_kmh: { from: column(ZSPEED), unit: m/s }
+      latitude_wgs84: field(ZLATITUDE)
+      horizontal_speed_kmh: { from: field(ZSPEED), unit: m/s }
     time:
-      instant: column(ZTIMESTAMP)
+      instant: field(ZTIMESTAMP)
       epoch: cocoa
       zone: const(UTC)
     links:
@@ -81,7 +81,7 @@ def test_invalid_edge_value_rejected() -> None:
 
 
 def test_engine_owned_field_not_assignable() -> None:
-    bad = _VALID.replace("latitude_wgs84: column(ZLATITUDE)", "time_lower_unix_utc_us: column(ZLATITUDE)")
+    bad = _VALID.replace("latitude_wgs84: field(ZLATITUDE)", "time_lower_unix_utc_us: field(ZLATITUDE)")
     with pytest.raises(ValueError):
         _parse(bad)
 
@@ -92,8 +92,8 @@ _MIN = """
 preset: {id: t, name: N, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: f.csv}
 assertions:
-  - position: {latitude_wgs84: column(Lat)}
-    time: {instant: column(TS), format: "%Y"}
+  - position: {latitude_wgs84: field(Lat)}
+    time: {instant: field(TS), format: "%Y"}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 
@@ -145,12 +145,12 @@ def test_distinct_roles_recorded() -> None:
     assert _parse(text).roles == ("messages", "account")
 
 
-def test_expected_columns_parsed_including_globs() -> None:
+def test_expected_fields_parsed_including_globs() -> None:
     text = _MIN.replace(
         "assertions:",
-        'expected_columns: [Lat, TS, "Timestamp - * (dd)"]\nassertions:',
+        'expected_fields: [Lat, TS, "Timestamp - * (dd)"]\nassertions:',
     )
-    assert _parse(text).expected_columns == ("Lat", "TS", "Timestamp - * (dd)")
+    assert _parse(text).expected_fields == ("Lat", "TS", "Timestamp - * (dd)")
 
 
 # --- invalid shapes that MUST be rejected -----------------------------------
@@ -181,26 +181,26 @@ _INVALID: dict[str, str] = {
         "input_selector: {format: excel, name: x.xlsx}"),
     "assertions empty": _MIN.split("assertions:")[0] + "assertions: []\n",
     "assertion missing time": _MIN.replace(
-        '    time: {instant: column(TS), format: "%Y"}\n', ""),
+        '    time: {instant: field(TS), format: "%Y"}\n', ""),
     "time both instant and interval": _MIN.replace(
-        'instant: column(TS), format: "%Y"',
-        'instant: column(TS), interval: {lower: column(A), upper: column(B)}'),
+        'instant: field(TS), format: "%Y"',
+        'instant: field(TS), interval: {lower: field(A), upper: field(B)}'),
     "time epoch and format": _MIN.replace('format: "%Y"', 'format: "%Y", epoch: cocoa'),
     "unknown links key": _MIN.replace("spatial_temporal: instant}",
                                       "spatial_temporal: instant, bogus: x}"),
     "invalid entity_position enum": _MIN.replace("entity_position: at",
                                                  "entity_position: teleported"),
-    "engine-owned field assigned": _MIN.replace("latitude_wgs84: column(Lat)",
-                                                "latitude_source_field: column(Lat)"),
-    "unknown model field": _MIN.replace("latitude_wgs84: column(Lat)",
-                                        "not_a_field: column(Lat)"),
-    "bare reference": _MIN.replace("latitude_wgs84: column(Lat)", "latitude_wgs84: Lat"),
+    "engine-owned field assigned": _MIN.replace("latitude_wgs84: field(Lat)",
+                                                "latitude_source_field: field(Lat)"),
+    "unknown model field": _MIN.replace("latitude_wgs84: field(Lat)",
+                                        "not_a_field: field(Lat)"),
+    "bare reference": _MIN.replace("latitude_wgs84: field(Lat)", "latitude_wgs84: Lat"),
     "invalid regex pattern": _MIN.replace(
         "input_selector: {format: csv, name: f.csv}",
         "input_selector: {format: csv, name: f.csv}\npatterns: {bad: \"(unclosed\"}"),
-    "expected_columns not a list": _MIN.replace(
+    "expected_fields not a list": _MIN.replace(
         "input_selector: {format: csv, name: f.csv}",
-        "input_selector: {format: csv, name: f.csv}\nexpected_columns: Lat"),
+        "input_selector: {format: csv, name: f.csv}\nexpected_fields: Lat"),
 }
 
 

@@ -71,18 +71,18 @@ def test_axiom_model_parser_writes_valid_template(tmp_path: Path) -> None:
     assert data["preset"]["name"] == "Example Sheet"
     assert data["preset"]["os"] == "iOS" and data["preset"]["tool"] == "AXIOM"
     # The full attribute inventory is declared up front, before the mapping.
-    assert data["expected_columns"] == ["Created Date/Time - UTC", "Origin Latitude", "Origin Longitude"]
+    assert data["expected_fields"] == ["Created Date/Time - UTC", "Origin Latitude", "Origin Longitude"]
     # The generator GUESSES NO COLUMN: the selector filename and every column mapping are
     # TODO placeholders the analyst fills/prunes.
     assert data["input_selector"] == {"format": "csv", "name": "TODO_export_filename.csv", "encoding": "utf-8-sig"}
     assertion = data["assertions"][0]
-    assert assertion["position"]["latitude_wgs84"] == 'column("TODO")'
-    assert assertion["position"]["longitude_wgs84"] == 'column("TODO")'
-    assert assertion["time"]["instant"] == 'column("TODO")'
+    assert assertion["position"]["latitude_wgs84"] == 'field("TODO")'
+    assert assertion["position"]["longitude_wgs84"] == 'field("TODO")'
+    assert assertion["time"]["instant"] == 'field("TODO")'
     assert assertion["time"]["format"] == "TODO_STRPTIME"
     # Rich template: common + the enum links carry reviewed defaults (a TODO is not a valid
     # enum value); source_record_uid stays commented out (auto-generated).
-    assert data["common"]["raw_source_path"] == 'column("TODO_Source")'
+    assert data["common"]["raw_source_path"] == 'field("TODO_Source")'
     assert assertion["links"] == {"entity_position": "at", "entity_time": "observed_at", "spatial_temporal": "instant"}
     assert "source_record_uid" not in data
     # The trip/interval alternative is offered as a commented block to swap in.
@@ -117,7 +117,7 @@ def test_generated_template_loads_but_lints_with_guidance(tmp_path: Path) -> Non
     assert "mapped-not-declared" not in codes              # TODO placeholders are not phantom columns
 
 
-def test_axiom_model_parser_diffs_expected_columns(tmp_path: Path) -> None:
+def test_axiom_model_parser_diffs_expected_fields(tmp_path: Path) -> None:
     html = tmp_path / "Example Sheet.htm"
     html.write_text(
         """
@@ -137,10 +137,10 @@ def test_axiom_model_parser_diffs_expected_columns(tmp_path: Path) -> None:
     existing = """
 preset: {id: ios.axiom.example_sheet, name: Example Sheet, os: iOS, tool: AXIOM, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: "Example Sheet.csv"}
-expected_columns: [Timestamp, Latitude]
+expected_fields: [Timestamp, Latitude]
 assertions:
-  - position: {latitude_wgs84: 'column("Latitude")'}
-    time: {instant: 'column("Timestamp")', format: TODO}
+  - position: {latitude_wgs84: 'field("Latitude")'}
+    time: {instant: 'field("Timestamp")', format: TODO}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
     (presets / "example_sheet.yaml").write_text(existing, encoding="utf-8")
@@ -148,8 +148,8 @@ assertions:
     diff = diff_with_presets(html, "iOS", presets)
 
     assert diff.missing == ()
-    assert len(diff.expected_columns_modified) == 1
-    preset_id, _, existing_columns, generated_columns = diff.expected_columns_modified[0]
+    assert len(diff.expected_fields_modified) == 1
+    preset_id, _, existing_columns, generated_columns = diff.expected_fields_modified[0]
     assert preset_id == "ios.axiom.example_sheet"
     assert existing_columns == ("Timestamp", "Latitude")               # declared inventory
     assert generated_columns == ("Timestamp", "Latitude", "Longitude")  # generator adds Longitude

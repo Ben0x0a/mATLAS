@@ -66,7 +66,7 @@ class SingleSourceExtractor:
             dataframe=result.dataframe,
             source_file=_source_label(file, selector),
             source_original_path=str(file.logical_path),
-            source_columns=result.source_columns,
+            source_fields=result.source_fields,
             metadata=result.metadata,
             source_fingerprint=result.metadata.get("source_fingerprint"),
             origin=file,

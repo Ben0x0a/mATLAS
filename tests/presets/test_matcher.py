@@ -23,16 +23,16 @@ def _file(root: Path, rel: str) -> SourceFile:
 _CSV_A = """
 preset: {id: a, name: A, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: loc.csv}
-expected_columns: [lat, lon, ts]
+expected_fields: [lat, lon, ts]
 common: {entity: const(device)}
 assertions:
-  - position: {latitude_wgs84: column(lat), longitude_wgs84: column(lon)}
-    time: {instant: column(ts), epoch: unix_s}
+  - position: {latitude_wgs84: field(lat), longitude_wgs84: field(lon)}
+    time: {instant: field(ts), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 
 _CSV_B = _CSV_A.replace("id: a, name: A", "id: b, name: B").replace(
-    "expected_columns: [lat, lon, ts]", "expected_columns: [lat, lon, ts, extra1, extra2]"
+    "expected_fields: [lat, lon, ts]", "expected_fields: [lat, lon, ts, extra1, extra2]"
 )
 
 

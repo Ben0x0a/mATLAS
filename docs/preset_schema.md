@@ -24,13 +24,13 @@ input_selector:                          # one mapping, OR a list (same role = O
   path: /private/var/.../Cache.sqlite    # anchored, prefix-tolerant; XOR name
   table: ZRTCLLOCATIONMO                 # sqlite table (or sql:)
 
-expected_columns:                        # the source's full column inventory (globs ok)
+expected_fields:                        # the source's full column inventory (globs ok)
   - ZLATITUDE
   - ZLONGITUDE
   - ZTIMESTAMP
   - ZSPEED
 
-source_record_uid: column(Z_PK)          # optional; omit to auto-generate a deterministic UID
+source_record_uid: field(Z_PK)          # optional; omit to auto-generate a deterministic UID
 
 lookup_tables:                           # named tables for lookup() pipe steps
   recovery: {Parsing: intact, Carving: recovered}
@@ -42,11 +42,11 @@ common:                                  # fields shared by every assertion of a
 
 assertions:                              # each entry = one position + one time + links
   - position:
-      latitude_wgs84:  column(ZLATITUDE)
-      longitude_wgs84: column(ZLONGITUDE)
-      horizontal_speed_kmh: { from: column(ZSPEED), unit: m/s }
+      latitude_wgs84:  field(ZLATITUDE)
+      longitude_wgs84: field(ZLONGITUDE)
+      horizontal_speed_kmh: { from: field(ZSPEED), unit: m/s }
     time:
-      instant: column(ZTIMESTAMP)
+      instant: field(ZTIMESTAMP)
       epoch:   cocoa
       zone:    const(UTC)
     links:
@@ -106,27 +106,27 @@ resolve) and require the deferred python ScriptExtractor — running one now rai
 `NotImplementedError`.
 
 When several presets match one file, the engine tie-breaks by **structural fit** — how
-well each preset's `expected_columns` match the file's actual columns (falling back to
-the mapped columns when no inventory is declared) — then declaration order.
+well each preset's `expected_fields` match the file's actual fields (falling back to
+the mapped fields when no inventory is declared) — then declaration order.
 
-## `expected_columns`
+## `expected_fields`
 
-The full source-column inventory the examiner declares **before** mapping — the
-intended authoring flow is "list every column you have, then map the subset you need".
+The full source-field inventory the examiner declares **before** mapping — the
+intended authoring flow is "list every field you have, then map the subset you need".
 It powers the drift / frontier report (present-but-unmapped = the research backlog;
 declared-but-absent = drift) and the AXIOM differential.
 
 ```yaml
-expected_columns:
+expected_fields:
   - Latitude
   - Longitude
   - "Speed (m/s)"
   - "Timestamp Date/Time - * (dd.MM.yyyy)"   # entries may be exact names OR globs
 ```
 
-Entries may be exact names or glob patterns (a glob matches any present column). It is
+Entries may be exact names or glob patterns (a glob matches any present field). It is
 optional but recommended; the linter advises when it is missing and warns when the
-mapping reads a column the inventory does not cover.
+mapping reads a field the inventory does not cover.
 
 ## Reference vocabulary (field values)
 
@@ -134,8 +134,8 @@ Every mapped value is exactly one explicit call:
 
 | Form | Value |
 | --- | --- |
-| `column(NAME)` | a source column's value (NAME may be a glob; quote if it has spaces) |
-| `header("Glob *")` | the matched column's header text (e.g. a timezone in the header) |
+| `field(NAME)` | a source field's value (NAME may be a glob; quote if it has spaces) |
+| `header("Glob *")` | the matched field's header text (e.g. a timezone in the header) |
 | `filename(name\|stem\|path)` | part of the source file identity |
 | `param(entity\|linked_entity)` | a run-level argument |
 | `preset(path\|name\|table\|id\|...)` | a key from the matched `input_selector` / preset `meta` |
@@ -144,9 +144,9 @@ Every mapped value is exactly one explicit call:
 A field may instead be a mapping with attributes:
 
 ```yaml
-horizontal_speed_kmh: { from: column(ZSPEED), unit: m/s }
+horizontal_speed_kmh: { from: field(ZSPEED), unit: m/s }
 imei:                  { from: filename(name), pipe: "regex(imei, group=n)" }
-latitude_wgs84:        { from: column(Coords), extract: coords.lat }
+latitude_wgs84:        { from: field(Coords), extract: coords.lat }
 ```
 
 | Attribute | Effect |
@@ -157,17 +157,17 @@ latitude_wgs84:        { from: column(Coords), extract: coords.lat }
 | `extract` | `pattern.group` — pull a named regex group from a named pattern |
 | `pipe` | a procedural call-chain (see Pipes) |
 
-Numeric model columns are **cast automatically** from their declared type, so a plain
-`latitude_wgs84: column(Lat)` needs no `cast`.
+Numeric model fields are **cast automatically** from their declared type, so a plain
+`latitude_wgs84: field(Lat)` needs no `cast`.
 
 Bare scalars are allowed only where the position is a known keyword/enum — link values,
-`epoch`, `zone` — never where a column could be meant.
+`epoch`, `zone` — never where a field reference could be meant.
 
 ## `time`
 
 ```yaml
 time:
-  instant: column(TS)               # or  interval: {lower: column(A), upper: column(B)}
+  instant: field(TS)               # or  interval: {lower: field(A), upper: field(B)}
   epoch:   cocoa                     # OR  format: "%d.%m.%Y %H:%M:%S.%f"
   zone:    const(UTC)               # const or header(...); applied to format parsing
 ```
@@ -177,7 +177,7 @@ time:
   is assumed to already be Unix microseconds.
 - `epoch` ∈ `unix_s`, `unix_ms`, `unix_us`, `unix_ns`, `cocoa` (2001 epoch), `webkit`.
 - A captured `zone` (e.g. `header(...)` + `regex`) is applied during `format` parsing.
-- The raw value, the resolved source column, and the normalized `*_unix_us` are written
+- The raw value, the resolved source field, and the normalized `*_unix_us` are written
   automatically to the `time_lower_*` / `time_upper_*` columns.
 
 ## `links`
@@ -199,8 +199,8 @@ Most fields need no pipe — type, unit, epoch, and extract are declarative. Whe
 need logic, a pipe is a left-to-right call chain string:
 
 ```yaml
-deleted: { from: 'column("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
-heading_deg: { from: column(Raw), pipe: "split(';', index=0) | cast(float)" }
+deleted: { from: 'field("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
+heading_deg: { from: field(Raw), pipe: "split(';', index=0) | cast(float)" }
 ```
 
 | Step | Example | Meaning |
@@ -262,10 +262,10 @@ preset targets regardless of how the file was read.
 ## Provenance to map
 
 - `raw_source_path` — where the trace came from. Map it explicitly: `preset(path)` for a
-  device DB, `column(Source)` for a tool export. When unmapped, the engine defaults it to
+  device DB, `field(Source)` for a tool export. When unmapped, the engine defaults it to
   the inner-container logical path (with its prefix, without the container name).
 - `input_record_id` — which record in the file; defaults to `<table-or-sheet>#<ordinal>`
-  when unmapped, or map a tool locator column.
+  when unmapped, or map a tool locator field.
 - `source_label`, `deleted` — optional descriptive label and record state.
 - `recovery_state` (`live`/`wal`/`journal`) is **captured** by every reader and surfaced
   on the extract; it is **not** mappable yet (a later task wires the `enrich()` ref).
@@ -275,8 +275,8 @@ preset targets regardless of how the file was read.
 ## Validation notes
 
 - `assertions` must be non-empty; each needs a `time`.
-- A field value must be an explicit reference call; a missing column resolves to `None`.
-- A glob must resolve to exactly one source column.
+- A field value must be an explicit reference call; a missing field resolves to `None`.
+- A glob must resolve to exactly one source field.
 - A duplicate `source_record_uid` (generated or mapped) across distinct source records is a hard error.
 - Engine-owned columns (the `time_*`, `latitude_source_field`, `longitude_source_field`,
   `input_file_path`, `source_record_uid`, `row_uid`, `preset_id`, `preset_name`, `record_*`) are not assignable

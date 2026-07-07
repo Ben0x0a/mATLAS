@@ -44,9 +44,9 @@ One source row can therefore produce multiple assertion rows (one per assertion)
 
 ## Reference Resolution
 
-A mapped value is one explicit call: `column(NAME)`, `header("Glob *")`,
-`filename(name|stem|path)`, `param(...)`, or `const(...)`. A `column`/`header`
-name may be a glob, which must match exactly one extracted source column.
+A mapped value is one explicit call: `field(NAME)`, `header("Glob *")`,
+`filename(name|stem|path)`, `param(...)`, or `const(...)`. A `field`/`header`
+name may be a glob, which must match exactly one extracted source field.
 
 `header(...)` resolves to the matched column's name itself — useful when metadata is
 encoded in a header, e.g. a timezone in `Timestamp Date/Time - UTC+00:00 (dd.MM.yyyy)`.

@@ -11,12 +11,12 @@ input_selector:
   namespace: http://pa.cellebrite.com/report/2.0
   model: WirelessNetwork
 
-source_record_uid: column(uuid)
+source_record_uid: field(uuid)
 
 lookup_tables:
   recovery: {Intact: intact, Deleted: deleted, Unknown: unknown}
 
-expected_columns:
+expected_fields:
   - uuid
   - deleted_state
   - decoding_confidence
@@ -39,18 +39,18 @@ common:
   entity_type:     const(device)
   source_label:    const(WirelessNetwork)
   position_source: const(wifi)
-  raw_source_path: column(source_path)
-  deleted:         { from: column(deleted_state), pipe: "lookup(recovery, on_unknown=null)" }
+  raw_source_path: field(source_path)
+  deleted:         { from: field(deleted_state), pipe: "lookup(recovery, on_unknown=null)" }
 
 assertions:
   # A network's geolocation is often absent (lat/lon null) — the row is still a temporal
   # observation of the device seeing that SSID/BSSID.
   - position:
-      latitude_wgs84:        column(Position.Latitude)
-      longitude_wgs84:       column(Position.Longitude)
-      horizontal_accuracy_m: { from: column(Position.GpsHorizontalAccuracy), optional: true }
+      latitude_wgs84:        field(Position.Latitude)
+      longitude_wgs84:       field(Position.Longitude)
+      horizontal_accuracy_m: { from: field(Position.GpsHorizontalAccuracy), optional: true }
     time:
-      instant: column(TimeStamp)
+      instant: field(TimeStamp)
       format:  iso8601
     links:
       entity_position:  at

@@ -1,13 +1,13 @@
 """Assembly engine: build flat assertion rows from extracted data + a v3 preset.
 
 Defines:    BuildEnv (pipeline-derived defaults), to_records (NaN->None), make_resolver
-            (glob column resolver), and build_rows (the fan-out + reference + pipe +
+            (glob field resolver), and build_rows (the fan-out + reference + pipe +
             raw-capture engine).
 Used by:    the pipeline.
 Depends on: model.families (columns/types/units), presets.spec + expr, transforms.
 
 One source row x each assertion (each with one time spec) -> one flat row. Temporal
-raw values and source fields, and the lat/lon source columns, are captured
+raw values and source fields, and the lat/lon source fields, are captured
 automatically so an author can never forget the value<->provenance pairing.
 ``source_record_uid`` is a UID shared by every output row of one source record: the tool's
 own uid when a preset maps ``source_record_uid`` (so the rows link back to the tool
@@ -137,12 +137,12 @@ def to_records(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
-def make_resolver(columns: list[str]) -> Callable[[str | None], str | None]:
-    """Resolve a column reference (exact name or glob) to an actual source column.
+def make_resolver(fields: list[str]) -> Callable[[str | None], str | None]:
+    """Resolve a field reference (exact name or glob) to an actual source field.
 
-    A glob (``* ? [``) must match exactly one column; several is a hard error, none
+    A glob (``* ? [``) must match exactly one field; several is a hard error, none
     yields None. A plain name resolves to itself only if present."""
-    available = list(columns)
+    available = list(fields)
     cache: dict[str, str | None] = {}
 
     def resolve(pattern: str | None) -> str | None:
@@ -153,7 +153,7 @@ def make_resolver(columns: list[str]) -> Callable[[str | None], str | None]:
         if any(ch in pattern for ch in "*?["):
             matches = fnmatch.filter(available, pattern)
             if len(matches) > 1:
-                raise ValueError(f"column pattern {pattern!r} matched multiple columns: {matches}")
+                raise ValueError(f"field pattern {pattern!r} matched multiple fields: {matches}")
             actual = matches[0] if matches else None
         else:
             actual = pattern if pattern in available else None
@@ -183,8 +183,8 @@ def _resolve_ref(
     env: BuildEnv,
     preset_values: dict[str, Any],
 ) -> tuple[Any, str | None]:
-    """Return (value, source_column) for a reference. source_column is set only when
-    the value originates from a named source column (column/header), for provenance."""
+    """Return (value, source_field) for a reference. source_field is set only when
+    the value originates from a named source field (field/header), for provenance."""
     if ref.kind == "const":
         return ref.arg, None
     if ref.kind == "param":
@@ -195,8 +195,8 @@ def _resolve_ref(
         return preset_values.get(ref.arg), None
     if ref.kind == "header":
         col = resolve(ref.arg)
-        return col, col  # the value IS the matched column's header text
-    col = resolve(ref.arg)  # column
+        return col, col  # the value IS the matched field's header text
+    col = resolve(ref.arg)  # field
     return (row.get(col) if col is not None else None), col
 
 
@@ -308,7 +308,7 @@ def _decode_time(
         # base known -> a real offset; base unknown -> we ASSUMED UTC to materialise the
         # instant, so flag the offset as unknown rather than report a misleading null/0.0.
         return datetime_to_us(aware), (base if base is not None else UTC_OFFSET_UNKNOWN)
-    # Neither epoch nor format: the column is already Unix microseconds.
+    # Neither epoch nor format: the field is already Unix microseconds.
     return int(value), None
 
 
@@ -351,7 +351,7 @@ def _apply_time(
 
 
 def _ref_label(ref: Ref) -> str | None:
-    return ref.arg if ref.kind in ("column", "header") else None
+    return ref.arg if ref.kind in ("field", "header") else None
 
 
 # Prefix for verbatim source-column passthrough. NOT ``raw_`` — that is already used by
@@ -359,15 +359,15 @@ def _ref_label(ref: Ref) -> str | None:
 PASSTHROUGH_PREFIX = "orig_"
 
 
-def _passthrough_column_names(source_columns: list[str]) -> dict[str, str]:
-    """Map each source column to its ``orig_<col>`` output name, preserving source order.
+def _passthrough_column_names(source_fields: list[str]) -> dict[str, str]:
+    """Map each source field to its ``orig_<field>`` output column name, preserving source order.
 
     A name that would collide with a canonical column is disambiguated with a trailing
-    ``_``. The mapping is a pure function of the column name, so it is identical across
+    ``_``. The mapping is a pure function of the field name, so it is identical across
     sources (stable merges)."""
     used = set(OUTPUT_COLUMNS)
     names: dict[str, str] = {}
-    for col in source_columns:
+    for col in source_fields:
         name = f"{PASSTHROUGH_PREFIX}{col}"
         while name in used:
             name += "_"
@@ -382,22 +382,22 @@ def build_rows(
     env: BuildEnv,
     *,
     selector: InputSelector | None = None,
-    columns: list[str] | None = None,
+    fields: list[str] | None = None,
     include_source_columns: bool = True,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Build the flat canonical rows for one extracted source.
 
-    When ``include_source_columns`` is set, every original source column is appended
-    verbatim as an ``orig_<col>`` column (after the canonical schema). The values are
+    When ``include_source_columns`` is set, every original source field is appended
+    verbatim as an ``orig_<field>`` column (after the canonical schema). The values are
     taken from the source record, so each assertion a row fans out into carries the same
     passthrough columns.
     """
     rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     seen_ids: dict[str, int] = {}
-    source_columns = columns if columns is not None else (list(records[0].keys()) if records else [])
-    resolve = make_resolver(source_columns)
-    passthrough_names = _passthrough_column_names(source_columns) if include_source_columns else {}
+    source_fields = fields if fields is not None else (list(records[0].keys()) if records else [])
+    resolve = make_resolver(source_fields)
+    passthrough_names = _passthrough_column_names(source_fields) if include_source_columns else {}
     ctx = PipeContext(lookup_tables=preset.lookup_tables, patterns=preset.patterns)
     preset_values = _preset_values(preset, selector)
     container = _source_container(selector)
@@ -448,7 +448,7 @@ def build_rows(
             if previous is not None and previous != position:
                 raise ValueError(
                     f"mapped source_record_uid collision {source_record_uid!r} between source rows "
-                    f"{previous} and {position}; the column mapped to source_record_uid is not unique"
+                    f"{previous} and {position}; the field mapped to source_record_uid is not unique"
                 )
             seen_ids[source_record_uid] = position
         base["source_record_uid"] = source_record_uid

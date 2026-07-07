@@ -13,7 +13,7 @@ input_selector:
   table: ZRTLEARNEDLOCATIONOFINTERESTVISITMO
 
 # Full ZRTLEARNEDLOCATIONOFINTERESTVISITMO column inventory.
-expected_columns:
+expected_fields:
   - Z_PK
   - Z_ENT
   - Z_OPT
@@ -47,16 +47,16 @@ common:
 
 assertions:
   - position:
-      latitude_wgs84:        column(ZLOCATIONLATITUDE)
-      longitude_wgs84:       column(ZLOCATIONLONGITUDE)
-      altitude_m:            column(ZLOCATIONALTITUDE)
-      horizontal_accuracy_m: column(ZLOCATIONHORIZONTALUNCERTAINTY)
-      vertical_accuracy_m:   column(ZLOCATIONVERTICALUNCERTAINTY)
+      latitude_wgs84:        field(ZLOCATIONLATITUDE)
+      longitude_wgs84:       field(ZLOCATIONLONGITUDE)
+      altitude_m:            field(ZLOCATIONALTITUDE)
+      horizontal_accuracy_m: field(ZLOCATIONHORIZONTALUNCERTAINTY)
+      vertical_accuracy_m:   field(ZLOCATIONVERTICALUNCERTAINTY)
       position_type:         const(visit)
     time:
       interval:                      # the visit dwell window (Cocoa epoch -> us)
-        lower: column(ZENTRYDATE)
-        upper: column(ZEXITDATE)
+        lower: field(ZENTRYDATE)
+        upper: field(ZEXITDATE)
       epoch: cocoa
       zone:  const(UTC)
     links:

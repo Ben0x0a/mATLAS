@@ -7,6 +7,9 @@ import yaml
 
 from model_atlas.presets.matcher import match_files, match_files_detailed
 from model_atlas.presets.spec import preset_spec_from_yaml
+import pytest
+
+pytest.importorskip("lxml")
 from model_atlas.sources.container import FilesystemContainer, SourceFile
 from tests.sources.test_xml_cellebrite import _REPORT
 
@@ -14,7 +17,7 @@ _NS = "http://pa.cellebrite.com/report/2.0"
 
 
 def _xml_preset(model: str, *, id_suffix: str = "", longitude=None) -> object:
-    position = {"latitude_wgs84": "column(Position.Latitude)"}
+    position = {"latitude_wgs84": "field(Position.Latitude)"}
     if longitude is not None:
         position["longitude_wgs84"] = longitude
     raw = {
@@ -23,7 +26,7 @@ def _xml_preset(model: str, *, id_suffix: str = "", longitude=None) -> object:
         "input_selector": {"format": "xml", "name": "report.xml", "namespace": _NS, "model": model},
         "assertions": [{
             "position": position,
-            "time": {"instant": "column(TimeStamp)"},
+            "time": {"instant": "field(TimeStamp)"},
             "links": {"entity_position": "at", "entity_time": "observed_at",
                       "spatial_temporal": "instant"},
         }],
@@ -64,8 +67,8 @@ def test_namespace_mismatch_excludes_preset(tmp_path: Path) -> None:
         "input_selector": {"format": "xml", "name": "report.xml",
                            "namespace": "urn:axiom", "model": "Location"},
         "assertions": location.assertions and [{
-            "position": {"latitude_wgs84": "column(Position.Latitude)"},
-            "time": {"instant": "column(TimeStamp)"},
+            "position": {"latitude_wgs84": "field(Position.Latitude)"},
+            "time": {"instant": "field(TimeStamp)"},
             "links": {"entity_position": "at", "entity_time": "observed_at",
                       "spatial_temporal": "instant"},
         }],
@@ -79,7 +82,7 @@ def test_namespace_mismatch_excludes_preset(tmp_path: Path) -> None:
 
 def test_missing_required_column_disqualifies_loudly(tmp_path: Path) -> None:
     file = _report_file(tmp_path)
-    bad = _xml_preset("Location", longitude="column(NoSuchColumn)")
+    bad = _xml_preset("Location", longitude="field(NoSuchColumn)")
     present = {"Position.Latitude", "TimeStamp"}  # NoSuchColumn absent
     matches, unsatisfied = match_files_detailed(file, [bad], peek=_peek(present))
     assert matches == []                                   # not silently mapped
@@ -89,7 +92,7 @@ def test_missing_required_column_disqualifies_loudly(tmp_path: Path) -> None:
 
 def test_optional_column_absence_does_not_disqualify(tmp_path: Path) -> None:
     file = _report_file(tmp_path)
-    opt = _xml_preset("Location", longitude={"from": "column(NoSuchColumn)", "optional": True})
+    opt = _xml_preset("Location", longitude={"from": "field(NoSuchColumn)", "optional": True})
     present = {"Position.Latitude", "TimeStamp"}
     matches, unsatisfied = match_files_detailed(file, [opt], peek=_peek(present))
     assert len(matches) == 1 and unsatisfied == []         # optional absence tolerated
@@ -97,7 +100,7 @@ def test_optional_column_absence_does_not_disqualify(tmp_path: Path) -> None:
 
 def test_alternative_preset_covers_unit(tmp_path: Path) -> None:
     file = _report_file(tmp_path)
-    needs = _xml_preset("Location", id_suffix=".v2", longitude="column(NoSuchColumn)")
+    needs = _xml_preset("Location", id_suffix=".v2", longitude="field(NoSuchColumn)")
     plain = _xml_preset("Location", id_suffix=".v1")       # no NoSuchColumn dependency
     present = {"Position.Latitude", "TimeStamp"}
     matches, unsatisfied = match_files_detailed(file, [needs, plain], peek=_peek(present))

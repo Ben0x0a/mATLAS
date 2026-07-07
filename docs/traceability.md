@@ -75,9 +75,9 @@ Every matched source produces a frontier report comparing three column sets:
 
 | Set | Meaning |
 | --- | --- |
-| **P** resent | Columns actually in the source file |
-| **E** xpected | Columns declared in `expected_columns` in the preset |
-| **M** apped | Columns consumed by at least one field mapping |
+| **P** resent | Fields actually in the source file |
+| **E** xpected | Fields declared in `expected_fields` in the preset |
+| **M** apped | Fields consumed by at least one field mapping |
 
 Derived gaps:
 

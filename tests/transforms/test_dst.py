@@ -62,11 +62,11 @@ preset: {id: t.dst, name: DST, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: x.csv}
 common: {entity: const(device)}
 assertions:
-  - position: {latitude_wgs84: column(lat), longitude_wgs84: column(lon)}
+  - position: {latitude_wgs84: field(lat), longitude_wgs84: field(lon)}
     time:
-      instant: column(ts)
+      instant: field(ts)
       format: "%d.%m.%Y %H:%M:%S.%f"
-      zone: column(tz)
+      zone: field(tz)
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 
@@ -74,7 +74,7 @@ assertions:
 def _run(records, local_zone):
     spec = preset_spec_from_yaml(yaml.safe_load(_PRESET), Path("t.yaml"))
     env = BuildEnv(linked_entity="subj", local_zone=local_zone)
-    return build_rows(records, spec, env, columns=["lat", "lon", "ts", "tz"])
+    return build_rows(records, spec, env, fields=["lat", "lon", "ts", "tz"])
 
 
 def test_dst_source_resolves_per_row_offset_and_utc() -> None:

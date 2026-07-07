@@ -17,12 +17,12 @@ from model_atlas.presets.spec import preset_spec_from_yaml
 _CLEAN = """
 preset: {id: ios.demo.clean, name: Clean, os: iOS, tool: AXIOM, os_version: ">=15", version: 1.0, tier: secondary}
 input_selector: {format: csv, name: c.csv}
-expected_columns: [Lat, Lon, TS, Loc, "Item ID", Source]
-source_record_uid: 'column("Item ID")'
-common: {entity: const(device), input_record_id: column(Loc), raw_source_path: column(Source)}
+expected_fields: [Lat, Lon, TS, Loc, "Item ID", Source]
+source_record_uid: 'field("Item ID")'
+common: {entity: const(device), input_record_id: field(Loc), raw_source_path: field(Source)}
 assertions:
-  - position: {latitude_wgs84: column(Lat), longitude_wgs84: column(Lon)}
-    time: {instant: column(TS), epoch: unix_s}
+  - position: {latitude_wgs84: field(Lat), longitude_wgs84: field(Lon)}
+    time: {instant: field(TS), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 
@@ -50,13 +50,13 @@ def test_unparseable_preset_yields_one_error(tmp_path: Path) -> None:
 
 
 def test_rowid_as_uid_warns() -> None:
-    text = _CLEAN.replace("source_record_uid: 'column(\"Item ID\")'", "source_record_uid: column(Z_PK)")
+    text = _CLEAN.replace("source_record_uid: 'field(\"Item ID\")'", "source_record_uid: field(Z_PK)")
     assert "rowid-as-uid" in _codes(lint_spec(_spec(text)), WARNING)
 
 
 def test_half_coordinate_warns() -> None:
-    text = _CLEAN.replace("latitude_wgs84: column(Lat), longitude_wgs84: column(Lon)",
-                          "latitude_wgs84: column(Lat)")
+    text = _CLEAN.replace("latitude_wgs84: field(Lat), longitude_wgs84: field(Lon)",
+                          "latitude_wgs84: field(Lat)")
     assert "half-coordinate" in _codes(lint_spec(_spec(text)), WARNING)
 
 
@@ -84,28 +84,28 @@ def test_id_naming_advice() -> None:
 
 def test_raw_epoch_arithmetic_advice() -> None:
     text = _CLEAN.replace(
-        "latitude_wgs84: column(Lat)",
-        'latitude_wgs84: { from: column(Lat), pipe: "arithmetic((value + 978307200) * 1000000000)" }')
+        "latitude_wgs84: field(Lat)",
+        'latitude_wgs84: { from: field(Lat), pipe: "arithmetic((value + 978307200) * 1000000000)" }')
     assert "raw-epoch-arithmetic" in _codes(lint_spec(_spec(text)), ADVICE)
 
 
-def test_no_expected_columns_advises() -> None:
-    text = _CLEAN.replace('expected_columns: [Lat, Lon, TS, Loc, "Item ID", Source]\n', "")
-    assert "no-expected-columns" in _codes(lint_spec(_spec(text)), ADVICE)
+def test_no_expected_fields_advises() -> None:
+    text = _CLEAN.replace('expected_fields: [Lat, Lon, TS, Loc, "Item ID", Source]\n', "")
+    assert "no-expected-fields" in _codes(lint_spec(_spec(text)), ADVICE)
 
 
 def test_mapped_not_declared_warns() -> None:
     # Drop "TS" from the inventory while it is still mapped by the time block.
-    text = _CLEAN.replace('expected_columns: [Lat, Lon, TS, Loc, "Item ID", Source]',
-                          'expected_columns: [Lat, Lon, Loc, "Item ID", Source]')
+    text = _CLEAN.replace('expected_fields: [Lat, Lon, TS, Loc, "Item ID", Source]',
+                          'expected_fields: [Lat, Lon, Loc, "Item ID", Source]')
     findings = lint_spec(_spec(text))
     assert "mapped-not-declared" in _codes(findings, WARNING)
 
 
-def test_expected_columns_glob_covers_mapped_column() -> None:
+def test_expected_fields_glob_covers_mapped_field() -> None:
     # A glob inventory entry covers the mapped column, so no warning.
-    text = _CLEAN.replace('expected_columns: [Lat, Lon, TS, Loc, "Item ID", Source]',
-                          'expected_columns: [Lat, Lon, "T*", Loc, "Item ID", Source]')
+    text = _CLEAN.replace('expected_fields: [Lat, Lon, TS, Loc, "Item ID", Source]',
+                          'expected_fields: [Lat, Lon, "T*", Loc, "Item ID", Source]')
     assert "mapped-not-declared" not in _codes(lint_spec(_spec(text)), WARNING)
 
 
@@ -124,7 +124,7 @@ def test_clean_preset_is_free_of_new_warnings() -> None:
 
 
 def test_unfilled_placeholder_is_flagged() -> None:
-    text = _CLEAN.replace("longitude_wgs84: column(Lon)", 'longitude_wgs84: column("TODO")')
+    text = _CLEAN.replace("longitude_wgs84: field(Lon)", 'longitude_wgs84: field("TODO")')
     findings = lint_spec(_spec(text))
     assert "unfilled-placeholder" in _codes(findings, WARNING)
 

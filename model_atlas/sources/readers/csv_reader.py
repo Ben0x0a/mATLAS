@@ -38,7 +38,7 @@ class CsvReader:
         columns = tuple(str(c) for c in df.columns)
         return ReadResult(
             dataframe=df,
-            source_columns=columns,
+            source_fields=columns,
             recovery_state=(RECOVERY_LIVE,) * len(df),
             metadata={
                 "format": "csv",
@@ -48,7 +48,7 @@ class CsvReader:
             },
         )
 
-    def peek_columns(self, file: SourceFile, selector: Any = None) -> set[str] | None:
+    def peek_fields(self, file: SourceFile, selector: Any = None) -> set[str] | None:
         delimiter = ","
         if selector is not None:
             delimiter = (selector.read or {}).get("delimiter", ",")
@@ -57,7 +57,7 @@ class CsvReader:
                 header = raw.readline().decode("utf-8-sig", errors="replace").rstrip("\r\n")
             return set(header.split(delimiter)) if header else set()
         except Exception:  # noqa: BLE001 - a peek failure must never abort matching
-            log.debug(f"csv peek_columns failed for {file.logical_path}", exc_info=True)
+            log.debug("csv peek_fields failed for %s", file.logical_path, exc_info=True)
             return None
 
     def list_subtables(self, file: SourceFile) -> list[str]:

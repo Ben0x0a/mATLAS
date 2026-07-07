@@ -21,7 +21,7 @@ class ExtractedData:
     dataframe: pd.DataFrame
     source_file: str                       # human label, e.g. "Cache.sqlite::table=ZRTCLLOCATIONMO"
     source_original_path: str              # the inner-container logical path (raw_source_path default)
-    source_columns: tuple[str, ...]
+    source_fields: tuple[str, ...]
     metadata: dict[str, Any]
     # Content hash of the specific source (the DB / CSV / sheet bytes, not the wrapping
     # archive). Scopes the generated source_record_uid so it is globally unique and portable.

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("lxml")
 from ufdr_parser.const import REPORT_ENTRY_NAME
 
 # A minimal report: a taggedFiles stub, two modelTypes (one with a 1:1 modelField,

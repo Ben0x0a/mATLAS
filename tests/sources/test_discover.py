@@ -7,6 +7,8 @@ import zipfile
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip("openpyxl")
 from openpyxl import Workbook
 
 from model_atlas.sources.discover import discover

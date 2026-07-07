@@ -67,7 +67,7 @@ def _input_detected_format(path: Path) -> str | None:
 
 
 def _peek(file: SourceFile, selector: InputSelector) -> "set[str] | None":
-    return get_reader(selector.format).peek_columns(file, selector)
+    return get_reader(selector.format).peek_fields(file, selector)
 
 
 def _resolve_force_selector(
@@ -99,16 +99,16 @@ def _resolve_force_selector(
         return selector
 
     # Choose the qualifying sub-unit (all referenced columns present) with the best score.
-    from model_atlas.reporting import _column_refs
+    from model_atlas.reporting import _field_refs
     from model_atlas.transforms.assemble import make_resolver
 
-    refs = list(preset.expected_columns) or _column_refs(preset)
+    refs = list(preset.expected_fields) or _field_refs(preset)
     best: tuple[int, str] | None = None
     for sub in subtables:
         probe = dataclasses.replace(
             selector, **({"sheet": sub} if selector.format == "excel" else {"table": sub})
         )
-        columns = reader.peek_columns(file, probe)
+        columns = reader.peek_fields(file, probe)
         if columns is None:
             continue
         resolve = make_resolver(sorted(columns))
@@ -119,7 +119,7 @@ def _resolve_force_selector(
     if best is None:
         raise ValueError(
             f"force-preset {preset.name!r}: no {selector.format} sub-unit in "
-            f"{file.logical_path} satisfies the mapped columns"
+            f"{file.logical_path} satisfies the mapped fields"
         )
     return dataclasses.replace(
         selector, **({"sheet": best[1]} if selector.format == "excel" else {"table": best[1]})
@@ -232,7 +232,7 @@ def process(
             # A unit that was located + type-matched but whose mapped columns are absent
             # cannot be faithfully mapped — fail it LOUDLY (per source), then keep going.
             for preset, selector, missing in unsatisfied:
-                msg = (f"{label}: matched {preset.name} but required column(s) "
+                msg = (f"{label}: matched {preset.name} but required field(s) "
                        f"{sorted(missing)} are absent — not mapped (author a variant preset "
                        f"or mark them optional)")
                 log.error(msg)
@@ -262,12 +262,12 @@ def process(
                 local_zone=local_zone,
             )
             frame, frame_warnings = build_rows(
-                records, preset, env, selector=selector, columns=list(extracted.source_columns),
+                records, preset, env, selector=selector, fields=list(extracted.source_fields),
                 include_source_columns=include_source_columns)
             log.info(f"{label}: {len(records)} source row(s) -> {len(frame)} assertion row(s)")
-            # Required columns are guaranteed present by the match gate; the frontier still
-            # records any absent OPTIONAL/expected columns for the warnings sidecar.
-            frontier = reporting.frontier_report(preset, list(extracted.source_columns))
+            # Required fields are guaranteed present by the match gate; the frontier still
+            # records any absent OPTIONAL/expected fields for the warnings sidecar.
+            frontier = reporting.frontier_report(preset, list(extracted.source_fields))
             frames_by_preset.setdefault(preset.name, []).append(frame)
             sources_by_preset.setdefault(preset.name, []).append({
                 "source_file": extracted.source_file,

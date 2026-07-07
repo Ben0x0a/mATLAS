@@ -20,18 +20,18 @@ The current CSV uses snake_case column names.
 | `entity_type` | string or null | none | Type/category of `entity`. |
 | `linked_entity` | string or null | none | Optional secondary entity linked to the assertion. |
 | `time_lower_raw` | source scalar or null | source-defined | Original source value for the lower temporal bound. |
-| `time_lower_source_field` | string or null | source column | Source column that supplied the lower bound. |
+| `time_lower_source_field` | string or null | source field | Source field that supplied the lower bound. |
 | `time_lower_unix_utc_us` | integer or null | Unix microseconds (**UTC**) | Normalized lower temporal bound, in absolute UTC. Local wall-clock = this + `utc_offset_hours`. |
 | `time_upper_raw` | source scalar or null | source-defined | Original source value for the upper temporal bound. |
-| `time_upper_source_field` | string or null | source column | Source column that supplied the upper bound. |
+| `time_upper_source_field` | string or null | source field | Source field that supplied the upper bound. |
 | `time_upper_unix_utc_us` | integer or null | Unix microseconds (**UTC**) | Normalized upper temporal bound, in absolute UTC. Local wall-clock = this + `utc_offset_hours`. |
 | `utc_offset_hours` | float or null | signed hours | The source's UTC offset as a signed-hours float (`0.0`, `2.0`, `6.5`, `-2.5`), by the ISO convention **local = `time_*_unix_utc_us` (UTC) + `utc_offset_hours`**. It is metadata describing how the absolute UTC instant relates to the source's local wall-clock — `null` when the source zone is unknown. (Currently the nominal offset; DST-aware resolution is future work.) |
 | `time_accuracy_us` | integer or null | microseconds | Temporal uncertainty or resolution when known. |
 | `temporal_source` | string or null | none | Source/mechanism behind the temporal value. |
 | `latitude_wgs84` | float or null | decimal degrees | WGS84 latitude. |
-| `latitude_source_field` | string or null | source column | Source column latitude was read from (auto-captured). |
+| `latitude_source_field` | string or null | source field | Source field latitude was read from (auto-captured). |
 | `longitude_wgs84` | float or null | decimal degrees | WGS84 longitude. |
-| `longitude_source_field` | string or null | source column | Source column longitude was read from (auto-captured). |
+| `longitude_source_field` | string or null | source field | Source field longitude was read from (auto-captured). |
 | `altitude_m` | float or null | meters | Altitude. |
 | `position_type` | string or null | none | Source-derived position type when known. |
 | `raw_position` | source scalar or null | source-defined | Raw spatial expression or source value. |
@@ -49,7 +49,7 @@ The current CSV uses snake_case column names.
 | `entity_position_link` | string or null | controlled value | Relation between entity and position. |
 | `entity_time_link` | string or null | controlled value | Relation between entity and temporal interval. |
 | `spatial_temporal_link` | string or null | controlled value | Relation between position and temporal interval. |
-| `raw_source_path` | string or null | path/context | Where the trace came from: a device path (e.g. `preset(path)`) or a tool's source column. Mapped by the preset; defaults to the inner-container logical path. |
+| `raw_source_path` | string or null | path/context | Where the trace came from: a device path (e.g. `preset(path)`) or a tool's source field. Mapped by the preset; defaults to the inner-container logical path. |
 | `input_file_path` | string or null | path/context | Full filesystem path of the outermost on-disk artifact mATLAS opened (the input archive when reading from one, else the leaf file). Engine-set. |
 | `input_record_id` | string or null | source-defined | Which record in that file: the 1-based source line number `<table-or-sheet>#<line>` by default, or a mapped tool locator. |
 | `source_record_uid` | string | stable ID | Per-source-record UID, shared by every output row of one source record. The tool's own id when the preset maps `source_record_uid` (verbatim), else a content-addressed `uuid5` keyed on the source line number. |

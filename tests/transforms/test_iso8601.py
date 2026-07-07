@@ -8,8 +8,8 @@ from model_atlas.presets.spec import TimeSpec
 from model_atlas.transforms.assemble import _decode_time
 from model_atlas.transforms.builtin import datetime_to_us, parse_iso8601, parse_zone_token
 
-_SPEC = TimeSpec(kind="instant", lower=Ref(kind="column", arg="t"),
-                 upper=Ref(kind="column", arg="t"), format="iso8601")
+_SPEC = TimeSpec(kind="instant", lower=Ref(kind="field", arg="t"),
+                 upper=Ref(kind="field", arg="t"), format="iso8601")
 
 
 def test_parse_iso8601_variants() -> None:

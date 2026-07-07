@@ -71,12 +71,12 @@ def _selector_location_matches(selector: InputSelector, file: SourceFile, root_p
 
 
 def _structural_score(preset: PresetSpec, columns: set[str]) -> int:
-    """+1 per declared column present, -2 per absent. Uses ``expected_columns`` when set,
-    else the columns the mapping references. Imported lazily to avoid a module cycle."""
-    from model_atlas.reporting import _column_refs
+    """+1 per declared field present, -2 per absent. Uses ``expected_fields`` when set,
+    else the fields the mapping references. Imported lazily to avoid a module cycle."""
+    from model_atlas.reporting import _field_refs
     from model_atlas.transforms.assemble import make_resolver
 
-    signature = list(preset.expected_columns) or _column_refs(preset)
+    signature = list(preset.expected_fields) or _field_refs(preset)
     resolve = make_resolver(sorted(columns))
     present = absent = 0
     for ref in signature:
@@ -103,7 +103,7 @@ def _subunit_key(selector: InputSelector) -> tuple:
 def _tie_break(
     group: list[tuple[PresetSpec, InputSelector]], file: SourceFile, peek: PeekFn | None
 ) -> tuple[PresetSpec, InputSelector]:
-    """Pick the best (preset, selector) for one sub-unit by structural column fit."""
+    """Pick the best (preset, selector) for one sub-unit by structural field fit."""
     if len(group) == 1 or peek is None:
         return group[0]
     scored: list[tuple[int, int, tuple[PresetSpec, InputSelector]]] = []
@@ -122,18 +122,18 @@ def _tie_break(
 def _missing_required(
     preset: PresetSpec, file: SourceFile, selector: InputSelector, peek: PeekFn | None
 ) -> set[str]:
-    """Required columns the preset maps that are absent from the source (empty if it fits).
+    """Required fields the preset maps that are absent from the source (empty if it fits).
 
-    Returns empty when columns can't be peeked (no peek fn / peek failed) — we never
+    Returns empty when fields can't be peeked (no peek fn / peek failed) — we never
     disqualify on an inability to verify, only on confirmed absence."""
     if peek is None:
         return set()
     columns = peek(file, selector)
     if columns is None:
         return set()
-    from model_atlas.reporting import required_columns
+    from model_atlas.reporting import required_fields
 
-    return required_columns(preset) - set(columns)
+    return required_fields(preset) - set(columns)
 
 
 def match_files_detailed(
@@ -146,11 +146,11 @@ def match_files_detailed(
     """Match a SourceFile, returning (matches, unsatisfied).
 
     1. Location pre-filter (name-only); 2. type/namespace guard; 3. applicability gate — a
-    preset only matches if ALL its REQUIRED (mapped, non-optional) columns are present;
+    preset only matches if ALL its REQUIRED (mapped, non-optional) fields are present;
     4. one winner per distinct in-file unit (model/table/sheet) via structural tie-break.
 
-    ``unsatisfied`` lists (preset, selector, missing_columns) for a unit that WAS located and
-    type-matched but where no preset's required columns are satisfied — a faithful mapping is
+    ``unsatisfied`` lists (preset, selector, missing_fields) for a unit that WAS located and
+    type-matched but where no preset's required fields are satisfied — a faithful mapping is
     impossible and the caller must surface it loudly (never silently drop it).
     """
     # Step 1 — location pre-filter, one selector per preset (first match wins; OR within role).

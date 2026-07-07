@@ -14,12 +14,12 @@ from model_atlas.pipeline import process
 _PRESET = """
 preset: {id: t.t, name: T, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: data.csv}
-expected_columns: [Lat, Lon, TS, Loc, Item, Notes, Gone]
-source_record_uid: column(Item)
-common: {entity: const(device), input_record_id: column(Loc)}
+expected_fields: [Lat, Lon, TS, Loc, Item, Notes, Gone]
+source_record_uid: field(Item)
+common: {entity: const(device), input_record_id: field(Loc)}
 assertions:
-  - position: {latitude_wgs84: column(Lat), longitude_wgs84: column(Lon)}
-    time: {instant: column(TS), format: "%d.%m.%Y %H:%M:%S.%f"}
+  - position: {latitude_wgs84: field(Lat), longitude_wgs84: field(Lon)}
+    time: {instant: field(TS), format: "%d.%m.%Y %H:%M:%S.%f"}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 
@@ -73,11 +73,11 @@ def test_pipeline_prov_traceability(tmp_path: Path) -> None:
 _PRESET_B = """
 preset: {id: t.u, name: U, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: other.csv}
-source_record_uid: column(Item)
-common: {entity: const(device), input_record_id: column(Loc)}
+source_record_uid: field(Item)
+common: {entity: const(device), input_record_id: field(Loc)}
 assertions:
-  - position: {latitude_wgs84: column(Lat), longitude_wgs84: column(Lon)}
-    time: {instant: column(TS), format: "%d.%m.%Y %H:%M:%S.%f"}
+  - position: {latitude_wgs84: field(Lat), longitude_wgs84: field(Lon)}
+    time: {instant: field(TS), format: "%d.%m.%Y %H:%M:%S.%f"}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 

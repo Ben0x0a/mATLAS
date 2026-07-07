@@ -12,7 +12,7 @@ input_selector:
   delimiter: ","
   encoding: "utf-8-sig"
 
-expected_columns:
+expected_fields:
   - Record
   - "Origin Address"
   - "Destination Address"
@@ -32,26 +32,26 @@ expected_columns:
 patterns:
   tz: "(?P<z>UTC[+-]\\d{2}:\\d{2}(?:\\[DST\\])?)"
 
-source_record_uid: 'column("Item ID")'
+source_record_uid: 'field("Item ID")'
 
 common:
   entity:        param(entity)
   entity_type:   const(device)
-  linked_entity: 'column("Trip ID")'
+  linked_entity: 'field("Trip ID")'
   source_label:    const(ZRTLEARNEDLOCATIONOFINTERESTTRANSITIONMO)
-  input_record_id:    column(Location)
-  raw_source_path: column(Source)
+  input_record_id:    field(Location)
+  raw_source_path: field(Source)
 
 # Searches, not observed travel: origin/destination are referenced places and the
 # Start/End are the planned (intended) trip times; Record is the DB write time.
 assertions:
   - position:
-      latitude_wgs84:  'column("Origin Latitude")'
-      longitude_wgs84: 'column("Origin Longitude")'
-      raw_position:    'column("Origin Address")'
+      latitude_wgs84:  'field("Origin Latitude")'
+      longitude_wgs84: 'field("Origin Longitude")'
+      raw_position:    'field("Origin Address")'
       position_type:   const(origin)
     time:
-      instant: 'column("Start Date/Time - * (dd.MM.yyyy)")'
+      instant: 'field("Start Date/Time - * (dd.MM.yyyy)")'
       format:  "%d.%m.%Y %H:%M:%S.%f"
       zone:    { from: 'header("Start Date/Time - * (dd.MM.yyyy)")', pipe: "regex(tz, group=z)" }
     links:
@@ -60,12 +60,12 @@ assertions:
       spatial_temporal: instant
 
   - position:
-      latitude_wgs84:  'column("Destination Latitude")'
-      longitude_wgs84: 'column("Destination Longitude")'
-      raw_position:    'column("Destination Address")'
+      latitude_wgs84:  'field("Destination Latitude")'
+      longitude_wgs84: 'field("Destination Longitude")'
+      raw_position:    'field("Destination Address")'
       position_type:   const(destination)
     time:
-      instant: 'column("End Date/Time - * (dd.MM.yyyy)")'
+      instant: 'field("End Date/Time - * (dd.MM.yyyy)")'
       format:  "%d.%m.%Y %H:%M:%S.%f"
       zone:    { from: 'header("End Date/Time - * (dd.MM.yyyy)")', pipe: "regex(tz, group=z)" }
     links:
@@ -76,7 +76,7 @@ assertions:
   - position:
       position_type: const(record)
     time:
-      instant: 'column("Record Date/Time - * (dd.MM.yyyy)")'
+      instant: 'field("Record Date/Time - * (dd.MM.yyyy)")'
       format:  "%d.%m.%Y %H:%M:%S.%f"
       zone:    { from: 'header("Record Date/Time - * (dd.MM.yyyy)")', pipe: "regex(tz, group=z)" }
     links:

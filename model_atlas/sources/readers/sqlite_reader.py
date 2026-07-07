@@ -2,7 +2,7 @@
 
 The WAL/journal two-pass merge that determines the ROW SET is unchanged (it lives in
 ``model_atlas/sqlite``); this reader only relabels the merge origin into the row-aligned
-``recovery_state`` enrichment and keeps it out of ``source_columns``/the dataframe.
+``recovery_state`` enrichment and keeps it out of ``source_fields``/the dataframe.
 """
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ class SqliteReader:
                     wal_path=wal, shm_path=shm, journal_path=journal,
                 )
                 subunit = table
-            source_columns = tuple(str(c) for c in with_sidecars.columns)
+            source_fields = tuple(str(c) for c in with_sidecars.columns)
             merged = merge_with_source(
                 db_only, with_sidecars, sidecar_label=_sidecar_label(staged.members)
             )
@@ -99,7 +99,7 @@ class SqliteReader:
         dataframe = merged.drop(columns=[SOURCE_COLNAME, SOURCE_ROW_NUMBER_COLNAME])
         return ReadResult(
             dataframe=dataframe,
-            source_columns=source_columns,
+            source_fields=source_fields,
             recovery_state=recovery,
             metadata={
                 "format": "sqlite",
@@ -114,7 +114,7 @@ class SqliteReader:
             },
         )
 
-    def peek_columns(self, file: SourceFile, selector: Any = None) -> set[str] | None:
+    def peek_fields(self, file: SourceFile, selector: Any = None) -> set[str] | None:
         table = getattr(selector, "table", None) if selector is not None else None
         if not table:
             return None
@@ -127,7 +127,7 @@ class SqliteReader:
                 cur = conn.execute(f'PRAGMA table_info("{table}")')
                 return {str(row[1]) for row in cur.fetchall()}
         except Exception:  # noqa: BLE001
-            log.debug(f"sqlite peek_columns failed for {file.logical_path}", exc_info=True)
+            log.debug("sqlite peek_fields failed for %s", file.logical_path, exc_info=True)
             return None
         finally:
             if staged.temp_dir is not None:

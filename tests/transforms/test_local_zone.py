@@ -24,8 +24,8 @@ preset: {id: t.loc, name: Loc, version: 1.0, tier: primary}
 input_selector: {format: sqlite, path: /x/db.sqlite, table: T}
 common: {entity: const(device)}
 assertions:
-  - position: {latitude_wgs84: column(lat), longitude_wgs84: column(lon)}
-    time: {instant: column(ts), epoch: cocoa}
+  - position: {latitude_wgs84: field(lat), longitude_wgs84: field(lon)}
+    time: {instant: field(ts), epoch: cocoa}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 
@@ -33,7 +33,7 @@ assertions:
 def _rows(records: list[dict], local_zone: str | None):
     spec = preset_spec_from_yaml(yaml.safe_load(_PRESET), Path("t.yaml"))
     env = BuildEnv(linked_entity="subj", local_zone=local_zone)
-    frame, _ = build_rows(records, spec, env, columns=["lat", "lon", "ts"])
+    frame, _ = build_rows(records, spec, env, fields=["lat", "lon", "ts"])
     return frame
 
 

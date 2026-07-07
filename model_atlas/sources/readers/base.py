@@ -36,7 +36,7 @@ RECOVERY_STATES: frozenset[str] = frozenset(
 @dataclass(frozen=True)
 class ReadResult:
     dataframe: pd.DataFrame
-    source_columns: tuple[str, ...]
+    source_fields: tuple[str, ...]
     recovery_state: tuple[str, ...]      # row-aligned with ``dataframe``
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -47,7 +47,7 @@ class FormatReader(Protocol):
     staging_mode: str  # one of staging.STAGING_{ALWAYS,NEVER,TIER}
 
     def read(self, file: "SourceFile", params: dict) -> ReadResult: ...
-    def peek_columns(self, file: "SourceFile", selector: Any = None) -> set[str] | None: ...
+    def peek_fields(self, file: "SourceFile", selector: Any = None) -> set[str] | None: ...
     def list_subtables(self, file: "SourceFile") -> list[str]: ...
 
 

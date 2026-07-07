@@ -22,22 +22,22 @@ _ENV = BuildEnv(input_file_path="/dev/v.csv", input_file_name="v.csv", source_fi
 _VISITS = """
 preset: {id: t.visits, name: Visits, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: v.csv}
-source_record_uid: column(ItemID)
+source_record_uid: field(ItemID)
 common:
   entity: const(device)
-  input_record_id: column(Loc)
+  input_record_id: field(Loc)
 assertions:
   - position:
-      latitude_wgs84: column(Lat)
-      longitude_wgs84: column(Lon)
+      latitude_wgs84: field(Lat)
+      longitude_wgs84: field(Lon)
     time:
-      interval: {lower: column(Entry), upper: column(Exit)}
+      interval: {lower: field(Entry), upper: field(Exit)}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: continuous_during_interval}
   - position:
-      latitude_wgs84: column(Lat)
-      longitude_wgs84: column(Lon)
+      latitude_wgs84: field(Lat)
+      longitude_wgs84: field(Lon)
     time:
-      instant: column(Created)
+      instant: field(Created)
     links: {entity_position: at, entity_time: recorded_at, spatial_temporal: instant}
 """
 
@@ -72,7 +72,7 @@ def test_source_columns_passthrough_on_every_pivoted_row() -> None:
     record = {"Lat": "1.5", "Lon": "2.5", "Entry": "100", "Exit": "200", "Created": "150",
               "Loc": "ZTABLE(1)", "ItemID": "A1", "City": "Geneva"}
     columns = ["Lat", "Lon", "Entry", "Exit", "Created", "Loc", "ItemID", "City"]
-    frame, _ = build_rows([record], _preset(_VISITS), _ENV, columns=columns)
+    frame, _ = build_rows([record], _preset(_VISITS), _ENV, fields=columns)
     assert len(frame) == 2
     # orig_<col> appended after the canonical schema, in source order.
     assert list(frame.columns)[-len(columns):] == [f"orig_{c}" for c in columns]
@@ -80,7 +80,7 @@ def test_source_columns_passthrough_on_every_pivoted_row() -> None:
         assert row["orig_City"] == "Geneva"          # unmapped, verbatim, on every row
         assert row["orig_Lat"] == "1.5"              # mapped column also kept verbatim
     # Opt-out drops the passthrough columns.
-    frame_off, _ = build_rows([record], _preset(_VISITS), _ENV, columns=columns, include_source_columns=False)
+    frame_off, _ = build_rows([record], _preset(_VISITS), _ENV, fields=columns, include_source_columns=False)
     assert not any(f"orig_{c}" in frame_off.columns for c in columns)
 
 
@@ -104,7 +104,7 @@ def test_generated_uid_disambiguates_identical_rows_by_line_number() -> None:
     # No source_record_uid mapped and IDENTICAL row data: the generated UID is keyed on the
     # physical source LINE number (carried by input_record_id's default), so the two records
     # still get distinct UIDs (no crash), and every output row gets a distinct row_uid.
-    text = _VISITS.replace("source_record_uid: column(ItemID)\n", "").replace("  input_record_id: column(Loc)\n", "")
+    text = _VISITS.replace("source_record_uid: field(ItemID)\n", "").replace("  input_record_id: field(Loc)\n", "")
     records = [
         {"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1"},
         {"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1"},   # identical data
@@ -123,7 +123,7 @@ def test_generated_uid_disambiguates_identical_rows_by_line_number() -> None:
 def test_row_uid_is_content_addressed() -> None:
     # row_uid folds in the row's own data: changing a cell changes that row's row_uid,
     # while a row whose data is unchanged keeps its row_uid.
-    text = _VISITS.replace("source_record_uid: column(ItemID)\n", "")
+    text = _VISITS.replace("source_record_uid: field(ItemID)\n", "")
     base = [{"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1", "Loc": "A"},
             {"Lat": "9", "Lon": "8", "Entry": "1", "Exit": "2", "Created": "1", "Loc": "B"}]
     changed = [dict(base[0]), {**base[1], "Lat": "7"}]   # second record's Lat edited
@@ -138,12 +138,12 @@ _WILDCARD = """
 preset: {id: t.wc, name: WC, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: w.csv}
 patterns: {tz: "(?P<z>UTC[+-][0-9]{2}:[0-9]{2})"}
-source_record_uid: column(ItemID)
-common: {entity: const(device), input_record_id: column(Loc)}
+source_record_uid: field(ItemID)
+common: {entity: const(device), input_record_id: field(Loc)}
 assertions:
-  - position: {latitude_wgs84: column(Lat)}
+  - position: {latitude_wgs84: field(Lat)}
     time:
-      instant: 'column("Timestamp - * (dd)")'
+      instant: 'field("Timestamp - * (dd)")'
       format: "%d.%m.%Y %H:%M:%S.%f"
       zone: { from: 'header("Timestamp - * (dd)")', pipe: "regex(tz, group=z)" }
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
@@ -153,7 +153,7 @@ assertions:
 def test_glob_column_and_header_capture_timezone() -> None:
     cols = ["Lat", "Loc", "ItemID", "Timestamp - UTC+02:00 (dd)"]
     records = [{"Lat": "1.0", "Loc": "L", "ItemID": "A", "Timestamp - UTC+02:00 (dd)": "06.12.2025 13:00:00.000"}]
-    frame, warnings = build_rows(records, _preset(_WILDCARD), _ENV, columns=cols)
+    frame, warnings = build_rows(records, _preset(_WILDCARD), _ENV, fields=cols)
     row = frame.iloc[0]
     assert row["time_lower_source_field"] == "Timestamp - UTC+02:00 (dd)"
     assert row["utc_offset_hours"] == 2.0                     # nominal zone as signed-hours float
@@ -166,21 +166,21 @@ def test_ambiguous_glob_is_a_hard_error() -> None:
                 "Timestamp - UTC+00:00 (dd)": "06.12.2025 13:00:00.000",
                 "Timestamp - UTC+02:00 (dd)": "06.12.2025 15:00:00.000"}]
     with pytest.raises(ValueError, match="multiple"):
-        build_rows(records, _preset(_WILDCARD), _ENV, columns=cols)
+        build_rows(records, _preset(_WILDCARD), _ENV, fields=cols)
 
 
 _UNITS = """
 preset: {id: t.u, name: U, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: u.csv}
 patterns: {coords: "(?P<lat>-?[0-9.]+) - (?P<lon>-?[0-9.]+)"}
-source_record_uid: column(ItemID)
+source_record_uid: field(ItemID)
 common: {entity: const(device)}
 assertions:
   - position:
-      latitude_wgs84:  { from: column(C), extract: coords.lat }
-      longitude_wgs84: { from: column(C), extract: coords.lon }
-      horizontal_speed_kmh: { from: column(Spd), unit: m/s }
-    time: {instant: column(TS), epoch: cocoa, zone: const(UTC)}
+      latitude_wgs84:  { from: field(C), extract: coords.lat }
+      longitude_wgs84: { from: field(C), extract: coords.lon }
+      horizontal_speed_kmh: { from: field(Spd), unit: m/s }
+    time: {instant: field(TS), epoch: cocoa, zone: const(UTC)}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 

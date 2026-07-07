@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+pytest.importorskip("lxml")
 from model_atlas.sources.container import FilesystemContainer, SourceFile, ZipContainer
 from model_atlas.sources.readers.base import get_reader
 from tests.sources.test_xml_cellebrite import _REPORT  # reuse the minimal report
@@ -42,8 +43,8 @@ def test_xml_reader_reads_model_in_place(make_source, tmp_path: Path) -> None:
     assert row["Position.Latitude"] == "38.34"
     assert row["Address.City"] == "Alicante"
     assert row["source_table"] == "ZRTCLLOCATION"
-    assert "Position.Latitude" in result.source_columns
-    assert "source_path" in result.source_columns
+    assert "Position.Latitude" in result.source_fields
+    assert "source_path" in result.source_fields
 
 
 def test_xml_reader_honours_tier(tmp_path: Path) -> None:
@@ -60,8 +61,8 @@ def test_xml_reader_honours_tier(tmp_path: Path) -> None:
 def test_xml_reader_peek_and_cache(tmp_path: Path) -> None:
     file = _fs_source(tmp_path)
     reader = get_reader("xml")
-    # peek_columns for the Call model; then a full read of a different model reuses the prep.
-    cols = reader.peek_columns(file, _Selector("Call"))
+    # peek_fields for the Call model; then a full read of a different model reuses the prep.
+    cols = reader.peek_fields(file, _Selector("Call"))
     assert "Direction" in cols
     loc = reader.read(file, {"model": "Location"})
     call = reader.read(file, {"model": "Call"})

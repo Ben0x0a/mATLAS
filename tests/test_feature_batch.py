@@ -19,14 +19,14 @@ from model_atlas.pipeline import process
 _PRESET_OTHER_NAME = """
 preset: {id: t.t, name: T, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: "does-not-match.csv"}
-source_record_uid: column(Item)
+source_record_uid: field(Item)
 common:
   input_record_id: filename(name)
   source_label: filename(stem)
   raw_source_path: filename(path)
 assertions:
-  - position: {latitude_wgs84: column(Lat), longitude_wgs84: column(Lon)}
-    time: {instant: column(TS), format: "%d.%m.%Y %H:%M:%S.%f"}
+  - position: {latitude_wgs84: field(Lat), longitude_wgs84: field(Lon)}
+    time: {instant: field(TS), format: "%d.%m.%Y %H:%M:%S.%f"}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 
@@ -121,11 +121,11 @@ def test_preset_entity_used_when_no_arg(tmp_path: Path) -> None:
 _SQLITE_PRESET = """
 preset: {id: t.s, name: S, version: 1.0, tier: secondary}
 input_selector: {format: sqlite, name: loc.sqlite, table: LOCATIONS}
-source_record_uid: column(id)
+source_record_uid: field(id)
 common: {entity: const(device)}
 assertions:
-  - position: {latitude_wgs84: column(lat), longitude_wgs84: column(lon)}
-    time: {instant: column(ts), epoch: unix_s}
+  - position: {latitude_wgs84: field(lat), longitude_wgs84: field(lon)}
+    time: {instant: field(ts), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
 

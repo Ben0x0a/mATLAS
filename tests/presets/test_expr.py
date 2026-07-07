@@ -14,10 +14,10 @@ from model_atlas.presets.expr import Ref, parse_pipe, parse_ref
 
 # --- references: valid ------------------------------------------------------
 
-def test_column_plain_and_glob_and_quoted() -> None:
-    assert parse_ref("column(ZLAT)") == Ref("column", "ZLAT")
-    assert parse_ref('column("Altitude (m)")') == Ref("column", "Altitude (m)")
-    assert parse_ref('column("Timestamp - * (dd.MM.yyyy)")').arg == "Timestamp - * (dd.MM.yyyy)"
+def test_field_plain_and_glob_and_quoted() -> None:
+    assert parse_ref("field(ZLAT)") == Ref("field", "ZLAT")
+    assert parse_ref('field("Altitude (m)")') == Ref("field", "Altitude (m)")
+    assert parse_ref('field("Timestamp - * (dd.MM.yyyy)")').arg == "Timestamp - * (dd.MM.yyyy)"
 
 
 def test_header_filename_param() -> None:
@@ -44,7 +44,7 @@ def test_const_coercion(text, expected) -> None:
 
 
 def test_whitespace_tolerated() -> None:
-    assert parse_ref("  column( ZLAT ) ").arg == "ZLAT"
+    assert parse_ref("  field( ZLAT ) ").arg == "ZLAT"
 
 
 # --- references: invalid (must raise) ---------------------------------------
@@ -52,12 +52,12 @@ def test_whitespace_tolerated() -> None:
 @pytest.mark.parametrize("text", [
     "device",                 # bare scalar is not a call
     "ZLAT",
-    "column",                 # missing parens
-    "columnZLAT",
+    "field",                  # missing parens
+    "fieldZLAT",
     "unknownkind(x)",         # not a known ref kind
     "filename(bogus)",        # bad filename token
     "param(nope)",            # bad param token
-    "column()",               # empty column name
+    "field()",                # empty field name
     "header()",               # empty header glob
 ])
 def test_invalid_reference_raises(text) -> None:

@@ -37,7 +37,7 @@ class ExcelReader:
         columns = tuple(str(c) for c in df.columns)
         return ReadResult(
             dataframe=df,
-            source_columns=columns,
+            source_fields=columns,
             recovery_state=(RECOVERY_LIVE,) * len(df),
             metadata={
                 "format": "excel",
@@ -55,7 +55,7 @@ class ExcelReader:
         staged = acquire_source(container, file, copy=False)
         return container, staged
 
-    def peek_columns(self, file: SourceFile, selector: Any = None) -> set[str] | None:
+    def peek_fields(self, file: SourceFile, selector: Any = None) -> set[str] | None:
         sheet = getattr(selector, "sheet", None) if selector is not None else None
         if sheet is None:
             return None
@@ -64,7 +64,7 @@ class ExcelReader:
             frame = pd.read_excel(staged.path, sheet_name=sheet, nrows=0, engine="openpyxl")
             return {str(c) for c in frame.columns}
         except Exception:  # noqa: BLE001
-            log.debug(f"excel peek_columns failed for {file.logical_path}", exc_info=True)
+            log.debug("excel peek_fields failed for %s", file.logical_path, exc_info=True)
             return None
         finally:
             if staged.temp_dir is not None:

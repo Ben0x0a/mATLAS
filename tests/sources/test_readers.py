@@ -1,11 +1,13 @@
 """Unit tests for the FormatReaders: csv/excel/sqlite read params, recovery_state,
-peek_columns, and list_subtables — the per-format behaviour behind the uniform API."""
+peek_fields, and list_subtables — the per-format behaviour behind the uniform API."""
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path, PurePosixPath
 
 import pytest
+
+pytest.importorskip("openpyxl")
 from openpyxl import Workbook
 
 from model_atlas.sources.container import FilesystemContainer, SourceFile
@@ -51,7 +53,7 @@ def test_csv_reader_honours_delimiter(tmp_path: Path) -> None:
     res = CsvReader().read(_file(tmp_path, "d.csv"), {"delimiter": ";"})
     assert list(res.dataframe.columns) == ["a", "b"]
     assert len(res.dataframe) == 2
-    assert res.source_columns == ("a", "b")
+    assert res.source_fields == ("a", "b")
     assert list(res.recovery_state) == ["live", "live"]
 
 
@@ -62,10 +64,10 @@ def test_csv_reader_skiprows(tmp_path: Path) -> None:
     assert len(res.dataframe) == 1
 
 
-def test_csv_peek_columns_and_no_subtables(tmp_path: Path) -> None:
+def test_csv_peek_fields_and_no_subtables(tmp_path: Path) -> None:
     (tmp_path / "d.csv").write_text("a,b,c\n1,2,3\n", encoding="utf-8")
     reader, file = CsvReader(), _file(tmp_path, "d.csv")
-    assert reader.peek_columns(file) == {"a", "b", "c"}
+    assert reader.peek_fields(file) == {"a", "b", "c"}
     assert reader.list_subtables(file) == []
 
 
@@ -83,14 +85,14 @@ def test_excel_reader_reads_requested_sheet(tmp_path: Path) -> None:
     assert list(res.recovery_state) == ["live", "live"]
 
 
-def test_excel_peek_columns_and_subtables(tmp_path: Path) -> None:
+def test_excel_peek_fields_and_subtables(tmp_path: Path) -> None:
     _xlsx(tmp_path / "b.xlsx", {"S1": (["x"], [[1]]), "Data": (["a", "b"], [[1, 2]])})
     reader, file = ExcelReader(), _file(tmp_path, "b.xlsx")
 
     class _Sel:
         sheet = "Data"
 
-    assert reader.peek_columns(file, _Sel()) == {"a", "b"}
+    assert reader.peek_fields(file, _Sel()) == {"a", "b"}
     assert set(reader.list_subtables(file)) == {"S1", "Data"}
 
 
@@ -114,7 +116,7 @@ def test_sqlite_list_subtables_and_peek(tmp_path: Path) -> None:
     class _Sel:
         table = "t"
 
-    assert reader.peek_columns(file, _Sel()) == {"id", "lat", "lon"}
+    assert reader.peek_fields(file, _Sel()) == {"id", "lat", "lon"}
 
 
 def test_sqlite_sql_query_path(tmp_path: Path) -> None:

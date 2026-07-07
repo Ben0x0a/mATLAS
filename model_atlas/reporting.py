@@ -3,9 +3,9 @@
 Defines:    the P/E/M frontier report, a human-readable traceability record, a
             PROV-JSON traceability record, and the warnings report.
 Used by:    pipeline.
-Depends on: presets.spec, transforms.assemble (column resolver).
+Depends on: presets.spec, transforms.assemble (field resolver).
 
-The frontier follows the P/E/M view: Present source columns, Expected (declared
+The frontier follows the P/E/M view: Present source fields, Expected (declared
 inventory), Mapped (consumed). The gaps are the research backlog and drift signals.
 """
 from __future__ import annotations
@@ -25,11 +25,11 @@ def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime(_ISO)
 
 
-def _column_refs(preset: PresetSpec, *, include_optional: bool = True) -> list[str]:
-    """Column/header names a preset references in its mappings.
+def _field_refs(preset: PresetSpec, *, include_optional: bool = True) -> list[str]:
+    """Field/header names a preset references in its mappings.
 
     ``include_optional=False`` drops fields flagged ``optional: true`` — used to compute the
-    REQUIRED columns (a preset's hard dependencies). The time bounds are always required (an
+    REQUIRED fields (a preset's hard dependencies). The time bounds are always required (an
     assertion without its instant cannot be built), so they are included regardless.
     """
     refs: list[str] = []
@@ -37,8 +37,8 @@ def _column_refs(preset: PresetSpec, *, include_optional: bool = True) -> list[s
     def add(spec: FieldSpec | None) -> None:
         if spec is None or (not include_optional and spec.optional):
             return
-        if spec.column is not None:
-            refs.append(spec.column)
+        if spec.field is not None:
+            refs.append(spec.field)
         if spec.from_name_pattern is not None:
             refs.append(spec.from_name_pattern)
 
@@ -50,31 +50,31 @@ def _column_refs(preset: PresetSpec, *, include_optional: bool = True) -> list[s
         for spec in template.fields:
             add(spec)
         for temporal in template.temporal:
-            refs.extend([temporal.lower_column, temporal.upper_column])  # time is required
+            refs.extend([temporal.lower_field, temporal.upper_field])  # time is required
             add(temporal.zone)
             for override in temporal.overrides:
                 add(override)
     return refs
 
 
-def required_columns(preset: PresetSpec) -> set[str]:
-    """The columns a preset hard-depends on (mapped, non-optional). A source missing any of
+def required_fields(preset: PresetSpec) -> set[str]:
+    """The fields a preset hard-depends on (mapped, non-optional). A source missing any of
     these cannot be faithfully mapped by this preset, so it does not match."""
-    return {ref for ref in _column_refs(preset, include_optional=False) if ref is not None}
+    return {ref for ref in _field_refs(preset, include_optional=False) if ref is not None}
 
 
-def frontier_report(preset: PresetSpec, present_columns: list[str]) -> dict[str, Any]:
-    """The P/E/M view for one matched source. ``expected_columns`` entries may be exact
-    names or glob patterns; a pattern is matched against the present columns."""
-    resolve = make_resolver(list(present_columns))
-    present = set(present_columns)
-    patterns = list(preset.expected_columns)
-    # Present columns covered by some expected entry (exact or glob).
+def frontier_report(preset: PresetSpec, present_fields: list[str]) -> dict[str, Any]:
+    """The P/E/M view for one matched source. ``expected_fields`` entries may be exact
+    names or glob patterns; a pattern is matched against the present fields."""
+    resolve = make_resolver(list(present_fields))
+    present = set(present_fields)
+    patterns = list(preset.expected_fields)
+    # Present fields covered by some expected entry (exact or glob).
     expected_present = {c for c in present if any(fnmatch.fnmatch(c, p) for p in patterns)}
-    refs = [ref for ref in _column_refs(preset) if ref is not None]
+    refs = [ref for ref in _field_refs(preset) if ref is not None]
     mapped = {resolved for ref in refs if (resolved := resolve(ref)) is not None}
-    # Referenced column names that resolve to nothing present (an exact name absent from the
-    # source, or a glob matching no column) — a preset authoring error or a schema drift.
+    # Referenced field names that resolve to nothing present (an exact name absent from the
+    # source, or a glob matching no field) — a preset authoring error or a schema drift.
     mapped_absent = {ref for ref in refs if resolve(ref) is None}
     return {
         "present_count": len(present),
@@ -82,9 +82,9 @@ def frontier_report(preset: PresetSpec, present_columns: list[str]) -> dict[str,
         "mapped_count": len(mapped),
         # Inventoried, present, but not yet mapped — the research backlog.
         "frontier_known": sorted(expected_present - mapped),
-        # Present and unexpected and unmapped — a model shift / new column to investigate.
+        # Present and unexpected and unmapped — a model shift / new field to investigate.
         "frontier_new": sorted(present - expected_present - mapped),
-        # Expected entry that matches no present column — schema drift.
+        # Expected entry that matches no present field — schema drift.
         "drift_missing": sorted(p for p in patterns if not any(fnmatch.fnmatch(c, p) for c in present)),
         # Mapped but absent — a preset authoring error (now actually detected).
         "mapped_absent": sorted(mapped_absent),
@@ -155,7 +155,7 @@ def build_traceability_prov(
 
 
 def build_warnings_report(transform_warnings: list[str], sources: list[dict[str, Any]]) -> dict[str, Any]:
-    """Transform warnings plus the per-source frontier, so unmapped columns are visible."""
+    """Transform warnings plus the per-source frontier, so unmapped fields are visible."""
     frontier = [
         {
             "source_file": source.get("source_file"),

@@ -12,7 +12,7 @@ input_selector:
   delimiter: ","
   encoding: "utf-8-sig"
 
-expected_columns:
+expected_fields:
   - Record
   - Address
   - City
@@ -34,28 +34,28 @@ expected_columns:
 patterns:
   tz: "(?P<z>UTC[+-]\\d{2}:\\d{2}(?:\\[DST\\])?)"
 
-source_record_uid: 'column("Item ID")'
+source_record_uid: 'field("Item ID")'
 
 common:
   entity:          param(entity)
   entity_type:     const(device)
   source_label:    const(ZRTLEARNEDLOCATIONOFINTERESTVISITMO)
   position_source: const(significant_location)
-  input_record_id:    column(Location)
-  raw_source_path: column(Source)
-  raw_position:    column(Address)
+  input_record_id:    field(Location)
+  raw_source_path: field(Source)
+  raw_position:    field(Address)
 
 # One source row -> the visit interval AND the record-creation instant. The spatial
 # fields are shared, so this is two assertions over the same position.
 assertions:
   - position:
-      latitude_wgs84:        column(Latitude)
-      longitude_wgs84:       column(Longitude)
-      horizontal_accuracy_m: column(Accuracy)
+      latitude_wgs84:        field(Latitude)
+      longitude_wgs84:       field(Longitude)
+      horizontal_accuracy_m: field(Accuracy)
     time:
       interval:
-        lower: 'column("Vicinity Entry Date/Time")'
-        upper: 'column("Vicinity Exit Date/Time")'
+        lower: 'field("Vicinity Entry Date/Time")'
+        upper: 'field("Vicinity Exit Date/Time")'
       format: "%d.%m.%Y %H:%M:%S.%f"
     links:
       entity_position:  at
@@ -63,11 +63,11 @@ assertions:
       spatial_temporal: continuous_during_interval
 
   - position:
-      latitude_wgs84:        column(Latitude)
-      longitude_wgs84:       column(Longitude)
-      horizontal_accuracy_m: column(Accuracy)
+      latitude_wgs84:        field(Latitude)
+      longitude_wgs84:       field(Longitude)
+      horizontal_accuracy_m: field(Accuracy)
     time:
-      instant: 'column("Created Date/Time - * (dd.MM.yyyy)")'
+      instant: 'field("Created Date/Time - * (dd.MM.yyyy)")'
       format:  "%d.%m.%Y %H:%M:%S.%f"
       zone:    { from: 'header("Created Date/Time - * (dd.MM.yyyy)")', pipe: "regex(tz, group=z)" }
     links:
