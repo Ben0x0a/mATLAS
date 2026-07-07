@@ -9,7 +9,23 @@ from __future__ import annotations
 
 import pytest
 
-from model_atlas.presets.expr import Ref, parse_pipe, parse_ref
+from model_atlas.presets.expr import Ref, parse_param_expr, parse_pipe, parse_ref
+
+
+# --- run-level param expressions --------------------------------------------
+
+def test_parse_param_expr_literal_vs_reference() -> None:
+    # A call-form reference resolves per row -> parsed Ref.
+    assert parse_param_expr("field(Evidence number)") == Ref("field", "Evidence number")
+    assert parse_param_expr('field("Evidence number")') == Ref("field", "Evidence number")
+    assert parse_param_expr("const(Case Subject)") == Ref("const", "Case Subject")
+    # Plain literals (including names that superficially look call-ish) stay verbatim.
+    assert parse_param_expr("John Doe") is None
+    assert parse_param_expr("Agent(Smith)") is None   # kind not a known reference
+    assert parse_param_expr("agent(smith)") is None   # unknown kind
+    assert parse_param_expr(None) is None
+    # A param(...) reference is NOT allowed (would be circular) -> treated as literal.
+    assert parse_param_expr("param(linked_entity)") is None
 
 
 # --- references: valid ------------------------------------------------------

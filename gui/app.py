@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import yaml
-from PySide6.QtCore import QFile, QObject, QRectF, QThread, QTimer, QUrl, Qt, Signal, Slot
+from PySide6.QtCore import QFile, QObject, QRectF, QStringListModel, QThread, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtUiTools import QUiLoader
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QCompleter,
     QFileDialog,
     QLabel,
     QLineEdit,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui import accessibility
+from gui.completion import param_completions
 from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
 from launcher.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
@@ -213,7 +215,24 @@ class MainController(QObject):
         self._stabilize_form_labels()
         self._stabilize_preset_mode_row()
         self._sync_output_mode()
+        self._configure_entity_completion()
         accessibility.configure_accessibility(self)
+
+    def _configure_entity_completion(self) -> None:
+        """Give the entity / linked_entity fields a completer: the call-form keywords, plus
+        ``field(<column>)`` per column when the input is a single CSV (see gui.completion)."""
+        self._entity_completion_model = QStringListModel(self.window)
+        for edit in (self.entity_edit, self.linked_entity_edit):
+            completer = QCompleter(self.window)
+            completer.setModel(self._entity_completion_model)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            edit.setCompleter(completer)
+        self._refresh_entity_completion()
+
+    def _refresh_entity_completion(self) -> None:
+        """Rebuild the entity/linked_entity completion list for the current input path."""
+        self._entity_completion_model.setStringList(param_completions(self.source_edit.text().strip()))
 
     def _wire_signals(self) -> None:
         self.source_file_button.clicked.connect(self._browse_source_file)
@@ -221,6 +240,7 @@ class MainController(QObject):
         self.presets_folder_button.clicked.connect(self._browse_presets_folder)
         self.presets_file_button.clicked.connect(self._browse_presets_file)
         self.output_button.clicked.connect(self._browse_output)
+        self.source_edit.textChanged.connect(lambda _text: self._refresh_entity_completion())
         self.presets_path_edit.editingFinished.connect(self._load_presets_async)
         self.preset_search_edit.textChanged.connect(self._render_available_presets)
         self.add_preset_button.clicked.connect(self._add_selected_presets)

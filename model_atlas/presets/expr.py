@@ -144,6 +144,26 @@ def parse_ref(text: Any) -> Ref:
     return Ref(kind=kind, arg=arg)
 
 
+# Reference kinds a run-level param (entity / linked_entity) may itself be. ``param`` is
+# excluded so a value cannot reference itself circularly.
+PARAM_EXPR_KINDS = ("field", "header", "filename", "const", "preset")
+
+
+def parse_param_expr(text: Any) -> Ref | None:
+    """Interpret a run-level param value (entity / linked_entity).
+
+    When ``text`` is a call-form reference (``field(NAME)``, ``header(...)``,
+    ``filename(...)``, ``const(...)``, or ``preset(...)``) return the parsed Ref so the
+    value is resolved per source row; otherwise (a plain literal string, or None) return
+    None so the value is used verbatim for every row."""
+    if not isinstance(text, str):
+        return None
+    match = _CALL_RE.match(text)
+    if match is None or match.group(1) not in PARAM_EXPR_KINDS:
+        return None
+    return parse_ref(text)
+
+
 def parse_pipe(text: Any) -> tuple[PipeCall, ...]:
     """Parse a pipe chain like ``"cast(int) | lookup(recovery, on_unknown=null)"``."""
     if text is None:

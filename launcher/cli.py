@@ -67,7 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Entity for every output row. When set it OVERRIDES any entity a preset "
             "maps (the preset value is the default otherwise), e.g. the device or "
-            "account the data came from."
+            "account the data came from. A literal is used verbatim; a preset-style "
+            "reference such as field(Column name) resolves per source row."
         ),
     )
     process_parser.add_argument(
@@ -76,7 +77,9 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Entity linked to every output row. When set it OVERRIDES any linked_entity "
             "a preset maps (the preset value is the default otherwise), e.g. a person, "
-            "company, account, or case subject."
+            "company, account, or case subject. A literal is used verbatim; a preset-style "
+            "reference such as field(Evidence number) resolves per source row, so one input "
+            "carrying several subjects maps each row to its own linked entity."
         ),
     )
     process_parser.add_argument(

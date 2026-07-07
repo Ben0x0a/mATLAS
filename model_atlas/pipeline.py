@@ -170,7 +170,9 @@ def process(
                               case subject). When supplied it OVERRIDES any linked_entity
                               a preset maps; a preset value is the default only when no
                               caller value reaches here. Declared as a required keyword
-                              so the package API makes the obligation explicit.
+                              so the package API makes the obligation explicit. A plain
+                              literal applies to every row; a preset-style reference such
+                              as ``field(Evidence number)`` resolves per source row.
         traceability_format:  "readable" (default) or "prov" (W3C PROV-JSON).
         merge:                True → one merged output CSV (default).
                               False → one CSV per matched preset inside *output*.

@@ -82,7 +82,9 @@ def configure_accessibility(controller: Any) -> None:
     controller.entity_edit.setAccessibleDescription("Optional source entity or owner added to output rows.")
     controller.linked_entity_edit.setAccessibleName("Linked entity")
     controller.linked_entity_edit.setAccessibleDescription(
-        "Required person, company, account, or case subject linked to output rows."
+        "Required person, company, account, or case subject linked to output rows. "
+        "Accepts a literal, or a preset-style reference such as field(Evidence number) "
+        "to take the value from that source field per row."
     )
 
     controller.presets_path_edit.setAccessibleName("Preset root path")

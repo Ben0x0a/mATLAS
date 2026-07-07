@@ -26,7 +26,7 @@ import datetime as dt
 import fnmatch
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -39,7 +39,7 @@ from model_atlas.model.families import (
     column_cast,
     unit_factor,
 )
-from model_atlas.presets.expr import Ref
+from model_atlas.presets.expr import Ref, parse_param_expr
 from model_atlas.presets.spec import FieldSpec, InputSelector, PresetSpec, TimeSpec
 from model_atlas.transforms.builtin import (
     ZoneToken,
@@ -198,6 +198,24 @@ def _resolve_ref(
         return col, col  # the value IS the matched field's header text
     col = resolve(ref.arg)  # field
     return (row.get(col) if col is not None else None), col
+
+
+def _resolve_param(
+    ref: Ref | None,
+    literal: str | None,
+    row: dict[str, Any],
+    resolve: Callable[[str | None], str | None],
+    file_values: dict[str, Any],
+    env: BuildEnv,
+    preset_values: dict[str, Any],
+) -> str | None:
+    """Resolve a run-level param for one row. ``ref`` (from ``parse_param_expr``) resolves
+    per row when set; otherwise the plain ``literal`` is used verbatim. Non-null values are
+    stringified so the entity / linked_entity columns stay textual."""
+    if ref is None:
+        return literal
+    value, _ = _resolve_ref(ref, row, resolve, file_values, env, preset_values)
+    return None if value is None else str(value)
 
 
 def _resolve_field(
@@ -402,6 +420,12 @@ def build_rows(
     preset_values = _preset_values(preset, selector)
     container = _source_container(selector)
 
+    # A run-level entity / linked_entity may itself be a call-form reference (e.g.
+    # ``field(Evidence number)``) so ONE file carrying several subjects resolves per row.
+    # A plain literal parses to None here and is applied verbatim to every row (below).
+    entity_expr = parse_param_expr(env.entity)
+    linked_entity_expr = parse_param_expr(env.linked_entity)
+
     file_name = env.source_file_name or env.input_file_name
     file_values: dict[str, Any] = {
         "name": file_name,
@@ -410,15 +434,26 @@ def build_rows(
     }
 
     for position, record in enumerate(records):
+        # Resolve any per-row entity / linked_entity reference into a concrete literal for
+        # THIS record, so both the preset's ``param(...)`` refs and the override below see
+        # the same resolved value. A plain literal (expr is None) is used as-is.
+        row_env = env
+        if entity_expr is not None or linked_entity_expr is not None:
+            row_env = replace(
+                env,
+                entity=_resolve_param(entity_expr, env.entity, record, resolve, file_values, env, preset_values),
+                linked_entity=_resolve_param(
+                    linked_entity_expr, env.linked_entity, record, resolve, file_values, env, preset_values),
+            )
         base = dict.fromkeys(OUTPUT_COLUMNS)
         for field_spec in preset.common:
             base[field_spec.model_field], _ = _resolve_field(
-                field_spec, record, warnings, resolve, file_values, env, ctx, preset_values)
+                field_spec, record, warnings, resolve, file_values, row_env, ctx, preset_values)
         # Run-level entity/linked_entity OVERRIDE the preset value when supplied.
-        if env.entity:
-            base["entity"] = env.entity
-        if env.linked_entity:
-            base["linked_entity"] = env.linked_entity
+        if row_env.entity:
+            base["entity"] = row_env.entity
+        if row_env.linked_entity:
+            base["linked_entity"] = row_env.linked_entity
         # Engine-set provenance: the outermost artifact matlas opened, the applied preset,
         # and the tier (a preset value overrides the run default).
         base["input_file_path"] = env.input_file_path
@@ -439,7 +474,7 @@ def build_rows(
             base["input_record_id"] = f"{container}#{source_line_number}" if container else f"#{source_line_number}"
 
         source_record_uid, was_mapped = _source_record_uid(
-            preset, base, record, warnings, resolve, file_values, env, ctx, preset_values, source_line_number)
+            preset, base, record, warnings, resolve, file_values, row_env, ctx, preset_values, source_line_number)
         # Only an explicitly MAPPED source_record_uid can collide: the generated one is keyed
         # on the unique source line number. A non-unique mapped "stable id" is a preset
         # authoring error, so flag it loudly rather than silently merge evidence.
@@ -470,7 +505,7 @@ def build_rows(
             shared = dict(base)
             for field_spec in template.fields:
                 value, source_col = _resolve_field(
-                    field_spec, record, warnings, resolve, file_values, env, ctx, preset_values)
+                    field_spec, record, warnings, resolve, file_values, row_env, ctx, preset_values)
                 shared[field_spec.model_field] = value
                 # Capture lat/lon provenance automatically, mirroring temporal bounds.
                 if source_col is not None and field_spec.model_field == "latitude_wgs84":
@@ -479,7 +514,7 @@ def build_rows(
                     shared["longitude_source_field"] = source_col
             for time_spec in template.temporal:
                 flat = dict(shared)
-                _apply_time(flat, time_spec, record, warnings, resolve, file_values, env, ctx, preset_values)
+                _apply_time(flat, time_spec, record, warnings, resolve, file_values, row_env, ctx, preset_values)
                 # Content digest over the output row's MODEL fields (excludes volatile
                 # provenance + the ids + untangle ranks); computed now that the row is fully
                 # assembled. Combined with the source scope/line and the output ordinal.

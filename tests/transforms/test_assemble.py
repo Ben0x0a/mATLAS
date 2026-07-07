@@ -15,6 +15,8 @@ import pytest
 import yaml
 
 from model_atlas.presets.spec import preset_spec_from_yaml
+from dataclasses import replace
+
 from model_atlas.transforms.assemble import BuildEnv, build_rows, to_records
 
 _ENV = BuildEnv(input_file_path="/dev/v.csv", input_file_name="v.csv", source_fingerprint="fp123", source_file_path="/dev/file", source_tier="secondary")
@@ -82,6 +84,27 @@ def test_source_columns_passthrough_on_every_pivoted_row() -> None:
     # Opt-out drops the passthrough columns.
     frame_off, _ = build_rows([record], _preset(_VISITS), _ENV, fields=columns, include_source_columns=False)
     assert not any(f"orig_{c}" in frame_off.columns for c in columns)
+
+
+def test_linked_entity_literal_applies_to_every_row() -> None:
+    # A plain-literal run-level linked_entity is used verbatim on every output row.
+    records = [{"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1", "Loc": "L1", "ItemID": "A"}]
+    env = replace(_ENV, linked_entity="Case Subject")
+    frame, _ = build_rows(records, _preset(_VISITS), env)
+    assert list(frame["linked_entity"]) == ["Case Subject", "Case Subject"]
+
+
+def test_linked_entity_field_reference_resolves_per_row() -> None:
+    # A field(...) run-level linked_entity takes each row's value from that source field,
+    # so one input carrying several subjects maps each row to its own linked entity.
+    records = [
+        {"Lat": "1", "Lon": "2", "Entry": "1", "Exit": "2", "Created": "1", "Loc": "L1", "ItemID": "A", "Evidence number": "EV-1"},
+        {"Lat": "3", "Lon": "4", "Entry": "1", "Exit": "2", "Created": "1", "Loc": "L2", "ItemID": "B", "Evidence number": "EV-2"},
+    ]
+    env = replace(_ENV, linked_entity="field(Evidence number)")
+    frame, _ = build_rows(records, _preset(_VISITS), env)
+    # Two assertions per source row -> the first record's rows carry EV-1, the second EV-2.
+    assert list(frame["linked_entity"]) == ["EV-1", "EV-1", "EV-2", "EV-2"]
 
 
 def test_to_records_normalises_nan_to_none() -> None:
