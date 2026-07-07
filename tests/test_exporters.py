@@ -280,7 +280,7 @@ def test_geovisualizer_minimal_columns_no_crash(tmp_path: Path) -> None:
     assert row["Target"] == "x"
     assert row["IMEI"] == "" and row["Timestamp (local)"] == "" and row["Source"] == ""
     # No offset column at all => unknown => the warning leads, then 'Speed: null', then (mATLAS).
-    assert row["Description"] == f"{_builtin._OFFSET_UNKNOWN_NOTE}\nSpeed: null\n(mATLAS)"
+    assert row["Description"] == f"{_builtin._OFFSET_UNKNOWN_NOTE} | Speed: null | (mATLAS)"
 
 
 def test_geovisualizer_string_coordinates_coerced(tmp_path: Path) -> None:
@@ -302,7 +302,7 @@ def test_geovisualizer_warns_when_offset_unknown(tmp_path: Path) -> None:
     [out] = run_exporters(["geovisualizer"], _ctx(frame, tmp_path))
     header, data = _read_geovis(out)
     row = dict(zip(header, data[0]))
-    assert row["Description"].splitlines()[0] == _builtin._OFFSET_UNKNOWN_NOTE
+    assert row["Description"].startswith(_builtin._OFFSET_UNKNOWN_NOTE)
     assert row["Timestamp (local)"].endswith("+00:00")   # placeholder suffix, flagged as unknown
 
 
@@ -358,26 +358,32 @@ def test_local_iso_still_used_by_kml() -> None:
     assert _builtin._local_iso(None, 1.0) == ""
 
 
-def test_description_multiline_format() -> None:
+def test_description_format() -> None:
     both = {"utc_offset_hours": 1.0, "horizontal_speed_kmh": 10.8, "horizontal_speed_accuracy_kmh": 2.0}
-    assert _builtin._geovis_description(both, "TS", None) == "Speed: 10.8 km/h (±2 km/h)\nTS\n(mATLAS)"
+    assert _builtin._geovis_description(both, "TS", None) == "Speed: 10.8 km/h (±2 km/h) | TS | (mATLAS)"
 
     no_accuracy = {"utc_offset_hours": 1.0, "horizontal_speed_kmh": 5.0, "horizontal_speed_accuracy_kmh": None}
-    assert _builtin._geovis_description(no_accuracy, "TS", None) == "Speed: 5 km/h\nTS\n(mATLAS)"
+    assert _builtin._geovis_description(no_accuracy, "TS", None) == "Speed: 5 km/h | TS | (mATLAS)"
 
     no_speed = {"utc_offset_hours": 1.0}
-    assert _builtin._geovis_description(no_speed, "TS", None) == "Speed: null\nTS\n(mATLAS)"
+    assert _builtin._geovis_description(no_speed, "TS", None) == "Speed: null | TS | (mATLAS)"
 
     # An interval bound adds 'Range start' / 'Range end' before the (mATLAS) signature.
     assert _builtin._geovis_description({"utc_offset_hours": 1.0}, "Lower", "start") == (
-        "Speed: null\nLower\nRange start\n(mATLAS)")
+        "Speed: null | Lower | Range start | (mATLAS)")
     assert _builtin._geovis_description({"utc_offset_hours": 1.0}, "Upper", "end") == (
-        "Speed: null\nUpper\nRange end\n(mATLAS)")
+        "Speed: null | Upper | Range end | (mATLAS)")
 
-    # Unknown offset => the warning is the FIRST line, before Speed.
+    # Unknown offset => the warning is the FIRST part, before Speed.
     unknown = {"utc_offset_hours": "N/A", "horizontal_speed_kmh": 3.0}
     assert _builtin._geovis_description(unknown, "TS", None) == (
-        f"{_builtin._OFFSET_UNKNOWN_NOTE}\nSpeed: 3 km/h\nTS\n(mATLAS)")
+        f"{_builtin._OFFSET_UNKNOWN_NOTE} | Speed: 3 km/h | TS | (mATLAS)")
+
+
+def test_description_has_no_newlines() -> None:
+    # The target Java importer cannot render newlines; the description must stay single-line.
+    text = _builtin._geovis_description({"utc_offset_hours": "N/A", "horizontal_speed_kmh": 3.0}, "TS", "start")
+    assert "\n" not in text and "\r" not in text
 
 
 def test_time_emissions_instant_vs_interval() -> None:

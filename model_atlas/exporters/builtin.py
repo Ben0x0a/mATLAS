@@ -198,9 +198,13 @@ def _local_timestamp(unix_us: Any, offset_hours: Any) -> str:
     return local.strftime("%d.%m.%Y %H:%M:%S.%f") + _offset_suffix(local.utcoffset())
 
 
-# The description's first line when utc_offset_hours is unknown: we cannot localise, so the shown
+# The description's first part when utc_offset_hours is unknown: we cannot localise, so the shown
 # time is the source wall-clock value and the '+00:00' suffix is a placeholder, not verified UTC.
-_OFFSET_UNKNOWN_NOTE = "! UTC offset unknown - timestamp shown as-is (source time, not localised)"
+_OFFSET_UNKNOWN_NOTE = "! UTC offset unknown - timestamp shown as-is (source time)"
+
+# The target GeoVisualizer Java importer cannot render newlines inside a cell, so the multi-part
+# description is joined with ' | ' (built in directly — never a post-hoc replace of '\n').
+_DESCRIPTION_SEPARATOR = " | "
 
 
 def _time_emissions(row: dict) -> "list[tuple[Any, Any, str | None]]":
@@ -229,13 +233,12 @@ def _time_emissions(row: dict) -> "list[tuple[Any, Any, str | None]]":
 
 
 def _geovis_description(row: dict, timestamp_field: Any, bound: "str | None") -> str:
-    """Multi-line, readable, mATLAS-tagged. Line order:
-      1. (only when the UTC offset is unknown) a clear warning that the time is shown in UTC;
+    """Readable, mATLAS-tagged, single-line. Part order (joined with ' | '):
+      1. (only when the UTC offset is unknown) a clear warning that the time is shown as-is;
       2. Speed: <value> km/h (± accuracy) — or 'Speed: null';
       3. the source field of THE timestamp shown in this row;
       4. (only for an interval bound) 'Range start' / 'Range end' — the paired row holds the other;
-      5. (mATLAS).
-    Lines are joined with '\\n'; the CSV writer quotes the field so it renders as a multi-line cell."""
+      5. (mATLAS)."""
     lines: list[str] = []
     # A non-numeric utc_offset_hours (e.g. 'N/A') means the local time could not be resolved and
     # _local_timestamp fell back to UTC — flag it first, before anything else, so it is unmissable.
@@ -261,7 +264,7 @@ def _geovis_description(row: dict, timestamp_field: Any, bound: "str | None") ->
         lines.append("Range end")
 
     lines.append("(mATLAS)")
-    return "\n".join(lines)
+    return _DESCRIPTION_SEPARATOR.join(lines)
 
 
 def _geovis_source(row: dict) -> str:
@@ -306,7 +309,7 @@ def export_geovisualizer(ctx: ExportContext) -> list[Path]:
             })
     frame = pd.DataFrame(rows, columns=list(_GEOVIS_COLUMNS))
     out = _out(ctx, "geovisualizer", "csv")
-    # ';' delimiter (Excel default) and MINIMAL quoting: only fields containing the delimiter, a
-    # quote, or the newline in the multi-line Description are quoted.
+    # ';' delimiter (Excel default) and MINIMAL quoting: a field is quoted only if it contains the
+    # delimiter or a quote (the Description is single-line, joined with ' | ', so needs no quoting).
     frame.to_csv(out, index=False, sep=CSV_DELIMITER, quoting=csv.QUOTE_MINIMAL, encoding="utf-8-sig")
     return [out]
