@@ -25,6 +25,7 @@ dependencies = [
     "pyyaml>=6.0",
     # zoneinfo needs the IANA tz database; Windows has no system copy, so ship it there.
     "tzdata; platform_system == 'Windows'",
+    "s2sphere>=0.2.5",
 ]
 
 [project.optional-dependencies]
