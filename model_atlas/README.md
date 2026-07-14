@@ -37,9 +37,10 @@ process()
   -> load_preset_specs()          (presets.spec_loader)
   -> match_file()                 (presets.matcher)
   -> SingleSourceExtractor.extract() (sources.extractor -> FormatReader)
-  -> build_rows()                 (transforms.assemble)
-  -> untangle()                   (transforms.rank)
-  -> write_csv() / write_json()   (export)
+  -> build_assertions()           (transforms.assemble -> one run-wide RunStore)
+  -> RunStore.to_flat_frame()     (model.store — the assertion_flat projection)
+  -> untangle()                   (transforms.rank -> ranks written back to the store)
+  -> run_exporters()              (exporters — csv / sqlite run DB / ...)
   -> ProcessResult
 ```
 

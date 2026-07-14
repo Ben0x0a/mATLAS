@@ -11,6 +11,7 @@ from model_atlas.config import get_settings
 from model_atlas.diagnostics import install_excepthook
 from model_atlas.exporters import available_exporters
 from model_atlas.logging_setup import configure_logging
+from model_atlas.model.families import OUTPUT_COLUMNS
 from model_atlas.pipeline import process
 from launcher.profiles import build_profile_preset_folder, load_profile
 
@@ -22,7 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="matlas",
         description=(
             "SpatioTemporal Analysis - Forensic Data Processing. Process CSV, Excel and "
-            "SQLite sources into a merged 43-column spatio-temporal assertion model."
+            f"SQLite sources into a merged {len(OUTPUT_COLUMNS)}-column spatio-temporal "
+            "assertion model."
         ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -90,8 +92,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help=(
-            "Output path. Merge mode (default): path for the merged CSV. "
-            "Split mode (--no-merge): folder that receives one CSV per matched preset."
+            "Output folder (both modes). Merge mode (default): the merged CSV is written "
+            "inside as <name>.csv. Split mode (--no-merge): one CSV per matched preset."
+        ),
+    )
+    process_parser.add_argument(
+        "--name",
+        default="merged",
+        help=(
+            "Stem for run-level artefacts in merge mode: the merged CSV becomes "
+            "<output>/<name>.csv and its sidecars share the stem. Default 'merged'. "
+            "Ignored in split mode (each file is named after its preset)."
         ),
     )
     process_parser.add_argument(
@@ -150,30 +161,25 @@ def _configure_logging(log_file: Path | None, log_level: str | None) -> None:
 
 
 def _cmd_process(args: argparse.Namespace) -> int:
+    # Build the shared process() keyword arguments ONCE so the profile and non-profile
+    # branches can never drift (a past bug silently dropped --root-prefix-depth under --profile).
+    kwargs = dict(
+        base_name=args.name,
+        traceability_format=args.traceability_format,
+        merge=args.merge,
+        entity=args.entity,
+        linked_entity=args.linked_entity,
+        include_source_columns=args.include_source_columns,
+        root_prefix_depth=args.root_prefix_depth,
+        exports=args.export,
+    )
     if args.profile is None:
-        result = process(
-            args.input, args.presets, args.output,
-            traceability_format=args.traceability_format,
-            merge=args.merge,
-            entity=args.entity,
-            linked_entity=args.linked_entity,
-            include_source_columns=args.include_source_columns,
-            root_prefix_depth=args.root_prefix_depth,
-            exports=args.export,
-        )
+        result = process(args.input, args.presets, args.output, **kwargs)
     else:
         with tempfile.TemporaryDirectory(prefix="matlas-profile-") as tmp:
             profile_presets = load_profile(args.profile)
             presets_path = build_profile_preset_folder(profile_presets, Path(tmp))
-            result = process(
-                args.input, presets_path, args.output,
-                traceability_format=args.traceability_format,
-                merge=args.merge,
-                entity=args.entity,
-                linked_entity=args.linked_entity,
-                include_source_columns=args.include_source_columns,
-                exports=args.export,
-            )
+            result = process(args.input, presets_path, args.output, **kwargs)
     log.info(f"Row counts: {result.row_counts}")
     for entry in result.matched:
         log.info(f"Matched: {entry}")
@@ -188,6 +194,9 @@ def _cmd_process(args: argparse.Namespace) -> int:
     elif result.output_csvs:
         for csv in result.output_csvs:
             log.info(f"CSV: {csv}")
+    elif result.output_extras:
+        # The csv export was deselected but other exports were written — not an empty run.
+        log.info(f"No CSV selected; wrote {len(result.output_extras)} export(s).")
     else:
         log.warning("No rows produced: no discovered source matched a preset.")
     for extra in result.output_extras:

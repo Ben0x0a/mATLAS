@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -29,7 +30,10 @@ class ExportContext:
     """Everything an exporter could need for one output artefact.
 
     In merge mode there is one context (``preset_name`` is None); in split mode one per preset.
-    ``dataframe`` is the final, untangled, column-ordered frame that was just written as CSV."""
+    ``dataframe`` is the final, untangled, column-ordered frame that was just written as CSV.
+    ``connection`` is the run-wide store's live in-memory SQLite connection (the relational core
+    + the ``assertion_flat`` view); the ``sqlite`` export backs it up. None when no store is
+    wired (e.g. a unit test constructing a context by hand)."""
 
     dataframe: pd.DataFrame
     output_dir: Path                 # directory to write sibling files into
@@ -45,6 +49,7 @@ class ExportContext:
     input_path: Path | None = None
     presets_path: Path | None = None
     settings: Any = None             # model_atlas.config.Settings (untyped to avoid an import cycle)
+    connection: sqlite3.Connection | None = None           # the run-wide store's live connection
 
 
 Exporter = Callable[[ExportContext], "list[Path]"]
@@ -53,7 +58,7 @@ Exporter = Callable[[ExportContext], "list[Path]"]
 @dataclass(frozen=True)
 class ExporterSpec:
     name: str            # CLI id, e.g. "sqlite"
-    label: str           # GUI label, e.g. "SQLite database"
+    label: str           # GUI label, e.g. "Run database"
     description: str
     func: Exporter
 

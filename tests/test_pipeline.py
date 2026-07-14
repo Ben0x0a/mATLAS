@@ -9,6 +9,9 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
+
+from model_atlas.config import OutputSettings, Settings, set_settings
 from model_atlas.model.families import OUTPUT_COLUMNS
 from model_atlas.pipeline import process
 
@@ -39,7 +42,7 @@ def _setup(tmp_path: Path) -> tuple[Path, Path, Path]:
     presets.mkdir()
     (presets / "data.yaml").write_text(_PRESET, encoding="utf-8")
     (tmp_path / "data.csv").write_text(_CSV, encoding="utf-8")
-    return tmp_path / "data.csv", presets, tmp_path / "out.csv"
+    return tmp_path / "data.csv", presets, tmp_path / "out"
 
 
 def test_pipeline_output_and_readable_sidecars(tmp_path: Path) -> None:
@@ -58,15 +61,54 @@ def test_pipeline_output_and_readable_sidecars(tmp_path: Path) -> None:
     row = dict(zip(header, data[0]))
     assert row["orig_Notes"] == "note" and row["orig_Mystery"] == "xyz"
 
+    # The traceability sidecar is slimmed: it keeps the source identity/provenance but NOT the
+    # per-source frontier (that lives in the warnings sidecar — the model-shift report).
     trace = json.loads(result.output_traceability.read_text(encoding="utf-8"))
-    front = trace["sources"][0]["frontier"]
+    assert "frontier" not in trace["sources"][0]
+    assert trace["sources"][0]["matched_preset"] == "T"
+
+    warnings = json.loads(result.output_warnings.read_text(encoding="utf-8"))
+    assert warnings["transform_warning_count"] == 0
+    # The P/E/M frontier is reported here, once per source.
+    front = warnings["frontier"][0]["frontier"]
     assert front["frontier_known"] == ["Notes"]    # present + expected, unmapped
     assert front["frontier_new"] == ["Mystery"]    # present, unexpected, unmapped
     assert front["drift_missing"] == ["Gone"]       # expected but absent
     assert front["mapped_absent"] == []
 
-    warnings = json.loads(result.output_warnings.read_text(encoding="utf-8"))
-    assert warnings["transform_warning_count"] == 0
+
+def test_default_exports_none_produces_csv(tmp_path: Path) -> None:
+    # exports=None (nothing selected) means the default: the primary CSV is written.
+    source, presets, output = _setup(tmp_path)
+    result = process(source, presets, output, linked_entity="subject", exports=None)
+
+    assert result.output_csv == output / "merged.csv"
+    assert result.output_csv.exists()
+    assert result.output_extras == []
+
+
+def test_csv_deselected_writes_export_and_sidecars_but_no_csv(tmp_path: Path) -> None:
+    # An explicit selection without 'csv' produces the chosen export only: output_csv is None,
+    # yet the sidecars are still written (anchored on the nominal merged.csv path).
+    source, presets, output = _setup(tmp_path)
+    result = process(source, presets, output, linked_entity="subject", exports=["geojson"])
+
+    assert result.output_csv is None
+    assert not (output / "merged.csv").exists()
+    assert [p.name for p in result.output_extras] == ["merged.points.geojson"]
+    assert all(p.exists() for p in result.output_extras)
+    # Sidecars exist even though the CSV was deselected.
+    assert (output / "merged.matlas.traceability.json").exists()
+    assert (output / "merged.matlas.warnings.json").exists()
+
+
+def test_output_pointing_at_existing_file_raises(tmp_path: Path) -> None:
+    # --output must be a folder; a pre-existing file there is a fail-fast ValueError.
+    source, presets, _ = _setup(tmp_path)
+    clash = tmp_path / "already_a_file"
+    clash.write_text("not a folder", encoding="utf-8")
+    with pytest.raises(ValueError, match="must be a folder"):
+        process(source, presets, clash, linked_entity="subject")
 
 
 def test_process_reports_progress_phases(tmp_path: Path) -> None:
@@ -79,7 +121,7 @@ def test_process_reports_progress_phases(tmp_path: Path) -> None:
     assert "Discovering sources" in phases
     assert "Extracting & mapping" in phases
     assert any(phase.startswith("Untangling") for phase in phases)
-    assert "Additional exports" in phases
+    assert "Writing exports" in phases
 
 
 def test_process_progress_is_optional(tmp_path: Path) -> None:
@@ -129,12 +171,26 @@ def test_pipeline_no_source_columns(tmp_path: Path) -> None:
     assert header == list(OUTPUT_COLUMNS)  # canonical only, no orig_ passthrough columns
 
 
+def test_pipeline_honours_configured_source_column_prefix(tmp_path: Path) -> None:
+    # The [output].source_column_prefix setting renames the passthrough columns end-to-end:
+    # the pipeline reads it from the resolved settings and threads it into build_rows.
+    source, presets, output = _setup(tmp_path)
+    set_settings(Settings(output=OutputSettings(source_column_prefix="src_")))
+    result = process(source, presets, output, linked_entity="subject")
+
+    header, _ = _read_csv(result.output_csv)
+    assert header[:len(OUTPUT_COLUMNS)] == list(OUTPUT_COLUMNS)  # canonical schema unchanged
+    assert header[len(OUTPUT_COLUMNS):] == [
+        "src_Lat", "src_Lon", "src_TS", "src_Loc", "src_Item", "src_Notes", "src_Mystery"
+    ]
+    assert not any(c.startswith("orig_") for c in header)
+
+
 def test_pipeline_merge_unions_raw_columns(tmp_path: Path) -> None:
     # Two sources with different source columns: the merged CSV's raw_ columns are the
     # union, and a row from the source lacking a column is blank there (not dropped).
     input_folder, presets, output_folder = _setup_two_presets(tmp_path)
-    out = tmp_path / "merged.csv"
-    result = process(input_folder, presets, out, linked_entity="subject")
+    result = process(input_folder, presets, output_folder, linked_entity="subject")
 
     header, data = _read_csv(result.output_csv)
     # orig_Notes / orig_Mystery exist only in source A; common columns appear once.

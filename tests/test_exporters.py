@@ -23,13 +23,38 @@ from model_atlas.exporters import (
 )
 from model_atlas.exporters import builtin as _builtin
 from model_atlas.exporters import registry as _registry
+from model_atlas.model.families import Entity, SpatioTemporalAssertion
+from model_atlas.model.store import AssertionRow, RecordRow, RunStore, SourceRow
 
 
-def _ctx(dataframe: pd.DataFrame, output_dir: Path) -> ExportContext:
+def _ctx(
+    dataframe: pd.DataFrame, output_dir: Path, connection=None
+) -> ExportContext:
+    # The ``sqlite`` export now backs up ctx.connection (the run-wide store), not the frame, so
+    # every context carries a store connection; unless a populated store is supplied, an empty one
+    # is used (a valid, queryable, zero-row run database).
+    if connection is None:
+        connection = RunStore().connection
     return ExportContext(
         dataframe=dataframe, output_dir=output_dir, base_name="out",
-        merge=True, preset_name=None, primary_csv=None,
+        merge=True, preset_name=None, primary_csv=None, connection=connection,
     )
+
+
+def _store_with_assertions(count: int) -> RunStore:
+    """A RunStore holding ``count`` assertions from one record — the run database the ``sqlite``
+    export persists."""
+    store = RunStore()
+    store.add_source(SourceRow(source_id="s1"))
+    store.add_record(RecordRow(
+        source_record_uid="r1", source_id="s1", line_no=1,
+        input_record_id="t#1", recovery_state=None, raw={"City": "Geneva"}))
+    for index in range(count):
+        store.add_assertion(AssertionRow(
+            row_uid=f"u{index}", source_record_uid="r1",
+            assertion=SpatioTemporalAssertion(entity=Entity(entity=f"e{index}")),
+            attribution_origin="preset_mapped"))
+    return store
 
 
 @pytest.fixture
@@ -131,14 +156,26 @@ def test_broken_plugin_is_skipped_not_fatal(tmp_path: Path) -> None:
 
 # --- built-in exporters -----------------------------------------------------
 
-def test_builtin_sqlite(tmp_path: Path, sample_df: pd.DataFrame) -> None:
-    [out] = run_exporters(["sqlite"], _ctx(sample_df, tmp_path))
+def test_builtin_sqlite(tmp_path: Path) -> None:
+    # The sqlite export is now the FULL run database: every relational table + the assertion_flat
+    # view, backed up from the store's connection (not a single 'assertions' table dump).
+    store = _store_with_assertions(2)
+    ctx = _ctx(store.to_flat_frame(include_source_columns=False, source_column_prefix="orig_"),
+               tmp_path, connection=store.connection)
+    [out] = run_exporters(["sqlite"], ctx)
+    assert out.name == "out.matlas.sqlite"
     connection = sqlite3.connect(out)
     try:
-        count = connection.execute("SELECT COUNT(*) FROM assertions").fetchone()[0]
+        names = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")}
+        # Relational tables AND the canonical view all survive the backup.
+        assert {"run", "source", "record", "entity", "position", "timespan",
+                "assertion", "assertion_flat"} <= names
+        assertions = connection.execute("SELECT COUNT(*) FROM assertion").fetchone()[0]
+        flat = connection.execute("SELECT COUNT(*) FROM assertion_flat").fetchone()[0]
     finally:
         connection.close()
-    assert count == 2
+    assert assertions == flat == 2
 
 
 def test_builtin_geojson_only_located_rows(tmp_path: Path, sample_df: pd.DataFrame) -> None:
@@ -199,7 +236,7 @@ def test_pipeline_writes_extras(tmp_path: Path) -> None:
         linked_entity="subject", exports=["sqlite", "geovisualizer"],
     )
     names = {path.name for path in result.output_extras}
-    assert any(name.endswith(".assertions.sqlite") for name in names)
+    assert any(name.endswith(".matlas.sqlite") for name in names)
     assert any(name.endswith(".geovisualizer.csv") for name in names)
     assert all(path.exists() for path in result.output_extras)
 
@@ -252,7 +289,7 @@ def test_plugin_name_colliding_with_builtin_is_logged_not_fatal(tmp_path: Path) 
         encoding="utf-8",
     )
     load_plugins(tmp_path)                       # the ValueError is caught inside load_plugins
-    assert get_exporter("sqlite").label == "SQLite database"   # builtin intact, not overridden
+    assert get_exporter("sqlite").label == "Run database"   # builtin intact, not overridden
 
 
 # --- edge cases: exporters on sparse / empty frames ------------------------
@@ -306,15 +343,17 @@ def test_geovisualizer_warns_when_offset_unknown(tmp_path: Path) -> None:
     assert row["Timestamp (local)"].endswith("+00:00")   # placeholder suffix, flagged as unknown
 
 
-def test_sqlite_rerun_overwrites_cleanly(tmp_path: Path, sample_df: pd.DataFrame) -> None:
-    run_exporters(["sqlite"], _ctx(sample_df, tmp_path))
-    [out] = run_exporters(["sqlite"], _ctx(sample_df, tmp_path))   # second run, same path
+def test_sqlite_rerun_overwrites_cleanly(tmp_path: Path) -> None:
+    store = _store_with_assertions(2)
+    frame = store.to_flat_frame(include_source_columns=False, source_column_prefix="orig_")
+    run_exporters(["sqlite"], _ctx(frame, tmp_path, connection=store.connection))
+    [out] = run_exporters(["sqlite"], _ctx(frame, tmp_path, connection=store.connection))  # same path
     connection = sqlite3.connect(out)
     try:
-        count = connection.execute("SELECT COUNT(*) FROM assertions").fetchone()[0]
+        count = connection.execute("SELECT COUNT(*) FROM assertion").fetchone()[0]
     finally:
         connection.close()
-    assert count == 2   # replaced, not appended
+    assert count == 2   # replaced (backed up afresh), not appended
 
 
 def test_geojson_properties_exclude_coords(tmp_path: Path, sample_df: pd.DataFrame) -> None:

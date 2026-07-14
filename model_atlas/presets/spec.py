@@ -165,7 +165,7 @@ class FieldSpec:
     optional: bool = False                         # a mapped field absent => null, not a
                                                    # match failure (e.g. speed before iOS 17)
 
-    # --- v2-compat accessors used by reporting._field_refs ---
+    # --- v2-compat accessors used by presets.fields.field_refs ---
     @property
     def field(self) -> str | None:
         return self.ref.arg if self.ref.kind == "field" else None
@@ -185,7 +185,7 @@ class TimeSpec:
     zone: FieldSpec | None = None   # const or header(...) -> utc_offset_hours, applied to parsing
     overrides: tuple[FieldSpec, ...] = ()  # other temporal model fields (accuracy, ...)
 
-    # compat for reporting._field_refs (it reads lower_field/upper_field)
+    # compat for presets.fields.field_refs (it reads lower_field/upper_field)
     @property
     def lower_field(self) -> str | None:
         return self.lower.arg if self.lower.kind in ("field", "header") else None

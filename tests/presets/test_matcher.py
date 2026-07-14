@@ -7,9 +7,10 @@ import pytest
 import yaml
 
 from model_atlas.pipeline import process
-from model_atlas.presets.matcher import detect_file_format, match_file
+from model_atlas.presets.matcher import match_files_detailed
 from model_atlas.presets.spec import preset_spec_from_yaml
 from model_atlas.sources.container import FilesystemContainer, SourceFile
+from model_atlas.sources.format_detect import detect_source_format
 
 
 def _preset(text: str):
@@ -18,6 +19,13 @@ def _preset(text: str):
 
 def _file(root: Path, rel: str) -> SourceFile:
     return SourceFile(containers=(FilesystemContainer(root),), logical_path=PurePosixPath(rel))
+
+
+def _match_one(file, presets, **kwargs):
+    """The single best (preset, selector) for a file, or None — the matches list ([0] of the
+    match_files_detailed tuple) reduced to its first element."""
+    matches = match_files_detailed(file, presets, **kwargs)[0]
+    return matches[0] if matches else None
 
 
 _CSV_A = """
@@ -39,7 +47,7 @@ _CSV_B = _CSV_A.replace("id: a, name: A", "id: b, name: B").replace(
 def test_name_selector_matches_file(tmp_path: Path) -> None:
     (tmp_path / "loc.csv").write_text("lat,lon,ts\n1,2,3\n", encoding="utf-8")
     file = _file(tmp_path, "loc.csv")
-    match = match_file(file, [_preset(_CSV_A)], root_prefix_depth=1)
+    match = _match_one(file, [_preset(_CSV_A)], root_prefix_depth=1)
     assert match is not None and match[0].name == "A"
 
 
@@ -51,10 +59,10 @@ def test_format_mismatch_skips_with_warning(tmp_path: Path, caplog) -> None:
         "input_selector: {format: sqlite, name: loc.csv, table: T}",
     )
     file = _file(tmp_path, "loc.csv")
-    assert detect_file_format(file) == "csv"
+    assert detect_source_format(file) == "csv"
     import logging
     with caplog.at_level(logging.WARNING):
-        match = match_file(file, [_preset(sqlite_preset)], root_prefix_depth=1)
+        match = _match_one(file, [_preset(sqlite_preset)], root_prefix_depth=1)
     assert match is None
     assert any("format mismatch" in r.message for r in caplog.records)
 
@@ -67,7 +75,7 @@ def test_structural_tie_break_prefers_better_fit(tmp_path: Path) -> None:
     def peek(f, selector):
         return {"lat", "lon", "ts", "extra1", "extra2"}
 
-    match = match_file(file, [_preset(_CSV_A), _preset(_CSV_B)], root_prefix_depth=1, peek=peek)
+    match = _match_one(file, [_preset(_CSV_A), _preset(_CSV_B)], root_prefix_depth=1, peek=peek)
     assert match is not None and match[0].name == "B"
 
 

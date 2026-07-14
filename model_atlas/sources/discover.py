@@ -22,12 +22,11 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 from model_atlas.sources.container import Container, FilesystemContainer, SourceFile, ZipContainer
-from model_atlas.sources.format_detect import detect_format
+from model_atlas.sources.format_detect import detect_path_format, detect_source_format
 
 log = logging.getLogger(__name__)
 
 _SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
-_HEAD_BYTES = 16
 # A nested archive must be buffered in memory to be listed; cap that buffer so a
 # zip-bomb-as-nested-archive cannot exhaust memory. On-disk archives are read lazily by
 # path and are not subject to this. Per-entry decompression is bounded separately in
@@ -37,15 +36,6 @@ _NESTED_ARCHIVE_MAX_BYTES = 512 * 1024 * 1024
 
 def _is_sidecar(name: str) -> bool:
     return name.endswith(_SIDECAR_SUFFIXES)
-
-
-def _peek_head(container: Container, file: SourceFile) -> bytes:
-    try:
-        with container.open(file) as fh:
-            return fh.read(_HEAD_BYTES)
-    except (OSError, KeyError, zipfile.BadZipFile):
-        log.debug(f"Could not read head of {file.logical_path}", exc_info=True)
-        return b""
 
 
 def _walk(
@@ -61,8 +51,7 @@ def _walk(
         # Re-anchor the file onto the full container chain (outermost..innermost).
         file = SourceFile(containers=prefix + (container,), logical_path=file.logical_path)
         if depth < max_container_depth:
-            head = _peek_head(container, file)
-            if head[:4] == b"PK\x03\x04" and detect_format(head, lambda: _peek_zip_names(container, file), file.logical_path.suffix) == "archive":
+            if detect_source_format(file) == "archive":
                 try:
                     # A zip on the filesystem keeps its on-disk path (lazy reads, and the
                     # path backs input_file_path); a zip nested in another zip has no path,
@@ -92,15 +81,6 @@ def _walk(
         yield file
 
 
-def _peek_zip_names(container: Container, file: SourceFile) -> list[str]:
-    try:
-        with container.open(file) as fh:
-            with zipfile.ZipFile(fh) as zf:
-                return zf.namelist()
-    except (OSError, zipfile.BadZipFile):
-        return []
-
-
 def discover(input_path: Path, *, max_container_depth: int = 1) -> tuple[SourceFile, ...]:
     input_path = Path(input_path)
     if input_path.is_dir():
@@ -113,9 +93,7 @@ def discover(input_path: Path, *, max_container_depth: int = 1) -> tuple[SourceF
     if not input_path.is_file():
         raise FileNotFoundError(input_path)
 
-    with input_path.open("rb") as fh:
-        head = fh.read(_HEAD_BYTES)
-    fmt = detect_format(head, lambda: _zip_namelist(input_path), input_path.suffix)
+    fmt = detect_path_format(input_path)
     if fmt == "archive":
         top = ZipContainer(path=input_path)
         try:
@@ -134,11 +112,3 @@ def discover(input_path: Path, *, max_container_depth: int = 1) -> tuple[SourceF
     file = SourceFile(containers=(container,), logical_path=PurePosixPath(input_path.name))
     log.info(f"Discovered single file {input_path}")
     return (file,)
-
-
-def _zip_namelist(path: Path) -> list[str]:
-    try:
-        with zipfile.ZipFile(path) as zf:
-            return zf.namelist()
-    except (OSError, zipfile.BadZipFile):
-        return []

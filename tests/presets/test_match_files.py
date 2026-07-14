@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
-from model_atlas.presets.matcher import match_files, match_files_detailed
+from model_atlas.presets.matcher import match_files_detailed
 from model_atlas.presets.spec import preset_spec_from_yaml
 import pytest
 
@@ -51,7 +51,7 @@ def test_one_report_matches_one_preset_per_model(tmp_path: Path) -> None:
                       logical_path=PurePosixPath("report.xml"))
     presets = [_xml_preset("Location"), _xml_preset("Call")]
 
-    matches = match_files(file, presets, peek=None)
+    matches, _ = match_files_detailed(file, presets, peek=None)
 
     assert {sel.model for _preset, sel in matches} == {"Location", "Call"}
     assert len(matches) == 2  # both model types matched the single report.xml
@@ -75,7 +75,7 @@ def test_namespace_mismatch_excludes_preset(tmp_path: Path) -> None:
     }
     axiom = preset_spec_from_yaml(yaml.safe_load(yaml.safe_dump(raw)), Path("axiom.yaml"))
 
-    matches = match_files(file, [location, axiom], peek=None)
+    matches, _ = match_files_detailed(file, [location, axiom], peek=None)
     # Only the Cellebrite-namespace preset matches; the AXIOM-namespace one is excluded.
     assert [p.meta.id for p, _ in matches] == ["cellebrite.location"]
 

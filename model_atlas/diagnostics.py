@@ -13,7 +13,7 @@ Depends on: model_atlas.config (DiagnosticsSettings) and the STANDARD LIBRARY ON
 Design:
 - A global ``sys.excepthook`` (and ``threading.excepthook``) receives ``(type, exc, tb)``.
   Walking ``tb`` yields every frame; each frame's ``f_locals`` holds its variables, so the
-  offending value AND its surrounding context (e.g. the source ``record`` in ``build_rows``)
+  offending value AND its surrounding context (e.g. the source ``record`` in ``build_assertions``)
   are captured with no try/except sprinkled through the codebase.
 - Each value passes through ``_summarise`` which NEVER dumps a whole DataFrame/collection:
   it records shape/columns/head, hashes long strings, caps items and recursion depth, and
@@ -501,7 +501,7 @@ def write_crash_report(
                 "type": _typename(exc),
                 "message": _anonymise_paths(str(exc), cfg),
                 "args": [_summarise(None, arg, cfg, 1) for arg in getattr(exc, "args", ())],
-                # __notes__ carries the build_rows breadcrumb (source/table/line/field/value).
+                # __notes__ carries the build_assertions breadcrumb (source/table/line/field/value).
                 "notes": [_anonymise_paths(str(n), cfg)
                           for n in (getattr(exc, "__notes__", []) or [])] or None,
             },

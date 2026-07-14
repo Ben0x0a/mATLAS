@@ -74,6 +74,8 @@ class DiscoverySettings:
 
 @dataclass(frozen=True)
 class OutputSettings:
+    # Prefix for the verbatim source-column passthrough. Consumed by the pipeline, which
+    # threads it into ``RunStore.to_flat_frame`` (default ``PASSTHROUGH_PREFIX``).
     source_column_prefix: str = "orig_"
 
 

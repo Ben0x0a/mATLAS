@@ -8,12 +8,13 @@ from pathlib import Path
 import yaml
 
 from model_atlas.presets.spec import preset_spec_from_yaml
-from model_atlas.transforms.assemble import BuildEnv, build_rows
+from model_atlas.transforms.assemble import BuildEnv
 from model_atlas.transforms.builtin import (
     local_naive_to_utc_us,
     parse_zone_token,
     zone_standard_offset_hours,
 )
+from tests.support import build_rows
 
 
 # --- unit: zone token parsing --------------------------------------------

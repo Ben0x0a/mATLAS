@@ -155,16 +155,14 @@ def configure_accessibility(controller: Any) -> None:
 
 
 def update_output_accessibility(controller: Any) -> None:
+    # The output is a folder in both modes; only what lands inside differs.
+    controller.output_button.setAccessibleName("Choose output folder")
+    controller.output_button.setAccessibleDescription("Choose the output folder.")
+    controller.output_edit.setAccessibleName("Output folder path")
     if controller.merge_outputs_check.isChecked():
-        controller.output_edit.setAccessibleName("Output CSV path")
-        controller.output_edit.setAccessibleDescription("Path for the merged CSV output file.")
-        controller.output_button.setAccessibleName("Choose output CSV path")
-        controller.output_button.setAccessibleDescription("Choose where to save the merged CSV output file.")
+        controller.output_edit.setAccessibleDescription("Folder that receives the merged CSV (merged.csv).")
     else:
-        controller.output_edit.setAccessibleName("Output folder path")
         controller.output_edit.setAccessibleDescription("Folder that receives one CSV per matched preset.")
-        controller.output_button.setAccessibleName("Choose output folder")
-        controller.output_button.setAccessibleDescription("Choose the folder for per-preset CSV outputs.")
 
 
 def _label(controller: Any, name: str) -> QLabel | None:

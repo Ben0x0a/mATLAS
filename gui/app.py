@@ -1,22 +1,26 @@
-"""Runtime-loaded PySide6 GUI for Model Atlas."""
+"""Runtime-loaded PySide6 GUI controller for Model Atlas.
+
+Defines:    MainController, the sole controller for the single-window GUI. It builds the
+            window from main_window.ui, wires widget signals, and dispatches pipeline
+            runs onto a background thread.
+Used by:    launcher.gui (the GUI entry point constructs and shows MainController.window).
+Depends on: gui.worker (TaskRunner / ProgressBridge / install_gui_log_handler),
+            gui.header_assets (window icon + header images), gui.accessibility,
+            gui.completion, gui.theme, gui.widgets.drag_drop_line_edit, launcher.profiles,
+            and the model_atlas package pipeline/config/exporters/presets APIs.
+"""
 from __future__ import annotations
 
 import html
 import logging
-import os
-import signal
-import sys
 import tempfile
-import traceback
+from contextlib import ExitStack
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Callable
 
-import yaml
-from PySide6.QtCore import QFile, QObject, QRectF, QStringListModel, QThread, QTimer, QUrl, Qt, Signal, Slot
-from PySide6.QtGui import QAction, QDesktopServices, QIcon, QPainter, QPixmap
-from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtCore import QFile, QObject, QStringListModel, QTimer, QUrl, Qt, Slot
+from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import (
     QApplication,
@@ -37,14 +41,14 @@ from PySide6.QtWidgets import (
     QToolButton,
 )
 
-from gui import accessibility
+from gui import accessibility, header_assets
 from gui.completion import param_completions
 from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
+from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler
 from launcher.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
 from model_atlas.config import get_settings
 from model_atlas.exporters import available_exporters, load_plugins
-from model_atlas.logging_setup import build_formatter
 from model_atlas.pipeline import ProcessResult, process
 from model_atlas.presets.spec_loader import load_preset_specs
 
@@ -56,72 +60,41 @@ log = logging.getLogger("model_atlas.gui")
 APP_TITLE_DEFAULT = "mATLAS Transformer"
 APP_TITLE_UFDR = "UFDR Parser"
 
-DESKTOP_ICON_ASSET = "matlas_transformer_desktop_icon.svg"
-TRANSITION_ASSETS = {
-    2: "matlas_transition_01_standby.svg",
-    3: "matlas_transition_02_activate.svg",
-    4: "matlas_transition_03_compact.svg",
-    5: "matlas_transition_04_reform.svg",
-    6: "matlas_transition_05_bed_form.svg",
-    7: "matlas_transition_06_complete.svg",
-}
 
+def _should_show_single_preset_notice(
+    selected_mode: bool,
+    selected_paths: list[Path],
+    loaded_preset_count: int,
+    source_path: str,
+) -> bool:
+    """Return True only when the pipeline's force-preset mode will actually trigger.
 
-def _asset_path(name: str) -> Path:
-    return Path(files("gui").joinpath("assets", name))
+    The "one preset applied without filename selector filtering" notice is truthful
+    only when force-preset mode fires (model_atlas.pipeline): a single preset is in play
+    AND the source is a single ordinary file whose format is not an archive. A single
+    preset is "in play" when exactly one preset is selected (selected mode) or exactly
+    one preset is loaded (auto mode). We approximate "not an archive" as "not .zip" here
+    rather than re-implementing magic-byte detection; the pipeline does the authoritative
+    check, so a false positive here is at worst a stale notice, never wrong processing.
+    """
+    single_preset_in_play = (
+        len(selected_paths) == 1 if selected_mode else loaded_preset_count == 1
+    )
+    if not single_preset_in_play:
+        return False
+    text = source_path.strip()
+    if not text:
+        return False
+    path = Path(text).expanduser()
+    if not path.is_file():
+        return False
+    return path.suffix.lower() != ".zip"
 
 
 @dataclass(frozen=True)
 class PresetItem:
     name: str
     path: Path
-
-
-class _LogBridge(QObject):
-    record = Signal(str, str)
-
-
-class _ProgressBridge(QObject):
-    # Emitted (from the worker thread) at the start of each pipeline phase; a queued connection
-    # marshals it onto the GUI thread so the status label can be updated safely.
-    phase = Signal(str)
-
-
-class _GuiLogHandler(logging.Handler):
-    def __init__(self, bridge: _LogBridge) -> None:
-        super().__init__()
-        self._bridge = bridge
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            message = self.format(record)
-        except Exception:  # noqa: BLE001 - logging must not crash the GUI
-            self.handleError(record)
-            return
-        colour = {
-            logging.DEBUG: "#667085",
-            logging.INFO: "#2563eb",
-            logging.WARNING: "#b45309",
-            logging.ERROR: "#b91c1c",
-            logging.CRITICAL: "#7f1d1d",
-        }.get(record.levelno, "#111827")
-        self._bridge.record.emit(colour, message)
-
-
-class _TaskWorker(QObject):
-    finished = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, fn: Callable[[], Any]) -> None:
-        super().__init__()
-        self._fn = fn
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            self.finished.emit(self._fn())
-        except Exception:  # noqa: BLE001 - surface all failures in the GUI
-            self.failed.emit(traceback.format_exc())
 
 
 class MainController(QObject):
@@ -134,30 +107,28 @@ class MainController(QObject):
             app.setStyle("Fusion")
             configure_application_font(app)
         self.window = self._load_ui()
-        self._threads: list[QThread] = []
-        self._workers: list[_TaskWorker] = []
+        self._runner = TaskRunner(self)
         self._presets: list[PresetItem] = []
         self._last_output_folder: Path | None = None
         self._status_text = "Idle"
-        self._log_bridge: _LogBridge | None = None
-        self._log_handler: _GuiLogHandler | None = None
+        self._log_handler: logging.Handler | None = None
         self._current_phase = ""
         self._anim_dots = 0
 
         self._bind_widgets()
         self._configure_ui_defaults()
         self._wire_signals()
-        self._install_log_handler()
+        self._log_handler = install_gui_log_handler(self, self._append_log)
         self._apply_log_level()
         # Progress reporting: the pipeline calls a plain callback per phase; the bridge turns each
         # call into a queued signal so the animated status updates safely from the worker thread.
-        self._progress_bridge = _ProgressBridge(self)
+        self._progress_bridge = ProgressBridge(self)
         self._progress_bridge.phase.connect(self._on_phase)
         self._run_timer = QTimer(self)
         self._run_timer.setInterval(350)
         self._run_timer.timeout.connect(self._tick_running_animation)
         if app is not None:
-            app.aboutToQuit.connect(self._wait_for_threads)
+            app.aboutToQuit.connect(self._runner.wait_all)
         QTimer.singleShot(0, self._load_presets_async)
 
     def _load_ui(self) -> QMainWindow:
@@ -230,9 +201,9 @@ class MainController(QObject):
         self.log_edit.document().setMaximumBlockCount(5000)
         self.window.resize(1000, 860)
         self.window.setWindowTitle("Model ATLAS Transformer")
-        self.window.setWindowIcon(QIcon(str(_asset_path(DESKTOP_ICON_ASSET))))
+        self.window.setWindowIcon(QIcon(str(header_assets.asset_path(header_assets.DESKTOP_ICON_ASSET))))
         self.window.setStyleSheet(build_stylesheet())
-        self._configure_header_assets()
+        header_assets.configure_header_assets(self.window)
         self._configure_ufdr_toggle()
         self.single_preset_notice_label.setVisible(False)
         accessibility.configure_status_label(self)
@@ -254,6 +225,9 @@ class MainController(QObject):
             action = menu.addAction(spec.label)
             action.setCheckable(True)
             action.setToolTip(spec.description)
+            # The primary CSV is now an exporter like any other; check it by default so an
+            # untouched run still writes the merged/per-preset CSV (unchecking it opts out).
+            action.setChecked(spec.name == "csv")
             action.toggled.connect(lambda _checked: self._sync_export_button_text())
             self._export_actions[spec.name] = action
         self.additional_export_button.setMenu(menu)
@@ -291,13 +265,19 @@ class MainController(QObject):
         """Rebuild the entity/linked_entity completion list for the current input path."""
         self._entity_completion_model.setStringList(param_completions(self.source_edit.text().strip()))
 
+    def _on_source_changed(self, _text: str) -> None:
+        """Source path changed: refresh entity completion and re-evaluate the single-preset
+        notice, whose truthfulness depends on whether the source is a single non-archive file."""
+        self._refresh_entity_completion()
+        self._sync_single_preset_notice()
+
     def _wire_signals(self) -> None:
         self.source_file_button.clicked.connect(self._browse_source_file)
         self.source_folder_button.clicked.connect(self._browse_source_folder)
         self.presets_folder_button.clicked.connect(self._browse_presets_folder)
         self.presets_file_button.clicked.connect(self._browse_presets_file)
         self.output_button.clicked.connect(self._browse_output)
-        self.source_edit.textChanged.connect(lambda _text: self._refresh_entity_completion())
+        self.source_edit.textChanged.connect(self._on_source_changed)
         self.presets_path_edit.editingFinished.connect(self._load_presets_async)
         self.preset_search_edit.textChanged.connect(self._render_available_presets)
         self.add_preset_button.clicked.connect(self._add_selected_presets)
@@ -357,55 +337,6 @@ class MainController(QObject):
     def _set_status(self, text: str) -> None:
         accessibility.set_status(self, text)
 
-    def _configure_header_assets(self) -> None:
-        for number in range(2, 8):
-            label = self.window.findChild(QLabel, f"headerImage{number}")
-            if label is None:
-                continue
-            label.setFixedSize(80, 60)
-            label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            pixmap = self._render_svg_pixmap(_asset_path(TRANSITION_ASSETS[number]), label)
-            if not pixmap.isNull():
-                label.setPixmap(pixmap)
-
-    def _render_svg_pixmap(self, path: Path, label: QLabel) -> QPixmap:
-        renderer = QSvgRenderer(str(path))
-        if not renderer.isValid():
-            return QPixmap()
-
-        target = label.size()
-        default_size = renderer.defaultSize()
-        if default_size.isValid() and default_size.width() > 0 and default_size.height() > 0:
-            aspect = default_size.width() / default_size.height()
-            if target.width() / target.height() > aspect:
-                render_height = target.height()
-                render_width = int(render_height * aspect)
-            else:
-                render_width = target.width()
-                render_height = int(render_width / aspect)
-        else:
-            render_width = target.width()
-            render_height = target.height()
-
-        dpr = self._device_pixel_ratio()
-        pixmap = QPixmap(max(1, int(target.width() * dpr)), max(1, int(target.height() * dpr)))
-        pixmap.setDevicePixelRatio(dpr)
-        pixmap.fill(Qt.GlobalColor.transparent)
-
-        x = (target.width() - render_width) / 2
-        y = (target.height() - render_height) / 2
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        renderer.render(painter, QRectF(x, y, render_width, render_height))
-        painter.end()
-        return pixmap
-
-    def _device_pixel_ratio(self) -> float:
-        app = QApplication.instance()
-        screen = app.primaryScreen() if app is not None else None
-        return float(screen.devicePixelRatio()) if screen is not None else 1.0
-
     def _stabilize_preset_mode_row(self) -> None:
         label = self.window.findChild(QLabel, "presetModeLabel")
         if label is not None:
@@ -415,18 +346,6 @@ class MainController(QObject):
         self.auto_preset_check.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         self.auto_preset_check.setFixedWidth(self.auto_preset_check.sizeHint().width())
 
-    def _install_log_handler(self) -> None:
-        bridge = _LogBridge(self)
-        bridge.record.connect(self._append_log)
-        handler = _GuiLogHandler(bridge)
-        handler.setFormatter(build_formatter(get_settings().logging.format))
-        handler.setLevel(logging.DEBUG)
-        root = logging.getLogger()
-        root.setLevel(logging.DEBUG)
-        root.addHandler(handler)
-        self._log_bridge = bridge
-        self._log_handler = handler
-
     def _apply_log_level(self) -> None:
         level = getattr(logging, self.log_level_combo.currentText(), logging.INFO)
         logging.getLogger("model_atlas").setLevel(level)
@@ -435,33 +354,6 @@ class MainController(QObject):
     @Slot(str, str)
     def _append_log(self, colour: str, message: str) -> None:
         self.log_edit.append(f'<span style="color:{colour}">{html.escape(message)}</span>')
-
-    def _run_thread(
-        self,
-        fn: Callable[[], Any],
-        on_finished: Callable[[Any], None],
-        on_failed: Callable[[str], None],
-    ) -> None:
-        thread = QThread(self)
-        worker = _TaskWorker(fn)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(on_finished)
-        worker.failed.connect(on_failed)
-        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
-        worker.failed.connect(thread.quit, Qt.ConnectionType.DirectConnection)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(lambda: self._threads.remove(thread) if thread in self._threads else None)
-        thread.finished.connect(lambda: self._workers.remove(worker) if worker in self._workers else None)
-        thread.finished.connect(thread.deleteLater)
-        self._threads.append(thread)
-        self._workers.append(worker)
-        thread.start()
-
-    def _wait_for_threads(self) -> None:
-        for thread in list(self._threads):
-            if thread.isRunning():
-                thread.wait()
 
     def _browse_source_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -504,33 +396,26 @@ class MainController(QObject):
             self._load_presets_async()
 
     def _browse_output(self) -> None:
-        if self.merge_outputs_check.isChecked():
-            path, _ = QFileDialog.getSaveFileName(
-                self.window,
-                "Choose merged output CSV",
-                self.output_edit.text() or str(Path.cwd() / "out" / "merged.csv"),
-                "CSV (*.csv);;All files (*)",
-            )
-        else:
-            path = QFileDialog.getExistingDirectory(
-                self.window,
-                "Choose output folder",
-                self.output_edit.text() or str(Path.cwd() / "out"),
-            )
+        # --output is a folder in both modes: the merged CSV is written inside it as merged.csv,
+        # or one CSV per preset in split mode. Always pick a directory.
+        path = QFileDialog.getExistingDirectory(
+            self.window,
+            "Choose output folder",
+            self.output_edit.text() or str(Path.cwd() / "out"),
+        )
         if path:
             self.output_edit.setText(path)
 
     def _sync_output_mode(self, *, clear_output: bool = False) -> None:
         if clear_output:
             self.output_edit.clear()
+        # The output is a folder in both modes; only the placeholder hints at what lands inside.
+        self.output_label.setText("Output folder")
+        self.output_button.setText("Folder...")
         if self.merge_outputs_check.isChecked():
-            self.output_label.setText("Output CSV")
-            self.output_edit.setPlaceholderText("merged.csv")
-            self.output_button.setText("Save as...")
+            self.output_edit.setPlaceholderText("folder (merged.csv is written inside)")
         else:
-            self.output_label.setText("Output folder")
             self.output_edit.setPlaceholderText("folder for per-preset CSV output")
-            self.output_button.setText("Folder...")
         accessibility.update_output_accessibility(self)
 
     def _load_presets_async(self) -> None:
@@ -539,7 +424,7 @@ class MainController(QObject):
             return
         self.preset_status_label.setText("Loading presets...")
         self.preset_status_label.setAccessibleDescription("Loading presets.")
-        self._run_thread(
+        self._runner.run(
             lambda: [
                 PresetItem(spec.name, spec.path)
                 for spec in load_preset_specs(presets_path)
@@ -694,24 +579,13 @@ class MainController(QObject):
     def _sync_single_preset_notice(self) -> None:
         selected_mode = not self.auto_preset_check.isChecked()
         selected_paths = [Path(path) for path in self._selected_preset_paths()]
-        visible = self._single_preset_for_selector_skip(selected_mode, selected_paths) is not None
+        visible = _should_show_single_preset_notice(
+            selected_mode, selected_paths, len(self._presets), self.source_edit.text()
+        )
         self.single_preset_notice_label.setVisible(visible)
         self.single_preset_notice_label.setAccessibleDescription(
             "One preset will be applied without filename selector filtering." if visible else ""
         )
-
-    def _preset_without_selector_filters(self, preset_path: Path, target_dir: Path) -> Path:
-        raw = yaml.safe_load(preset_path.read_text(encoding="utf-8")) or {}
-        selectors = raw.get("selectors")
-        if isinstance(selectors, list):
-            raw["selectors"] = [
-                {"source_type": selector["source_type"]}
-                for selector in selectors
-                if isinstance(selector, dict) and "source_type" in selector
-            ] or selectors
-        target = target_dir / preset_path.name
-        target.write_text(yaml.safe_dump(raw, sort_keys=False, allow_unicode=True), encoding="utf-8")
-        return target
 
     def _run_process(self) -> None:
         source = self.source_edit.text().strip()
@@ -724,10 +598,7 @@ class MainController(QObject):
             self._show_error("Choose a preset folder or YAML file.")
             return
         if not output:
-            if self.merge_outputs_check.isChecked():
-                self._show_error("Choose an output CSV path.")
-            else:
-                self._show_error("Choose an output folder.")
+            self._show_error("Choose an output folder.")
             return
         entity = self.entity_edit.text().strip() or None
         linked_entity = self.linked_entity_edit.text().strip()
@@ -748,65 +619,69 @@ class MainController(QObject):
         self._set_running(True)
         self._last_output_folder = None
         self.open_output_folder_button.setEnabled(False)
-        traceability_format = self.traceability_combo.currentText()
-        include_source_columns = self.include_source_columns_check.isChecked()
         # Read the checked exporters on the GUI thread; the worker only uses this captured list.
         exports = self._selected_exports()
-        # The worker reports phases through this thread-safe signal emit (see _ProgressBridge).
-        progress = self._progress_bridge.phase.emit
         self._apply_log_level()
 
-        def task() -> ProcessResult:
-            if single_preset is not None:
-                with tempfile.TemporaryDirectory(prefix="matlas-single-preset-") as tmp:
-                    relaxed_preset = self._preset_without_selector_filters(single_preset, Path(tmp))
-                    return process(
-                        Path(source),
-                        relaxed_preset,
-                        output_path,
-                        traceability_format=traceability_format,
-                        merge=merge_outputs,
-                        entity=entity,
-                        linked_entity=linked_entity,
-                        include_source_columns=include_source_columns,
-                        exports=exports,
-                        progress=progress,
-                    )
-            if not selected_mode:
-                return process(
-                    Path(source),
-                    preset_root,
-                    output_path,
-                    traceability_format=traceability_format,
-                    merge=merge_outputs,
-                    entity=entity,
-                    linked_entity=linked_entity,
-                    include_source_columns=include_source_columns,
-                    exports=exports,
-                    progress=progress,
-                )
-            with tempfile.TemporaryDirectory(prefix="matlas-presets-") as tmp:
-                tmp_path = build_profile_preset_folder(selected_paths, Path(tmp))
-                return process(
-                    Path(source),
-                    tmp_path,
-                    output_path,
-                    traceability_format=traceability_format,
-                    merge=merge_outputs,
-                    entity=entity,
-                    linked_entity=linked_entity,
-                    include_source_columns=include_source_columns,
-                    exports=exports,
-                    progress=progress,
-                )
+        # Build the process() keyword arguments once; they are identical across preset modes,
+        # which differ only in how the presets path is resolved (see _resolve_presets_path).
+        kwargs = dict(
+            traceability_format=self.traceability_combo.currentText(),
+            merge=merge_outputs,
+            entity=entity,
+            linked_entity=linked_entity,
+            include_source_columns=self.include_source_columns_check.isChecked(),
+            exports=exports,
+            # The worker reports phases through this thread-safe signal emit (see ProgressBridge).
+            progress=self._progress_bridge.phase.emit,
+        )
 
-        self._run_thread(task, self._on_process_done, self._on_process_failed)
+        def task() -> ProcessResult:
+            # ExitStack owns any TemporaryDirectory created for the selected-presets folder, so
+            # process() runs while it is still alive and it is cleaned up once process() returns.
+            with ExitStack() as stack:
+                presets_path = self._resolve_presets_path(stack, single_preset, selected_mode, preset_root, selected_paths)
+                return process(Path(source), presets_path, output_path, **kwargs)
+
+        self._runner.run(task, self._on_process_done, self._on_process_failed)
+
+    def _resolve_presets_path(
+        self,
+        stack: ExitStack,
+        single_preset: Path | None,
+        selected_mode: bool,
+        preset_root: Path,
+        selected_paths: list[Path],
+    ) -> Path:
+        """Resolve the presets path passed to process() for the current preset mode.
+
+        Three cases collapse to one process() call: the single preset's path straight through
+        (force-preset mode applies it without filename selector filtering for a single-file
+        source), the preset root (auto matching), or a temporary folder assembled from the
+        selected presets (registered on the ExitStack so it lives for the run and is then removed).
+        """
+        if single_preset is not None:
+            return single_preset
+        if not selected_mode:
+            return preset_root
+        tmp = stack.enter_context(tempfile.TemporaryDirectory(prefix="matlas-presets-"))
+        return build_profile_preset_folder(selected_paths, Path(tmp))
 
     def _on_process_done(self, result: ProcessResult) -> None:
         self._set_running(False)
         outputs = [result.output_csv] if result.output_csv is not None else list(result.output_csvs)
         outputs = [path for path in outputs if path is not None]
         if not outputs:
+            if result.output_extras:
+                # CSV was deselected but other exports were written — not an empty run.
+                self._last_output_folder = result.output_extras[0].parent
+                self.open_output_folder_button.setEnabled(True)
+                summary = f"Completed: no CSV selected; wrote {len(result.output_extras)} export(s)"
+                self._set_status(summary)
+                log.info(summary)
+                for extra in result.output_extras:
+                    log.info(f"Export: {extra}")
+                return
             self._set_status("Completed: no rows produced")
             log.warning("No rows produced: no discovered source matched a preset.")
             return
@@ -908,41 +783,3 @@ class MainController(QObject):
 
     def _show_error(self, message: str) -> None:
         QMessageBox.warning(self.window, "Model Atlas", message)
-
-
-def main(argv: list[str] | None = None) -> int:
-    from PySide6.QtWidgets import QApplication
-
-    app = QApplication(sys.argv[:1] + (argv or []))
-    app.setStyle("Fusion")
-    configure_application_font(app)
-    _install_sigint_handler(app)
-    controller = MainController()
-    controller.window.show()
-    return int(app.exec())
-
-
-def _install_sigint_handler(app: object) -> None:
-    """Make terminal Ctrl+C terminate the GUI process immediately.
-
-    Qt's C++ event loop never yields to the Python interpreter, so a SIGINT
-    handler installed in Python alone never runs while ``app.exec()`` blocks. A
-    periodic no-op QTimer wakes the interpreter often enough to let pending
-    signals be delivered.
-    """
-    from PySide6.QtCore import QTimer
-
-    def _handle_sigint(signum: int, _frame: object) -> None:
-        try:
-            sys.stderr.write("\nInterrupted by Ctrl+C; exiting.\n")
-            sys.stderr.flush()
-        finally:
-            os._exit(128 + signum)
-
-    signal.signal(signal.SIGINT, _handle_sigint)
-
-    timer = QTimer()
-    timer.start(200)
-    timer.timeout.connect(lambda: None)
-    # Keep a reference on the app so the timer is not garbage-collected.
-    app._sigint_timer = timer

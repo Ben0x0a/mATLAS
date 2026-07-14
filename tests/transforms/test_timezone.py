@@ -31,10 +31,10 @@ _CSV = "Lat,Timestamp - UTC+02:00 ,Item\n1.5,2025-06-06 13:00:00,A\n"
 def test_captured_timezone_is_applied_end_to_end(tmp_path: Path) -> None:
     (tmp_path / "tz.csv").write_text(_CSV, encoding="utf-8")
     (tmp_path / "p.yaml").write_text(_PRESET, encoding="utf-8")
-    out = tmp_path / "out.csv"
+    out = tmp_path / "out"
 
-    process(tmp_path / "tz.csv", tmp_path / "p.yaml", out, linked_entity="subject")
-    row = next(csv.DictReader(out.open(encoding="utf-8-sig"), delimiter=";"))
+    result = process(tmp_path / "tz.csv", tmp_path / "p.yaml", out, linked_entity="subject")
+    row = next(csv.DictReader(result.output_csv.open(encoding="utf-8-sig"), delimiter=";"))
 
     # 13:00 at the captured +02:00 == 11:00:00 UTC.
     expected = int(dt.datetime(2025, 6, 6, 11, 0, 0, tzinfo=dt.timezone.utc).timestamp()) * 1_000_000

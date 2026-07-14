@@ -3,6 +3,7 @@ peek_fields, and list_subtables — the per-format behaviour behind the uniform 
 from __future__ import annotations
 
 import sqlite3
+import zipfile
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -10,7 +11,7 @@ import pytest
 pytest.importorskip("openpyxl")
 from openpyxl import Workbook
 
-from model_atlas.sources.container import FilesystemContainer, SourceFile
+from model_atlas.sources.container import FilesystemContainer, SourceFile, ZipContainer
 from model_atlas.sources.readers.csv_reader import CsvReader
 from model_atlas.sources.readers.excel_reader import ExcelReader
 from model_atlas.sources.readers.sqlite_reader import SqliteReader
@@ -128,6 +129,63 @@ def test_sqlite_sql_query_path(tmp_path: Path) -> None:
     assert len(res.dataframe) == 2
     assert res.metadata["subunit"] == "query"
     assert res.metadata["custom_sql"] is not None
+
+
+def test_sqlite_peek_fields_rejects_quoted_table_name(tmp_path: Path) -> None:
+    # A table name carrying a double quote must be refused by quote_identifier, so peek_fields
+    # returns None ("cannot verify") rather than interpolating it into the PRAGMA or crashing.
+    _db(tmp_path / "x.sqlite")
+    reader, file = SqliteReader(), _file(tmp_path, "x.sqlite")
+
+    class _Sel:
+        table = 't" ) ; DROP TABLE t ; --'
+
+    assert reader.peek_fields(file, _Sel()) is None
+
+
+def test_sqlite_peek_staging_fast_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Regression: a probe must NOT copy+hash the db per candidate. A loose file is opened in
+    # place read-only immutable (zero stagings); a zip-contained db is staged at most once and
+    # reused across subsequent probes (mirroring XmlReader's per-source cache).
+    db = _db(tmp_path / "src.sqlite")
+
+    class _Sel:
+        table = "t"
+
+    # --- zip entry: staged at most once across two peeks ---
+    archive = tmp_path / "a.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("data/x.sqlite", db.read_bytes())
+    zc = ZipContainer(path=archive)
+    zfile = next(f for f in zc.files() if f.name == "x.sqlite")
+    zip_calls = 0
+    real_zip_stage = zc.stage_group
+
+    def zip_spy(*args, **kwargs):
+        nonlocal zip_calls
+        zip_calls += 1
+        return real_zip_stage(*args, **kwargs)
+
+    monkeypatch.setattr(zc, "stage_group", zip_spy)
+    reader = SqliteReader()
+    assert reader.peek_fields(zfile, _Sel()) == {"id", "lat", "lon"}
+    assert reader.peek_fields(zfile, _Sel()) == {"id", "lat", "lon"}
+    assert zip_calls <= 1
+
+    # --- loose file: never staged ---
+    loose = _file(tmp_path, "src.sqlite")
+    loose_calls = 0
+    real_loose_stage = loose.container.stage_group
+
+    def loose_spy(*args, **kwargs):
+        nonlocal loose_calls
+        loose_calls += 1
+        return real_loose_stage(*args, **kwargs)
+
+    monkeypatch.setattr(loose.container, "stage_group", loose_spy)
+    reader2 = SqliteReader()
+    assert reader2.peek_fields(loose, _Sel()) == {"id", "lat", "lon"}
+    assert loose_calls == 0
 
 
 def test_sqlite_reader_requires_exactly_one_of_table_or_sql(tmp_path: Path) -> None:

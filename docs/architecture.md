@@ -48,9 +48,11 @@ The package-level API is:
 from model_atlas import ProcessResult, process
 ```
 
-`process(input_path, presets_path, output, *, traceability_format, merge, entity,
-linked_entity)` is the main entry point. In merge mode, `output` is a CSV path. In
-split mode, `output` is a folder for per-preset CSVs. `entity`/`linked_entity`, when
+`process(input_path, presets_path, output, *, base_name, traceability_format, merge,
+entity, linked_entity)` is the main entry point. `output` is a folder in both modes;
+`base_name` (default `merged`) is the stem for run-level artefacts. In merge mode it
+writes `<output>/<base_name>.csv`; in split mode it writes one CSV per preset inside
+`<output>`. `entity`/`linked_entity`, when
 supplied, override the values a preset maps; the preset mapping is the default used
 only when the argument is absent. It returns a `ProcessResult` with row
 counts, matched/unmatched sources, warnings, and output paths. Launchers and GUI

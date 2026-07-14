@@ -8,7 +8,8 @@ from pathlib import Path
 import yaml
 
 from model_atlas.presets.spec import preset_spec_from_yaml
-from model_atlas.transforms.assemble import BuildEnv, build_rows
+from model_atlas.transforms.assemble import BuildEnv
+from tests.support import build_rows
 
 _COCOA_EPOCH = dt.datetime(2001, 1, 1, tzinfo=dt.timezone.utc)
 

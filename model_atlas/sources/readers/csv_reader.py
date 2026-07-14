@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import logging
-import shutil
 from typing import Any
 
 import pandas as pd
 
-from model_atlas.sources.container import SourceFile, acquire_source
+from model_atlas.sources.container import SourceFile, staged_source
 from model_atlas.sources.readers.base import RECOVERY_LIVE, ReadResult, register_reader
 from model_atlas.sources.staging import STAGING_TIER, should_copy
 
@@ -25,16 +24,13 @@ class CsvReader:
         skip_rows = int(params.get("skip_rows", 0) or 0)
         header_row = int(params.get("header_row", 0) or 0)
         container = file.container
-        staged = acquire_source(container, file, copy=should_copy(self.staging_mode, params.get("_tier")))
-        try:
+        with staged_source(
+            container, file, copy=should_copy(self.staging_mode, params.get("_tier"))
+        ) as staged:
             df = pd.read_csv(
                 staged.path, sep=delimiter, encoding=encoding,
                 skiprows=skip_rows, header=header_row,
             )
-            container.finalize(staged)
-        finally:
-            if staged.temp_dir is not None:
-                shutil.rmtree(staged.temp_dir, ignore_errors=True)
         columns = tuple(str(c) for c in df.columns)
         return ReadResult(
             dataframe=df,

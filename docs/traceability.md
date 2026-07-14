@@ -14,14 +14,30 @@ CSV, Excel, and direct SQLite source. The before/after pair is recorded in the
 traceability sidecar. A mismatch is flagged as a warning and recorded in the
 sidecar — it does not abort the run.
 
+## The run database is the full record
+
+Since the relational core (see [relational_model.md](relational_model.md)), the complete,
+queryable record of a run is the **run database** — the in-memory SQLite store projected to
+the flat CSV via the `assertion_flat` view. Selecting the `sqlite` export persists it to
+`<base>.matlas.sqlite`: every relational table (`run`, `source`, `record`, `entity`,
+`position`, `timespan`, `assertion`) plus the `assertion_flat` view, so an examiner can query
+what the flat CSV cannot answer. Row-level provenance lives there, once per source/record,
+rather than repeated per output row.
+
+The JSON sidecars below are the **human-readable summaries** of that record — small enough to
+skim in a text editor. They are not the authoritative store; the run database is.
+
 ## Traceability Sidecars
 
-The `process` command writes two JSON sidecars next to each output CSV. For
-`output.csv`:
+The `process` command writes two JSON sidecars inside the `--output` folder,
+anchored on the run's base name (merge mode) or each preset's CSV (split mode).
+They are written whenever at least one artefact is produced for that frame, so
+traceability exists even when the `csv` export is deselected. For a base name of
+`merged`:
 
 ```text
-output.matlas.traceability.json
-output.matlas.warnings.json
+merged.matlas.traceability.json
+merged.matlas.warnings.json
 ```
 
 ### Human-readable traceability (default)
@@ -47,8 +63,10 @@ Each entry in `sources` records:
 - `parser` — parser name and version from the preset;
 - `source_tier` — evidential tier declared in the preset;
 - `record_count` — rows extracted from the source;
-- `assertion_count` — assertion rows produced after mapping;
-- `frontier` — P/E/M frontier report (see below).
+- `assertion_count` — assertion rows produced after mapping.
+
+The per-source **P/E/M frontier** is *not* duplicated here — it lives in the warnings sidecar
+(the model-shift report), keeping the traceability document to source identity and provenance.
 
 ### PROV-JSON traceability (`--traceability-format prov`)
 
@@ -66,8 +84,8 @@ and warnings sidecars.
 
 - `transform_warnings` — list of per-row mapping warnings;
 - `transform_warning_count` — total warning count;
-- `frontier` — per-source P/E/M frontier (same data as in the traceability
-  sidecar, here for quick inspection without opening the larger file).
+- `frontier` — per-source P/E/M frontier (the model-shift report; it lives here only,
+  no longer duplicated in the traceability sidecar).
 
 ## P/E/M Frontier
 

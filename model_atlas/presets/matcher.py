@@ -1,9 +1,11 @@
 """File-centric preset matching.
 
-Defines:    detect_file_format (open-once magic detection of a SourceFile) and
-            match_file (path/name pre-filter -> type guard -> structural tie-break).
+Defines:    match_files_detailed (path/name pre-filter -> type guard -> required-field
+            gate -> structural tie-break, returning matches + unsatisfied units) and
+            resolve_force_selector (force-preset in-file sub-unit resolution).
 Used by:    the pipeline.
-Depends on: sources (Container/SourceFile, pathmatch, format_detect), presets.spec.
+Depends on: sources (Container/SourceFile, pathmatch, format_detect, readers), presets.spec,
+            presets.fields (field_refs/make_resolver/required_fields/structural_score).
 
 Iteration is per file: each SourceFile is matched independently, so a selector that fans
 out (a ``name`` present in many folders, or a ``{uuid}`` path) applies the preset to each
@@ -12,41 +14,26 @@ reader params.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import zipfile
 from typing import Callable
 
+from model_atlas.presets.fields import (
+    field_refs,
+    make_resolver,
+    required_fields,
+    structural_score,
+)
 from model_atlas.presets.spec import InputSelector, PresetSpec
 from model_atlas.sources.container import SourceFile
-from model_atlas.sources.format_detect import detect_format
+from model_atlas.sources.format_detect import detect_source_format
 from model_atlas.sources.pathmatch import name_matches, path_matches
+from model_atlas.sources.readers import get_reader
 
 log = logging.getLogger(__name__)
 
-_HEAD = 512
-
 PeekFn = Callable[[SourceFile, InputSelector], "set[str] | None"]
-
-
-def detect_file_format(file: SourceFile) -> str | None:
-    """Open the file once and magic-detect its format (a few KB + a zip central-dir peek)."""
-    container = file.container
-    try:
-        with container.open(file) as fh:
-            head = fh.read(_HEAD)
-    except (OSError, KeyError, zipfile.BadZipFile):
-        log.debug(f"Could not read {file.logical_path} for format detection", exc_info=True)
-        return None
-
-    def peek_zip() -> list[str]:
-        try:
-            with container.open(file) as fh:
-                with zipfile.ZipFile(fh) as zf:
-                    return zf.namelist()
-        except (OSError, zipfile.BadZipFile):
-            return []
-
-    return detect_format(head, peek_zip, file.logical_path.suffix)
 
 
 def _file_namespace(file: SourceFile) -> str | None:
@@ -68,23 +55,6 @@ def _selector_location_matches(selector: InputSelector, file: SourceFile, root_p
     if selector.path is not None:
         return path_matches(selector.path, file.logical_path, root_prefix_depth=root_prefix_depth)
     return False
-
-
-def _structural_score(preset: PresetSpec, columns: set[str]) -> int:
-    """+1 per declared field present, -2 per absent. Uses ``expected_fields`` when set,
-    else the fields the mapping references. Imported lazily to avoid a module cycle."""
-    from model_atlas.reporting import _field_refs
-    from model_atlas.transforms.assemble import make_resolver
-
-    signature = list(preset.expected_fields) or _field_refs(preset)
-    resolve = make_resolver(sorted(columns))
-    present = absent = 0
-    for ref in signature:
-        if resolve(ref) is not None:
-            present += 1
-        else:
-            absent += 1
-    return present - 2 * absent
 
 
 def _subunit_key(selector: InputSelector) -> tuple:
@@ -109,7 +79,7 @@ def _tie_break(
     scored: list[tuple[int, int, tuple[PresetSpec, InputSelector]]] = []
     for order, (preset, selector) in enumerate(group):
         columns = peek(file, selector)
-        score = _structural_score(preset, columns) if columns is not None else 0
+        score = structural_score(preset, columns) if columns is not None else 0
         scored.append((score, -order, (preset, selector)))
     best_score, _, best = max(scored)
     ranked = sorted((s for s, _, _ in scored), reverse=True)
@@ -131,8 +101,6 @@ def _missing_required(
     columns = peek(file, selector)
     if columns is None:
         return set()
-    from model_atlas.reporting import required_fields
-
     return required_fields(preset) - set(columns)
 
 
@@ -145,7 +113,7 @@ def match_files_detailed(
 ) -> tuple[list[tuple[PresetSpec, InputSelector]], list[tuple[PresetSpec, InputSelector, set[str]]]]:
     """Match a SourceFile, returning (matches, unsatisfied).
 
-    1. Location pre-filter (name-only); 2. type/namespace guard; 3. applicability gate — a
+    1. Location pre-filter (name or path); 2. type/namespace guard; 3. applicability gate — a
     preset only matches if ALL its REQUIRED (mapped, non-optional) fields are present;
     4. one winner per distinct in-file unit (model/table/sheet) via structural tie-break.
 
@@ -165,7 +133,7 @@ def match_files_detailed(
         return [], []
 
     # Step 2 — type/namespace guard.
-    detected = detect_file_format(file)
+    detected = detect_source_format(file)
     file_namespace = _file_namespace(file) if detected == "xml" else None
     candidates: list[tuple[PresetSpec, InputSelector]] = []
     for preset, selector in located:
@@ -202,24 +170,50 @@ def match_files_detailed(
     return matches, unsatisfied
 
 
-def match_files(
-    file: SourceFile,
-    presets: list[PresetSpec],
-    *,
-    root_prefix_depth: int = 1,
-    peek: PeekFn | None = None,
-) -> list[tuple[PresetSpec, InputSelector]]:
-    """The matched (preset, selector) pairs for a file (see match_files_detailed)."""
-    return match_files_detailed(file, presets, root_prefix_depth=root_prefix_depth, peek=peek)[0]
+def resolve_force_selector(
+    file: SourceFile, preset: PresetSpec, detected: str | None
+) -> InputSelector:
+    """Force mode: ignore location, but verify ``format`` and resolve the in-file sub-unit.
 
+    Picks the first selector whose format matches the file (hard error on mismatch), then
+    for excel/sqlite falls back to a structurally-best sheet/table when the declared one is
+    absent (force-mode only — auto matching stays precise)."""
+    selectors = [s for s in preset.input_selectors if s.format == detected]
+    if not selectors:
+        raise ValueError(
+            f"force-preset format mismatch: {file.logical_path} is {detected}, "
+            f"preset {preset.name!r} declares {[s.format for s in preset.input_selectors]}"
+        )
+    selector = selectors[0]
+    reader = get_reader(selector.format)
+    if selector.format == "csv" or selector.sql:
+        return selector  # csv: whole file; sql: run as written (a missing table just errors)
 
-def match_file(
-    file: SourceFile,
-    presets: list[PresetSpec],
-    *,
-    root_prefix_depth: int = 1,
-    peek: PeekFn | None = None,
-) -> tuple[PresetSpec, InputSelector] | None:
-    """Back-compat single-match: the first of ``match_files`` (or None)."""
-    matches = match_files(file, presets, root_prefix_depth=root_prefix_depth, peek=peek)
-    return matches[0] if matches else None
+    declared = selector.sheet if selector.format == "excel" else selector.table
+    subtables = reader.list_subtables(file)
+    if declared in subtables:
+        return selector
+
+    # Choose the qualifying sub-unit (all referenced columns present) with the best score.
+    refs = list(preset.expected_fields) or field_refs(preset)
+    best: tuple[int, str] | None = None
+    for sub in subtables:
+        probe = dataclasses.replace(
+            selector, **({"sheet": sub} if selector.format == "excel" else {"table": sub})
+        )
+        columns = reader.peek_fields(file, probe)
+        if columns is None:
+            continue
+        resolve = make_resolver(sorted(columns))
+        if all(resolve(ref) is not None for ref in refs):
+            score = structural_score(preset, columns)
+            if best is None or score > best[0]:
+                best = (score, sub)
+    if best is None:
+        raise ValueError(
+            f"force-preset {preset.name!r}: no {selector.format} sub-unit in "
+            f"{file.logical_path} satisfies the mapped fields"
+        )
+    return dataclasses.replace(
+        selector, **({"sheet": best[1]} if selector.format == "excel" else {"table": best[1]})
+    )

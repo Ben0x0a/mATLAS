@@ -3,7 +3,7 @@
 Defines:    untangle() — assigns record_type (main/additional) and record_rank to
             assertions that fall in the same time group, ranked by horizontal accuracy
             then completeness.
-Used by:    the v2 pipeline.
+Used by:    the v3 pipeline.
 Depends on: model.families column names, pandas.
 
 Time grouping resolution: acquisition tools round timestamps to the second, so two

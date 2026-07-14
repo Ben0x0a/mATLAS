@@ -3,7 +3,7 @@
 Defines:    the P/E/M frontier report, a human-readable traceability record, a
             PROV-JSON traceability record, and the warnings report.
 Used by:    pipeline.
-Depends on: presets.spec, transforms.assemble (field resolver).
+Depends on: presets.spec, presets.fields (field_refs + resolver).
 
 The frontier follows the P/E/M view: Present source fields, Expected (declared
 inventory), Mapped (consumed). The gaps are the research backlog and drift signals.
@@ -15,52 +15,14 @@ import fnmatch
 from pathlib import Path
 from typing import Any
 
-from model_atlas.presets.spec import FieldSpec, PresetSpec
-from model_atlas.transforms.assemble import make_resolver
+from model_atlas.presets.fields import field_refs, make_resolver
+from model_atlas.presets.spec import PresetSpec
 
 _ISO = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime(_ISO)
-
-
-def _field_refs(preset: PresetSpec, *, include_optional: bool = True) -> list[str]:
-    """Field/header names a preset references in its mappings.
-
-    ``include_optional=False`` drops fields flagged ``optional: true`` — used to compute the
-    REQUIRED fields (a preset's hard dependencies). The time bounds are always required (an
-    assertion without its instant cannot be built), so they are included regardless.
-    """
-    refs: list[str] = []
-
-    def add(spec: FieldSpec | None) -> None:
-        if spec is None or (not include_optional and spec.optional):
-            return
-        if spec.field is not None:
-            refs.append(spec.field)
-        if spec.from_name_pattern is not None:
-            refs.append(spec.from_name_pattern)
-
-    if preset.source_record_uid is not None:
-        add(preset.source_record_uid)
-    for spec in preset.common:
-        add(spec)
-    for template in preset.assertions:
-        for spec in template.fields:
-            add(spec)
-        for temporal in template.temporal:
-            refs.extend([temporal.lower_field, temporal.upper_field])  # time is required
-            add(temporal.zone)
-            for override in temporal.overrides:
-                add(override)
-    return refs
-
-
-def required_fields(preset: PresetSpec) -> set[str]:
-    """The fields a preset hard-depends on (mapped, non-optional). A source missing any of
-    these cannot be faithfully mapped by this preset, so it does not match."""
-    return {ref for ref in _field_refs(preset, include_optional=False) if ref is not None}
 
 
 def frontier_report(preset: PresetSpec, present_fields: list[str]) -> dict[str, Any]:
@@ -71,7 +33,7 @@ def frontier_report(preset: PresetSpec, present_fields: list[str]) -> dict[str, 
     patterns = list(preset.expected_fields)
     # Present fields covered by some expected entry (exact or glob).
     expected_present = {c for c in present if any(fnmatch.fnmatch(c, p) for p in patterns)}
-    refs = [ref for ref in _field_refs(preset) if ref is not None]
+    refs = [ref for ref in field_refs(preset) if ref is not None]
     mapped = {resolved for ref in refs if (resolved := resolve(ref)) is not None}
     # Referenced field names that resolve to nothing present (an exact name absent from the
     # source, or a glob matching no field) — a preset authoring error or a schema drift.
@@ -95,7 +57,17 @@ def build_traceability_readable(
     *, started_at: str, input_path: Path, presets_path: Path, output_csv: Path | None,
     row_counts: dict[str, int], sources: list[dict[str, Any]], warning_count: int,
 ) -> dict[str, Any]:
-    """A run record meant to be skimmed by a human."""
+    """A run record meant to be skimmed by a human.
+
+    The per-source ``frontier`` (P/E/M) object is dropped here: it is the model-shift report and
+    lives in the warnings sidecar. The full record is the run database; these sidecars are the
+    readable summaries (see docs/traceability.md), so the traceability keeps only the source
+    identity/provenance fields, not the duplicated frontier detail.
+    """
+    slim_sources = [
+        {key: value for key, value in source.items() if key != "frontier"}
+        for source in sources
+    ]
     return {
         "tool": {"name": "matlas", "pipeline": "v1", "app_tag": "matlas"},
         "run": {
@@ -107,7 +79,7 @@ def build_traceability_readable(
         },
         "row_counts": row_counts,
         "warnings": warning_count,
-        "sources": sources,
+        "sources": slim_sources,
     }
 
 

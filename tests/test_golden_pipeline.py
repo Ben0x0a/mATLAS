@@ -58,14 +58,16 @@ def _diff_report(expected: str, actual: str) -> str:
 
 @pytest.mark.parametrize("case", _CASES)
 def test_pipeline_output_matches_golden(case: str, tmp_path: Path) -> None:
-    produced = tmp_path / "out.csv"
     input_path = _GOLDEN / "cached.csv"
-    process(
+    # --output is a folder now; the merged CSV lands inside as merged.csv (base name default).
+    result = process(
         input_path,
         _GOLDEN / f"{case}_cached.preset.yaml",
-        produced,
+        tmp_path / "out",
         linked_entity="subject",
     )
+    produced = result.output_csv
+    assert produced == tmp_path / "out" / "merged.csv"
     actual = produced.read_text(encoding="utf-8")
     # §7.1: input_file_path is the full filesystem path of the opened artifact, which is
     # machine-specific. Assert it appears, then normalise it so the golden stays portable.

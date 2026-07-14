@@ -25,9 +25,13 @@ From a clone of this folder:
 python matlas.py process \
   --input ./evidence \
   --presets ./presets \
-  --output ./out/merged.csv \
+  --output ./out \
+  --name merged \
   --linked-entity "Case Subject"
 ```
+
+`--output` is a **folder** in both merge and split modes. `--name` (default
+`merged`) is the stem for the run-level artefacts written inside it.
 
 `--linked-entity` is required: it names the case subject every output row is
 attributed to. `--entity` is optional. When supplied, these arguments **override**
@@ -38,12 +42,12 @@ Useful options:
 
 ```bash
 python matlas.py process --help
-python matlas.py --log-level DEBUG process --input ./evidence --presets ./presets --output ./out/merged.csv --linked-entity Subject
-python matlas.py process --input ./evidence --presets ./presets --output ./out/merged.csv --linked-entity Subject --entity iPhone
-python matlas.py process --input ./evidence --presets ./presets --output ./out/merged.csv --linked-entity Subject --traceability-format prov
+python matlas.py --log-level DEBUG process --input ./evidence --presets ./presets --output ./out --linked-entity Subject
+python matlas.py process --input ./evidence --presets ./presets --output ./out --linked-entity Subject --entity iPhone
+python matlas.py process --input ./evidence --presets ./presets --output ./out --linked-entity Subject --traceability-format prov
 python matlas.py process --input ./evidence --presets ./presets --output ./out/by-preset --no-merge --linked-entity Subject
-python matlas.py process --input ./evidence --presets ./presets --output ./out/merged.csv --linked-entity Subject --no-source-columns
-python matlas.py process --input ./evidence --profile ./profiles/ios-locations.mATLAS-profile --output ./out/merged.csv --linked-entity Subject
+python matlas.py process --input ./evidence --presets ./presets --output ./out --linked-entity Subject --no-source-columns
+python matlas.py process --input ./evidence --profile ./profiles/ios-locations.mATLAS-profile --output ./out --linked-entity Subject
 ```
 
 By default every original source column is appended verbatim to the output, prefixed
@@ -55,14 +59,14 @@ When `--input` is a single file that resolves to exactly one source element and
 preset without selector matching, which is handy for testing a new preset against
 one file.
 
-Merge-mode outputs:
+Merge-mode outputs (written inside the `--output` folder, stem from `--name`):
 
 - `merged.csv`
 - `merged.matlas.traceability.json`
 - `merged.matlas.warnings.json`
 
-In split mode (`--no-merge`), `--output` is a folder and mATLAS writes one CSV
-per matched preset with sidecars next to each CSV.
+In split mode (`--no-merge`), mATLAS writes one CSV per matched preset inside the
+`--output` folder with sidecars next to each CSV.
 
 `--log-level INFO` is the default and records the main processing phases.
 `--log-level DEBUG` records precise discovery, preset matching, extraction,
@@ -143,7 +147,7 @@ They are a CLI/GUI convenience for curated preset sets.
 python matlas.py process \
   --input ./evidence \
   --profile ./profiles/ios-locations.mATLAS-profile \
-  --output ./out/merged.csv
+  --output ./out
 ```
 
 ## Forensic Defaults

@@ -17,7 +17,8 @@ import yaml
 from model_atlas.presets.spec import preset_spec_from_yaml
 from dataclasses import replace
 
-from model_atlas.transforms.assemble import BuildEnv, build_rows, to_records
+from model_atlas.transforms.assemble import BuildEnv, to_records
+from tests.support import build_rows
 
 _ENV = BuildEnv(input_file_path="/dev/v.csv", input_file_name="v.csv", source_fingerprint="fp123", source_file_path="/dev/file", source_tier="secondary")
 
@@ -84,6 +85,21 @@ def test_source_columns_passthrough_on_every_pivoted_row() -> None:
     # Opt-out drops the passthrough columns.
     frame_off, _ = build_rows([record], _preset(_VISITS), _ENV, fields=columns, include_source_columns=False)
     assert not any(f"orig_{c}" in frame_off.columns for c in columns)
+
+
+def test_source_column_prefix_overrides_passthrough_names() -> None:
+    # A custom source_column_prefix renames every passthrough column from orig_<col> to
+    # <prefix><col>, on every fanned-out row, without touching the canonical schema.
+    record = {"Lat": "1.5", "Lon": "2.5", "Entry": "100", "Exit": "200", "Created": "150",
+              "Loc": "ZTABLE(1)", "ItemID": "A1", "City": "Geneva"}
+    columns = ["Lat", "Lon", "Entry", "Exit", "Created", "Loc", "ItemID", "City"]
+    frame, _ = build_rows([record], _preset(_VISITS), _ENV, fields=columns, source_column_prefix="src_")
+    assert len(frame) == 2
+    assert list(frame.columns)[-len(columns):] == [f"src_{c}" for c in columns]
+    assert not any(c.startswith("orig_") for c in frame.columns)
+    for _, row in frame.iterrows():
+        assert row["src_City"] == "Geneva"
+        assert row["src_Lat"] == "1.5"
 
 
 def test_linked_entity_literal_applies_to_every_row() -> None:

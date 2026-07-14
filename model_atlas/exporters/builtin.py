@@ -1,10 +1,13 @@
 """Built-in additional exporters, shipped with mATLAS and registered on import.
 
-Defines:    sqlite / geojson / xlsx / kml / geovisualizer exporters via @register_exporter.
+Defines:    csv / sqlite / geojson / xlsx / kml / geovisualizer exporters via @register_exporter.
+            ``csv`` is the primary flat-assertion CSV — the default export when none is selected
+            (see model_atlas.pipeline), so the merged/per-preset CSV is no longer a special case.
 Used by:    exporters.__init__ (imported for its registration side effects).
-Depends on: exporters.registry, pandas, and the standard library (sqlite3, xml.etree, csv,
-            json, math, datetime). Column names are the OUTPUT_COLUMNS literals produced by the
-            assembly engine (model.families) — the same string-key idiom used across the codebase.
+Depends on: exporters.registry, model_atlas.export (write_csv / CSV_DELIMITER), pandas, and the
+            standard library (sqlite3, xml.etree, csv, json, math, datetime). Column names are the
+            OUTPUT_COLUMNS literals produced by the assembly engine (model.families) — the same
+            string-key idiom used across the codebase.
 
 These double as worked examples of the drop-in exporter contract: fn(ctx) -> list[Path].
 """
@@ -22,7 +25,7 @@ from xml.etree.ElementTree import Element, ElementTree, SubElement
 
 import pandas as pd
 
-from model_atlas.export import CSV_DELIMITER
+from model_atlas.export import CSV_DELIMITER, write_csv
 from model_atlas.exporters.registry import ExportContext, register_exporter
 
 # Cross-platform epoch anchor (see transforms.builtin): timedelta arithmetic is valid across the
@@ -60,18 +63,44 @@ def _out(ctx: ExportContext, tag: str, ext: str) -> Path:
     return ctx.output_dir / f"{ctx.base_name}.{tag}.{ext}"
 
 
-# --- sqlite / geojson / xlsx / kml -----------------------------------------
+# --- csv (primary) / sqlite / geojson / xlsx / kml -------------------------
 
-@register_exporter("sqlite", "SQLite database", "All assertion rows in one SQLite table 'assertions'.")
+@register_exporter("csv", "CSV (flat assertion rows)", "The flat assertion-row CSV (the primary output).")
+def export_csv(ctx: ExportContext) -> list[Path]:
+    # The primary CSV: written straight to <output_dir>/<base_name>.csv (no ``.<tag>`` infix, unlike
+    # the sibling exporters) via the shared write_csv so it stays byte-identical to the former
+    # dedicated writer path. base_name is the run stem in merge mode, the preset stem in split mode.
+    ctx.output_dir.mkdir(parents=True, exist_ok=True)
+    out = ctx.output_dir / f"{ctx.base_name}.csv"
+    write_csv(ctx.dataframe, out)
+    return [out]
+
+
+@register_exporter(
+    "sqlite", "Run database",
+    "Run database (relational model + assertion_flat view).",
+)
 def export_sqlite(ctx: ExportContext) -> list[Path]:
-    out = _out(ctx, "assertions", "sqlite")
+    """Persist the FULL run database: every relational table (run / source / record / entity /
+    position / timespan / assertion) plus the ``assertion_flat`` view, backed up from the store's
+    live connection. Supersedes the former single ``assertions`` table dump — the view now
+    provides that same flat projection (``SELECT * FROM assertion_flat``).
+
+    A run with no store connection wired (``ctx.connection is None``) writes nothing — the flat
+    frame it would otherwise dump is already available via the ``csv`` export.
+    """
+    if ctx.connection is None:
+        return []
+    out = _out(ctx, "matlas", "sqlite")
     if out.exists():
-        out.unlink()   # start clean so no stale table/data survives across runs
-    connection = sqlite3.connect(out)
+        out.unlink()   # start clean so no stale database survives across runs
+    # backup() copies the whole schema + data; the source connection is in autocommit mode
+    # (RunStore), so there is no open write transaction to make backup() spin on SQLITE_BUSY.
+    destination = sqlite3.connect(out)
     try:
-        ctx.dataframe.to_sql("assertions", connection, if_exists="replace", index=False)
+        ctx.connection.backup(destination)
     finally:
-        connection.close()
+        destination.close()
     return [out]
 
 

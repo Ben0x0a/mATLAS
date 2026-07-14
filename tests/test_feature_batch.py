@@ -52,7 +52,7 @@ def test_force_preset_applies_despite_selector_mismatch(tmp_path: Path) -> None:
     source = _write_csv(tmp_path)
     preset = tmp_path / "p.yaml"
     preset.write_text(_PRESET_OTHER_NAME, encoding="utf-8")
-    output = tmp_path / "out.csv"
+    output = tmp_path / "out"
 
     result = process(source, preset, output, linked_entity="subject")
 
@@ -64,10 +64,10 @@ def test_from_file_tokens_populate_fields(tmp_path: Path) -> None:
     source = _write_csv(tmp_path)
     preset = tmp_path / "p.yaml"
     preset.write_text(_PRESET_OTHER_NAME, encoding="utf-8")
-    output = tmp_path / "out.csv"
+    output = tmp_path / "out"
 
     process(source, preset, output, linked_entity="subject")
-    row = _read_rows(output)[0]
+    row = _read_rows(output / "merged.csv")[0]
 
     assert row["input_record_id"] == "data.csv"      # from_file: name
     assert row["source_label"] == "data"          # from_file: stem
@@ -78,10 +78,10 @@ def test_entity_and_linked_entity_defaults_fill_when_preset_omits(tmp_path: Path
     source = _write_csv(tmp_path)
     preset = tmp_path / "p.yaml"
     preset.write_text(_PRESET_OTHER_NAME, encoding="utf-8")  # sets neither entity nor linked_entity
-    output = tmp_path / "out.csv"
+    output = tmp_path / "out"
 
     process(source, preset, output, entity="device-7", linked_entity="Daphne")
-    row = _read_rows(output)[0]
+    row = _read_rows(output / "merged.csv")[0]
 
     assert row["entity"] == "device-7"
     assert row["linked_entity"] == "Daphne"
@@ -96,11 +96,11 @@ def test_run_level_entity_overrides_preset(tmp_path: Path) -> None:
     source = _write_csv(tmp_path)
     preset = tmp_path / "p.yaml"
     preset.write_text(_PRESET_WITH_ENTITY, encoding="utf-8")
-    output = tmp_path / "out.csv"
+    output = tmp_path / "out"
 
     # The arg is authoritative; the preset's entity is only the default.
     process(source, preset, output, entity="run-level", linked_entity="Daphne")
-    row = _read_rows(output)[0]
+    row = _read_rows(output / "merged.csv")[0]
 
     assert row["entity"] == "run-level"
 
@@ -109,11 +109,11 @@ def test_preset_entity_used_when_no_arg(tmp_path: Path) -> None:
     source = _write_csv(tmp_path)
     preset = tmp_path / "p.yaml"
     preset.write_text(_PRESET_WITH_ENTITY, encoding="utf-8")
-    output = tmp_path / "out.csv"
+    output = tmp_path / "out"
 
     # No --entity: the preset default stands.
     process(source, preset, output, linked_entity="Daphne")
-    row = _read_rows(output)[0]
+    row = _read_rows(output / "merged.csv")[0]
 
     assert row["entity"] == "preset-entity"
 
@@ -137,7 +137,7 @@ def test_process_requires_linked_entity_argument(tmp_path: Path) -> None:
     preset = tmp_path / "p.yaml"
     preset.write_text(_PRESET_OTHER_NAME, encoding="utf-8")
     with pytest.raises(TypeError):
-        process(source, preset, tmp_path / "out.csv")  # type: ignore[call-arg]
+        process(source, preset, tmp_path / "out")  # type: ignore[call-arg]
 
 
 def test_cli_requires_linked_entity() -> None:
@@ -194,10 +194,10 @@ def test_sqlite_roundtrip_releases_file(tmp_path: Path) -> None:
 
     preset = tmp_path / "s.yaml"
     preset.write_text(_SQLITE_PRESET, encoding="utf-8")
-    output = tmp_path / "out.csv"
+    output = tmp_path / "out"
 
     result = process(db, preset, output, linked_entity="subject")
     assert result.row_counts["rows"] == 1
-    row = _read_rows(output)[0]
+    row = _read_rows(output / "merged.csv")[0]
     assert row["latitude_wgs84"] == "1.5"
     assert row["time_lower_unix_utc_us"] == "1700000000000000"

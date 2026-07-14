@@ -1,6 +1,8 @@
 """Container & SourceFile — a folder and an archive are the same thing.
 
-Defines:    Container (Protocol), SourceFile, FilesystemContainer, ZipContainer.
+Defines:    Container (Protocol), SourceFile, FilesystemContainer, ZipContainer, the
+            acquire_source / staged_source / staged_group staging helpers, and the
+            _sibling_pairs WAL/SHM/journal pairing helper.
             A Container is a namespace of files addressable by a logical path; it hands
             out cheap metadata (``files``), opens claimed files (``open``), and stages a
             throwaway copy with kind-aware integrity (``stage`` / ``stage_group``).
@@ -19,9 +21,10 @@ import logging
 import shutil
 import tempfile
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Iterable, Protocol, runtime_checkable
+from typing import BinaryIO, Iterable, Iterator, Protocol, runtime_checkable
 
 from model_atlas.integrity import sha256_file
 from model_atlas.sources.staging import StagedFile, StagedGroup
@@ -87,6 +90,18 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _sibling_pairs(sibling_suffixes: tuple[str, ...]) -> Iterable[tuple[str, str]]:
+    """(key, suffix) pairs among wal/shm/journal restricted to the requested suffixes.
+
+    The three sidecar kinds are always paired to their canonical suffix in the same order;
+    a caller narrows the set by passing a subset of ``DEFAULT_SIBLING_SUFFIXES``. Shared so
+    the staging/finalize sites cannot drift on the key<->suffix mapping.
+    """
+    for key, suffix in zip(("wal", "shm", "journal"), DEFAULT_SIBLING_SUFFIXES):
+        if suffix in sibling_suffixes:
+            yield key, suffix
+
+
 def acquire_source(container: "Container", file: SourceFile, *, copy: bool) -> StagedFile:
     """Materialise a file for a reader: a throwaway copy, or an in-place reference.
 
@@ -110,6 +125,48 @@ def acquire_source(container: "Container", file: SourceFile, *, copy: bool) -> S
                    "verification_after": None},
         temp_dir=None,
     )
+
+
+@contextmanager
+def staged_source(
+    container: "Container", file: SourceFile, *, copy: bool, finalize: bool = True
+) -> Iterator[StagedFile]:
+    """Stage a file for a reader, yield the StagedFile, then finalize-on-success + always-clean.
+
+    ``container.finalize`` runs only on a NORMAL exit (after the caller's read succeeds) and
+    is skipped entirely if the body raises — forensically, the origin is re-hashed to prove
+    it was untouched only once a real read completed; a failed read makes no such claim.
+    The temp copy is removed on BOTH success and failure so a throwaway never outlives the
+    call. ``finalize=False`` is for read-only probes (peek/list) that make no integrity claim.
+    ``finalize`` mutates ``staged.integrity`` in place before cleanup, so the caller may read
+    ``staged.fingerprint`` / ``staged.integrity`` after the with-block.
+    """
+    staged = acquire_source(container, file, copy=copy)
+    try:
+        yield staged
+        if finalize:
+            container.finalize(staged)
+    finally:
+        if staged.temp_dir is not None:
+            shutil.rmtree(staged.temp_dir, ignore_errors=True)
+
+
+@contextmanager
+def staged_group(
+    container: "Container", file: SourceFile, *, finalize: bool = True
+) -> Iterator[StagedGroup]:
+    """Stage a db + its WAL/SHM/journal siblings, yield the StagedGroup, then finalize-on-
+    success + always-clean — the group counterpart of ``staged_source`` (same semantics and
+    WHY: originals re-hashed only after a successful read; the temp group never outlives the
+    call). ``finalize=False`` for read-only probes."""
+    staged = container.stage_group(file)
+    try:
+        yield staged
+        if finalize:
+            container.finalize(staged)
+    finally:
+        if staged.temp_dir is not None:
+            shutil.rmtree(staged.temp_dir, ignore_errors=True)
 
 
 class _ClosingZipStream:
@@ -197,9 +254,7 @@ class FilesystemContainer:
         shutil.copy2(original, db_dest)
         members["db"] = db_dest
         before_hashes["db"] = sha256_file(original)
-        for key, suffix in zip(("wal", "shm", "journal"), DEFAULT_SIBLING_SUFFIXES):
-            if suffix not in sibling_suffixes:
-                continue
+        for key, suffix in _sibling_pairs(sibling_suffixes):
             sib = original.with_name(file.name + suffix)
             if sib.exists():
                 dest = temp_dir / (file.name + suffix)
@@ -226,7 +281,7 @@ class FilesystemContainer:
             before = staged.integrity["source_hashes_before"]
             original = self._abspath(staged.origin)
             after = {"db": sha256_file(original)}
-            for key, suffix in zip(("wal", "shm", "journal"), DEFAULT_SIBLING_SUFFIXES):
+            for key, suffix in _sibling_pairs(DEFAULT_SIBLING_SUFFIXES):
                 if key in before:
                     after[key] = sha256_file(original.with_name(staged.origin.name + suffix))
             staged.integrity["ok"] = after == before
@@ -335,9 +390,7 @@ class ZipContainer:
             found["db"] = db_info
             self._extract_entry(zf, db_info, temp_dir / file.name)
             members["db"] = temp_dir / file.name
-            for key, suffix in zip(("wal", "shm", "journal"), DEFAULT_SIBLING_SUFFIXES):
-                if suffix not in sibling_suffixes:
-                    continue
+            for key, suffix in _sibling_pairs(sibling_suffixes):
                 sib_path = file.logical_path.with_name(file.name + suffix)
                 try:
                     info = self._find_info(zf, sib_path)

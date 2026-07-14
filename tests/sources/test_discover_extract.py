@@ -137,7 +137,8 @@ def test_zip_path_match_with_wal(tmp_path: Path) -> None:
     result = process(archive, presets, out, linked_entity="subj", traceability_format="prov")
 
     assert result.row_counts["rows"] == 2
-    rows = list(csv.DictReader(out.read_text(encoding="utf-8").splitlines(), delimiter=";"))
+    produced = result.output_csv
+    rows = list(csv.DictReader(produced.read_text(encoding="utf-8").splitlines(), delimiter=";"))
     # §7.1: input_file_path is the FULL path of the outermost artifact = the input zip.
     assert rows[0]["input_file_path"] == str(archive)
     assert "input_file" not in rows[0]                     # the old column is gone
@@ -146,7 +147,7 @@ def test_zip_path_match_with_wal(tmp_path: Path) -> None:
     # recovery_state is captured on the enrichment, NOT written to the CSV.
     assert "recovery_state" not in rows[0]
 
-    prov = json.loads(out.with_suffix(".matlas.traceability.json").read_text())
+    prov = json.loads(produced.with_suffix(".matlas.traceability.json").read_text())
     source = prov["entity"]["matlas:source/0"]
     assert source["matlas:input_file_path"] == str(archive)
     assert source["matlas:container_chain"] == ["EXTRACTION_FFS.zip"]
@@ -166,8 +167,8 @@ def test_folder_zip_parity(tmp_path: Path) -> None:
     # zip source
     archive = tmp_path / "dump.zip"
     _zip_with_db(archive, db)
-    zip_out = tmp_path / "zip.csv"
-    process(archive, presets, zip_out, linked_entity="subj")
+    zip_out = tmp_path / "zip"
+    zip_result = process(archive, presets, zip_out, linked_entity="subj")
 
     # loose folder source at the same logical path
     folder = tmp_path / "loose"
@@ -175,11 +176,11 @@ def test_folder_zip_parity(tmp_path: Path) -> None:
     loose_dir.mkdir(parents=True)
     shutil.copy2(db, loose_dir / "db.sqlite")
     shutil.copy2(db.with_name(db.name + "-wal"), loose_dir / "db.sqlite-wal")
-    folder_out = tmp_path / "folder.csv"
-    process(folder, presets, folder_out, linked_entity="subj")
+    folder_out = tmp_path / "folder"
+    folder_result = process(folder, presets, folder_out, linked_entity="subj")
 
-    zip_rows = list(csv.DictReader(zip_out.read_text(encoding="utf-8").splitlines(), delimiter=";"))
-    folder_rows = list(csv.DictReader(folder_out.read_text(encoding="utf-8").splitlines(), delimiter=";"))
+    zip_rows = list(csv.DictReader(zip_result.output_csv.read_text(encoding="utf-8").splitlines(), delimiter=";"))
+    folder_rows = list(csv.DictReader(folder_result.output_csv.read_text(encoding="utf-8").splitlines(), delimiter=";"))
     # input_file_path differs (zip path vs loose db path); everything else is identical.
     drop = ("input_file_path",)
     assert _canonical(zip_rows, drop) == _canonical(folder_rows, drop)
@@ -193,8 +194,8 @@ def test_loose_file_container_chain_empty(tmp_path: Path) -> None:
     presets.write_text(_CSV_PRESET, encoding="utf-8")
     out = tmp_path / "out.csv"
 
-    process(folder, presets, out, linked_entity="subj", traceability_format="prov")
-    prov = json.loads(out.with_suffix(".matlas.traceability.json").read_text())
+    result = process(folder, presets, out, linked_entity="subj", traceability_format="prov")
+    prov = json.loads(result.output_csv.with_suffix(".matlas.traceability.json").read_text())
     assert prov["entity"]["matlas:source/0"]["matlas:container_chain"] == []
 
 
@@ -215,7 +216,7 @@ def test_folder_of_archives_is_descended(tmp_path: Path) -> None:
     result = process(folder, presets, out, linked_entity="subj", traceability_format="prov")
 
     assert result.row_counts["rows"] == 2                  # descended into the zip in the folder
-    prov = json.loads(out.with_suffix(".matlas.traceability.json").read_text())
+    prov = json.loads(result.output_csv.with_suffix(".matlas.traceability.json").read_text())
     source = prov["entity"]["matlas:source/0"]
     assert source["matlas:container_chain"] == ["EXTRACTION_FFS.zip"]
     assert source["matlas:input_file_path"] == str(archive)  # the zip, not the folder
@@ -541,8 +542,13 @@ def test_folder_with_multiple_zips_all_descended(tmp_path: Path) -> None:
 
     result = process(folder, presets, tmp_path / "out.csv", linked_entity="subj")
 
-    assert result.row_counts["rows"] == 4                  # 2 rows x 2 zips
+    # Both zips are opened and matched (depth 0->1). Their inner database is BYTE-IDENTICAL, so
+    # under Phase C's content-addressed run-wide store the two acquisitions produce the SAME
+    # assertions (folder==zip parity: row_uid excludes the outer artefact path) and dedupe to one
+    # copy — 2 rows, not the former 4. Discovery/extraction still descend both zips (matched == 2);
+    # it is the store that collapses byte-identical evidence rather than double-counting it.
     assert len(result.matched) == 2
+    assert result.row_counts["rows"] == 2
 
 
 def test_direct_zip_nested_archive_explored_at_depth_2(tmp_path: Path) -> None:
@@ -595,9 +601,9 @@ def test_traceability_emits_all_detail_keys(tmp_path: Path) -> None:
     presets.write_text(_SQLITE_PRESET_PATH, encoding="utf-8")
     out = tmp_path / "out.csv"
 
-    process(archive, presets, out, linked_entity="subj", traceability_format="prov")
+    result = process(archive, presets, out, linked_entity="subj", traceability_format="prov")
 
-    src = json.loads(out.with_suffix(".matlas.traceability.json").read_text())["entity"]["matlas:source/0"]
+    src = json.loads(result.output_csv.with_suffix(".matlas.traceability.json").read_text())["entity"]["matlas:source/0"]
     assert src["matlas:raw_source_path"] == "filesystem1/private/var/db.sqlite"
     assert src["matlas:input_file_path"] == str(archive)
     assert src["matlas:input_file_name"] == "EXTRACTION_FFS.zip"

@@ -1,8 +1,8 @@
-"""Recursive loader for declarative (v2) preset specs.
+"""Recursive loader for declarative (v3) preset specs.
 
 Defines:    load_preset_specs() — read and parse every *.yaml preset under a path,
             skipping template placeholders.
-Used by:    the v2 pipeline.
+Used by:    the v3 pipeline.
 Depends on: presets.spec, pyyaml.
 """
 from __future__ import annotations

@@ -165,7 +165,8 @@ def test_build_rows_breadcrumb_names_failing_record() -> None:
     import yaml
 
     from model_atlas.presets.spec import preset_spec_from_yaml
-    from model_atlas.transforms.assemble import BuildEnv, build_rows
+    from model_atlas.transforms.assemble import BuildEnv
+    from tests.support import build_rows
 
     preset_yaml = """
 preset: {id: t.crumb, name: Crumb, version: 1.0, tier: secondary}

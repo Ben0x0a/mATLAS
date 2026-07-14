@@ -1,10 +1,19 @@
-"""Assembly engine: build flat assertion rows from extracted data + a v3 preset.
+"""Assembly engine: build typed six-family assertions from extracted data + a v3 preset.
 
-Defines:    BuildEnv (pipeline-derived defaults), to_records (NaN->None), make_resolver
-            (glob field resolver), and build_rows (the fan-out + reference + pipe +
-            raw-capture engine).
-Used by:    the pipeline.
-Depends on: model.families (columns/types/units), presets.spec + expr, transforms.
+Defines:    BuildEnv (pipeline-derived defaults), to_records (NaN->None) and build_assertions
+            (the fan-out + reference + pipe + raw-capture engine, emitting typed family
+            objects into a RunStore and returning its transform warnings + the assertion count).
+Used by:    the pipeline (fills one run-wide store) and the test helper ``tests.support``.
+Depends on: model.families (the family dataclasses + columns/types/units), model.store
+            (RunStore + the single passthrough-naming helper), presets.spec + expr +
+            fields (resolver), transforms.
+
+Phase C (docs/relational_model.md): the pipeline creates ONE RunStore per run and
+build_assertions fills it per matched source (registering the ``source`` row with its
+record/assertion counts). The record body composes a SpatioTemporalAssertion and adds it
+to the store instead of appending a flat dict; the flat working dict is kept only as the
+mutable holder the resolution logic writes into and the frozen families are built from at
+the end. row_uid / source_record_uid are byte-identical to before.
 
 One source row x each assertion (each with one time spec) -> one flat row. Temporal
 raw values and source fields, and the lat/lon source fields, are captured
@@ -23,7 +32,6 @@ ordinal keeps a record's fan-out rows distinct.
 from __future__ import annotations
 
 import datetime as dt
-import fnmatch
 import re
 import uuid
 from dataclasses import dataclass, replace
@@ -36,10 +44,25 @@ import model_atlas.transforms.builtin  # noqa: F401 - registers builtins
 from model_atlas.model.families import (
     OUTPUT_COLUMNS,
     UTC_OFFSET_UNKNOWN,
+    Bindings,
+    Derived,
+    Entity,
+    Provenance,
+    Spatial,
+    SpatioTemporalAssertion,
+    Temporal,
+    TemporalBound,
     column_cast,
     unit_factor,
 )
+from model_atlas.model.store import (
+    AssertionRow,
+    RecordRow,
+    RunStore,
+    SourceRow,
+)
 from model_atlas.presets.expr import Ref, parse_param_expr
+from model_atlas.presets.fields import make_resolver
 from model_atlas.presets.spec import FieldSpec, InputSelector, PresetSpec, TimeSpec
 from model_atlas.transforms.builtin import (
     ZoneToken,
@@ -61,6 +84,14 @@ from model_atlas.transforms.registry import PipeContext, run_pipe
 # Fixed namespaces so deterministic UIDs are stable across runs/machines.
 _SOURCE_ROW_NAMESPACE = uuid.UUID("6f9b1d2e-7c3a-5e41-9a2b-0c8d4e1f2a3b")
 _OUTPUT_ROW_NAMESPACE = uuid.UUID("b3a0c1d2-4e5f-5a6b-8c9d-0e1f2a3b4c5d")
+# Namespace for the per-source id (fingerprint|raw_source_path|preset_id). Not projected to
+# the flat frame this phase; it keys the SourceRow so records can point back to their source.
+_SOURCE_NAMESPACE = uuid.UUID("2d1c0b3a-6e5f-5c4b-9a8d-1f0e3a2b5c4d")
+
+# Who asserted the entity->linked_entity attribution: the operator (a run-level
+# --linked-entity) or a preset mapping. Stored on AssertionRow, never in the flat frame.
+ATTRIBUTION_OPERATOR = "operator_param"
+ATTRIBUTION_PRESET = "preset_mapped"
 
 # Columns NOT folded into the row_uid content digest: machine-specific paths, the ids
 # themselves (circular), run/preset metadata, and untangle-computed ranks. What remains is
@@ -135,32 +166,6 @@ def to_records(dataframe: pd.DataFrame) -> list[dict[str, Any]]:
         {column: (None if _is_missing(value) else value) for column, value in row.items()}
         for row in dataframe.to_dict(orient="records")
     ]
-
-
-def make_resolver(fields: list[str]) -> Callable[[str | None], str | None]:
-    """Resolve a field reference (exact name or glob) to an actual source field.
-
-    A glob (``* ? [``) must match exactly one field; several is a hard error, none
-    yields None. A plain name resolves to itself only if present."""
-    available = list(fields)
-    cache: dict[str, str | None] = {}
-
-    def resolve(pattern: str | None) -> str | None:
-        if pattern is None:
-            return None
-        if pattern in cache:
-            return cache[pattern]
-        if any(ch in pattern for ch in "*?["):
-            matches = fnmatch.filter(available, pattern)
-            if len(matches) > 1:
-                raise ValueError(f"field pattern {pattern!r} matched multiple fields: {matches}")
-            actual = matches[0] if matches else None
-        else:
-            actual = pattern if pattern in available else None
-        cache[pattern] = actual
-        return actual
-
-    return resolve
 
 
 def _coerce_scalar(value: Any, target: str) -> Any:
@@ -372,26 +377,78 @@ def _ref_label(ref: Ref) -> str | None:
     return ref.arg if ref.kind in ("field", "header") else None
 
 
-# Prefix for verbatim source-column passthrough. NOT ``raw_`` — that is already used by
-# canonical columns (``raw_position``, ``raw_source_path``).
-PASSTHROUGH_PREFIX = "orig_"
+def _assertion_from_flat(flat: dict[str, Any]) -> SpatioTemporalAssertion:
+    """Compose the six frozen families from the fully-assembled flat working dict.
 
-
-def _passthrough_column_names(source_fields: list[str]) -> dict[str, str]:
-    """Map each source field to its ``orig_<field>`` output column name, preserving source order.
-
-    A name that would collide with a canonical column is disambiguated with a trailing
-    ``_``. The mapping is a pure function of the field name, so it is identical across
-    sources (stable merges)."""
-    used = set(OUTPUT_COLUMNS)
-    names: dict[str, str] = {}
-    for col in source_fields:
-        name = f"{PASSTHROUGH_PREFIX}{col}"
-        while name in used:
-            name += "_"
-        names[col] = name
-        used.add(name)
-    return names
+    HOW: every canonical column is read by name from ``flat`` (which carries the whole
+    ``OUTPUT_COLUMNS`` key set) into the family field of the same name, so
+    ``assertion.to_flat_row()`` re-emits exactly the value the pre-model engine held.
+    WHY: the resolution logic still writes scattered ``model_field`` values into one dict
+    (the mutable holder); building the frozen dataclasses here — not incrementally — keeps
+    the model immutable while guaranteeing byte-parity with the previous flat frame. The
+    controlled-vocabulary fields receive the raw resolved strings verbatim (``to_flat_row``
+    passes non-enum values through unchanged), so the projection is identical."""
+    return SpatioTemporalAssertion(
+        entity=Entity(
+            entity=flat["entity"],
+            entity_type=flat["entity_type"],
+            linked_entity=flat["linked_entity"],
+        ),
+        temporal=Temporal(
+            lower=TemporalBound(
+                raw=flat["time_lower_raw"],
+                source_field=flat["time_lower_source_field"],
+                unix_us=flat["time_lower_unix_utc_us"],
+            ),
+            upper=TemporalBound(
+                raw=flat["time_upper_raw"],
+                source_field=flat["time_upper_source_field"],
+                unix_us=flat["time_upper_unix_utc_us"],
+            ),
+            utc_offset_hours=flat["utc_offset_hours"],
+            accuracy_us=flat["time_accuracy_us"],
+            temporal_source=flat["temporal_source"],
+        ),
+        spatial=Spatial(
+            latitude_wgs84=flat["latitude_wgs84"],
+            latitude_source_field=flat["latitude_source_field"],
+            longitude_wgs84=flat["longitude_wgs84"],
+            longitude_source_field=flat["longitude_source_field"],
+            altitude_m=flat["altitude_m"],
+            position_type=flat["position_type"],
+            raw_position=flat["raw_position"],
+            position_source=flat["position_source"],
+            horizontal_accuracy_m=flat["horizontal_accuracy_m"],
+            vertical_accuracy_m=flat["vertical_accuracy_m"],
+            horizontal_speed_kmh=flat["horizontal_speed_kmh"],
+            vertical_speed_kmh=flat["vertical_speed_kmh"],
+            horizontal_speed_accuracy_kmh=flat["horizontal_speed_accuracy_kmh"],
+            vertical_speed_accuracy_kmh=flat["vertical_speed_accuracy_kmh"],
+            heading_deg=flat["heading_deg"],
+            heading_accuracy_deg=flat["heading_accuracy_deg"],
+            beam_azimuth_deg=flat["beam_azimuth_deg"],
+            beam_width_deg=flat["beam_width_deg"],
+        ),
+        bindings=Bindings(
+            entity_position_link=flat["entity_position_link"],
+            entity_time_link=flat["entity_time_link"],
+            spatial_temporal_link=flat["spatial_temporal_link"],
+        ),
+        provenance=Provenance(
+            raw_source_path=flat["raw_source_path"],
+            input_file_path=flat["input_file_path"],
+            input_record_id=flat["input_record_id"],
+            source_record_uid=flat["source_record_uid"],
+            row_uid=flat["row_uid"],
+            preset_id=flat["preset_id"],
+            preset_name=flat["preset_name"],
+            source_label=flat["source_label"],
+            source_tier=flat["source_tier"],
+            deleted=flat["deleted"],
+        ),
+        # Untangle fills record_type / record_rank later on the flat frame; empty here.
+        derived=Derived(),
+    )
 
 
 def _record_breadcrumb(container: str | None, position: int, record: dict[str, Any]) -> str:
@@ -401,34 +458,52 @@ def _record_breadcrumb(container: str | None, position: int, record: dict[str, A
     line = position + 1
     locator = f"{container}#{line}" if container else f"#{line}"
     columns = ", ".join(str(key) for key in list(record.keys())[:20])
-    return f"mATLAS build_rows: failed while assembling source record {locator} (columns: {columns})"
+    return f"mATLAS build_assertions: failed while assembling source record {locator} (columns: {columns})"
 
 
-def build_rows(
+def build_assertions(
     records: list[dict[str, Any]],
     preset: PresetSpec,
     env: BuildEnv,
+    store: RunStore,
     *,
     selector: InputSelector | None = None,
     fields: list[str] | None = None,
-    include_source_columns: bool = True,
-) -> tuple[pd.DataFrame, list[str]]:
-    """Build the flat canonical rows for one extracted source.
+    container_chain: str | None = None,
+    recovery_state: tuple[str, ...] | None = None,
+) -> tuple[list[str], int]:
+    """Assemble one extracted source into typed assertions, adding them to ``store``.
 
-    When ``include_source_columns`` is set, every original source field is appended
-    verbatim as an ``orig_<field>`` column (after the canonical schema). The values are
-    taken from the source record, so each assertion a row fans out into carries the same
-    passthrough columns.
+    Each source record fans out into one or more ``SpatioTemporalAssertion`` objects (one
+    per assertion template x time spec); the composed families and the verbatim source row
+    are added to the store as ``AssertionRow`` / ``RecordRow``. Returns ``(warnings,
+    assertion_count)`` — the transform warnings and the number of assertions produced (used
+    by the pipeline for its per-source log line and the ``source`` row's counts).
+    ``container_chain`` is the human-readable outer..inner container path recorded on the
+    ``source`` row. ``recovery_state`` is the reader's row-aligned enrichment (live / wal /
+    ...), stored per record but NOT projected to the flat frame this phase.
     """
-    rows: list[dict[str, Any]] = []
     warnings: list[str] = []
     seen_ids: dict[str, int] = {}
+    assertion_count = 0
     source_fields = fields if fields is not None else (list(records[0].keys()) if records else [])
     resolve = make_resolver(source_fields)
-    passthrough_names = _passthrough_column_names(source_fields) if include_source_columns else {}
     ctx = PipeContext(lookup_tables=preset.lookup_tables, patterns=preset.patterns)
     preset_values = _preset_values(preset, selector)
     container = _source_container(selector)
+
+    # Deterministic source id (fingerprint|raw_source_path|preset_id) so the same source read
+    # from a folder or a zip yields the same SourceRow; it keys the records back to their
+    # source. The source row itself is added AFTER the record loop below, once the record and
+    # assertion counts are known (SQLite foreign keys are not enforced here, so the records may
+    # reference it before it exists). Not projected to the flat frame beyond input_file_path /
+    # preset_id / preset_name.
+    source_id = str(uuid.uuid5(
+        _SOURCE_NAMESPACE, f"{env.source_fingerprint}|{env.raw_source_path}|{preset.meta.id}"))
+    # The entity->linked_entity attribution came from the operator when a run-level
+    # linked_entity was supplied, otherwise from the preset mapping. Carried on every
+    # AssertionRow; never a flat-frame column.
+    attribution_origin = ATTRIBUTION_OPERATOR if env.linked_entity is not None else ATTRIBUTION_PRESET
 
     # A run-level entity / linked_entity may itself be a call-form reference (e.g.
     # ``field(Evidence number)``) so ONE file carrying several subjects resolves per row.
@@ -446,9 +521,10 @@ def build_rows(
     # The per-record body is a nested function so the driving loop below can wrap each call and,
     # on any unhandled error, attach a breadcrumb naming WHICH source record failed (exc.add_note
     # is stdlib >= 3.11 and appears in the formatted traceback / crash report). Closures capture
-    # the resolver, context, env and the shared rows/warnings/seen_ids accumulators for free, so
-    # the body below is unchanged from the original loop body.
+    # the resolver, context, env and the shared store/warnings/seen_ids accumulators for free, so
+    # the resolution body below is unchanged from the original loop body.
     def _process_record(position: int, record: dict[str, Any]) -> None:
+        nonlocal assertion_count
         # Resolve any per-row entity / linked_entity reference into a concrete literal for
         # THIS record, so both the preset's ``param(...)`` refs and the override below see
         # the same resolved value. A plain literal (expr is None) is used as-is.
@@ -503,10 +579,17 @@ def build_rows(
             seen_ids[source_record_uid] = position
         base["source_record_uid"] = source_record_uid
 
-        # Verbatim passthrough of every source column, shared by all of this row's
-        # assertions (so a pivoted source row repeats these columns on each output row).
-        for col, name in passthrough_names.items():
-            base[name] = record.get(col)
+        # Record the verbatim source row once. Its ``orig_<col>`` passthrough columns are
+        # exploded by RunStore.to_flat_frame (not repeated per output row here). recovery_state
+        # is row-aligned engine enrichment, kept off the flat frame.
+        store.add_record(RecordRow(
+            source_record_uid=source_record_uid,
+            source_id=source_id,
+            line_no=source_line_number,
+            input_record_id=base["input_record_id"],
+            recovery_state=recovery_state[position] if recovery_state is not None else None,
+            raw=dict(record),
+        ))
 
         # Each source record fans out into one or more output rows; row_uid uniquely
         # identifies each. It is a deterministic uuid5 over: the OUTPUT row's own MODEL data
@@ -530,14 +613,30 @@ def build_rows(
             for time_spec in template.temporal:
                 flat = dict(shared)
                 _apply_time(flat, time_spec, record, warnings, resolve, file_values, row_env, ctx, preset_values)
-                # Content digest over the output row's MODEL fields (excludes volatile
-                # provenance + the ids + untangle ranks); computed now that the row is fully
-                # assembled. Combined with the source scope/line and the output ordinal.
-                content_digest = "|".join(f"{c}={flat.get(c)!r}" for c in _ROW_UID_CONTENT_COLUMNS)
-                flat["row_uid"] = str(uuid.uuid5(
+                # Compose the frozen families from the now-complete flat holder (row_uid still
+                # None), then derive row_uid from the MODEL projection. The content digest
+                # excludes volatile provenance + the ids + untangle ranks (row_uid itself is a
+                # non-content column, so it does not feed its own hash).
+                assertion = _assertion_from_flat(flat)
+                flat_row = assertion.to_flat_row()
+                # row_uid hashes the model projection over the content columns (same repr,
+                # same order as the pre-model flat digest — golden tests are the parity
+                # oracle). row_uid itself is a non-content column, so it never feeds its
+                # own hash. This keeps folder==zip / cross-run stability.
+                content_digest = "|".join(f"{c}={flat_row[c]!r}" for c in _ROW_UID_CONTENT_COLUMNS)
+                row_uid = str(uuid.uuid5(
                     _OUTPUT_ROW_NAMESPACE, f"{source_scope}|{output_ordinal}|{content_digest}"))
                 output_ordinal += 1
-                rows.append(flat)
+                # Set row_uid on the frozen assertion (replace, not mutate) and store it.
+                assertion = replace(
+                    assertion, provenance=replace(assertion.provenance, row_uid=row_uid))
+                store.add_assertion(AssertionRow(
+                    row_uid=row_uid,
+                    source_record_uid=source_record_uid,
+                    assertion=assertion,
+                    attribution_origin=attribution_origin,
+                ))
+                assertion_count += 1
 
     for position, record in enumerate(records):
         try:
@@ -548,5 +647,21 @@ def build_rows(
             exc.add_note(_record_breadcrumb(container, position, record))
             raise
 
-    frame = pd.DataFrame(rows, columns=list(OUTPUT_COLUMNS) + list(passthrough_names.values()))
-    return frame, warnings
+    # Register the source now that its record/assertion counts are known. INSERT OR IGNORE
+    # keeps it idempotent should the same source be assembled twice into one store.
+    store.add_source(SourceRow(
+        source_id=source_id,
+        input_file_path=env.input_file_path,
+        container_chain=container_chain,
+        raw_source_path=env.raw_source_path,
+        source_fingerprint=env.source_fingerprint,
+        format=selector.format if selector is not None else None,
+        subunit=container,
+        preset_id=preset.meta.id,
+        preset_name=preset.meta.title,
+        source_tier=preset.source_tier or env.source_tier,
+        record_count=len(records),
+        assertion_count=assertion_count,
+    ))
+
+    return warnings, assertion_count

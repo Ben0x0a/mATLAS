@@ -1,8 +1,12 @@
 """Content-based (magic) format detection for a claimed source file.
 
 Defines:    detect_format — a magic-first ladder that classifies a file's head bytes
-            (with an optional zip central-directory peek) into a format string.
-Used by:    presets.matcher (the type guard) and discover (recognising an archive).
+            (with an optional zip central-directory peek) into a format string; and the
+            two wrappers that feed it — detect_source_format (a SourceFile) and
+            detect_path_format (an on-disk Path) — both built on the private _zip_names
+            entry-name peek. This module is the single source of truth for magic detection.
+Used by:    presets.matcher (the type guard), pipeline (input archive-vs-leaf test) and
+            discover (recognising an archive during traversal).
 Depends on: standard library only.
 
 Magic bytes always win; the suffix is consulted only for CSV/TSV, which have no
@@ -11,7 +15,21 @@ skipping even though this task ships no reader for them.
 """
 from __future__ import annotations
 
-from typing import Callable
+import logging
+import zipfile
+from typing import TYPE_CHECKING, BinaryIO, Callable
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from model_atlas.sources.container import SourceFile
+
+log = logging.getLogger(__name__)
+
+# One head-read size shared by both wrappers. The magic ladder only needs 16 bytes for the
+# SQLite/bplist/zip signatures, but the text branch scans a 512-byte window for the
+# ``<plist``/``<!doctype plist`` marker; 512 is the safe superset that covers both.
+_HEAD_BYTES = 512
 
 SQLITE_MAGIC = b"SQLite format 3\x00"
 BPLIST_MAGIC = b"bplist00"
@@ -69,3 +87,36 @@ def detect_format(
     if lowered in (".csv", ".tsv"):
         return "csv"
     return None
+
+
+def _zip_names(open_fn: Callable[[], BinaryIO]) -> list[str]:
+    """Entry names of an archive, opened via ``open_fn`` (a fresh binary stream per call).
+
+    Returns ``[]`` on any open/read failure so detection degrades gracefully (a PK file
+    whose central directory cannot be listed is classified ``archive`` rather than raising).
+    """
+    try:
+        with open_fn() as fh:
+            with zipfile.ZipFile(fh) as zf:
+                return zf.namelist()
+    except (OSError, zipfile.BadZipFile):
+        return []
+
+
+def detect_source_format(file: "SourceFile") -> str | None:
+    """Open a claimed SourceFile once and magic-detect its format (head + zip-entry peek)."""
+    container = file.container
+    try:
+        with container.open(file) as fh:
+            head = fh.read(_HEAD_BYTES)
+    except (OSError, KeyError, zipfile.BadZipFile):
+        log.debug(f"Could not read {file.logical_path} for format detection", exc_info=True)
+        return None
+    return detect_format(head, lambda: _zip_names(lambda: container.open(file)), file.logical_path.suffix)
+
+
+def detect_path_format(path: "Path") -> str | None:
+    """Magic-detect the format of an on-disk file (to tell an input archive from a leaf file)."""
+    with path.open("rb") as fh:
+        head = fh.read(_HEAD_BYTES)
+    return detect_format(head, lambda: _zip_names(lambda: path.open("rb")), path.suffix)
