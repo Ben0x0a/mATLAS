@@ -621,6 +621,7 @@ class Entity:
 
     entity_id: str        # uuid5(assertion natural key ⟂ corner tag)
     identifier: str | None            # normalised; None = purely typed mention
+    raw_identifier: str | None        # the source's own text, verbatim (decision 21)
     identifier_type: IdentifierType   # names the normalisation applied
     type: EntityType                  # what the thing is
     concerns: str | None = None
