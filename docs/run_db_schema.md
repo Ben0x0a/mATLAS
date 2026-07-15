@@ -534,6 +534,10 @@ referentials if wanted.
 
 1. Complete the link vocabularies where epistemic weight now rests (negation beyond
    NEVER_DURING_INTERVAL; reported-by-whom pairs with entity_role=reporter).
+   *Partially executed at T10*: `NEVER_DURING_INTERVAL` now also exists on
+   `EntityTimeLink` (the demo's alibi stores it there) with a derived
+   `Genesis.NEGATED` — **owner reservation (2026-07-15): its presence on the E-T
+   edge is to be re-judged against real use cases at the end; keep until then.**
 2. ~~locates~~ **resolved (decision 11)**: derived from EntityPositionLink, dropped
    from the diagram.
 3. Cross-check against the old 45-column CSV: **done and fully resolved** (F1 →
