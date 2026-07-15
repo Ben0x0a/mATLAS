@@ -45,13 +45,31 @@
 </table>
 
 <table x="1280" y="175" name="Archive">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(id_case, cd_sha256)</comment></row>
-  <row name="id_case" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Case" row="id" /></row>
-  <row name="path" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>the archive as opened</comment></row>
-  <row name="cd_sha256" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>decision 29: central-directory hash (reuses sqlite/integrity.py fingerprint_zip); dedup already-parsed archives cheaply</comment></row>
-  <row name="parsed_at" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
+  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(path) - decision 38: never the hash (2c); diffable across runs</comment></row>
+  <row name="path" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>the archive as opened; UNIQUE</comment></row>
+  <row name="cd_sha256" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>central-directory hash (reuses sqlite/integrity.py fingerprint_zip), INDEXED column - same archive bytes twice = a query/finding (GROUP BY cd_sha256)</comment></row>
   <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_archive"><part>id_case</part><part>cd_sha256</part></key>
+  <key type="UNIQUE" name="uq_archive_path"><part>path</part></key>
+</table>
+
+<table x="1450" y="175" name="Run-Archive link">
+  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(id_run, id_archive) - run metadata (decision 38)</comment></row>
+  <row name="id_run" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Run metadata" row="id" /></row>
+  <row name="id_archive" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Archive" row="id" /></row>
+  <row name="parsed_at" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
+  <row name="skipped" null="0" autoincrement="0"><datatype>INTEGER</datatype><comment>decision 38: opt-in skip, RECORDED - eligible only when a previous run parsed the same cd_sha256 with the same preset set (key+version+definition_digest)</comment></row>
+  <key type="PRIMARY" name=""><part>id</part></key>
+  <key type="UNIQUE" name="uq_run_archive"><part>id_run</part><part>id_archive</part></key>
+  <comment>Decision 38: one run opens many archives, one archive appears in many runs; every encounter recorded, skips included</comment>
+</table>
+
+<table x="60" y="120" name="Run-Preset link">
+  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(id_run, id_preset) - run metadata (decision 39)</comment></row>
+  <row name="id_run" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Run metadata" row="id" /></row>
+  <row name="id_preset" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Preset" row="id" /></row>
+  <key type="PRIMARY" name=""><part>id</part></key>
+  <key type="UNIQUE" name="uq_run_preset"><part>id_run</part><part>id_preset</part></key>
+  <comment>Decision 39: every preset SELECTED for the run, even when it yields no assertion; run.settings_json carries every operator arg/option</comment>
 </table>
 
 <table x="1050" y="121" name="Source metadata">
@@ -78,6 +96,7 @@
   <row name="key" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>stable preset key</comment></row>
   <row name="name" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
   <row name="version" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
+  <row name="definition_digest" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>decision 40: sha256 of the canonical preset definition - catches edits without a version bump; skip eligibility compares digests</comment></row>
   <key type="PRIMARY" name=""><part>id</part></key>
   <key type="UNIQUE" name="uq_preset"><part>key</part><part>version</part></key>
   <comment>Decision 27: one file matching several presets = one source, many assertions; the preset is a property of the READING</comment>
@@ -237,6 +256,7 @@
 
 <table x="240" y="20" name="Edit log">
   <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid4 - an audit event (decision 34)</comment></row>
+  <row name="ordinal" null="0" autoincrement="0"><datatype>INTEGER</datatype><comment>decision 41: monotonic UNIQUE journal position - inverse replay in reverse order = full rewind; a rewind appends inverse entries, never erases</comment></row>
   <row name="table_name" null="0" autoincrement="0"><datatype>TEXT</datatype></row>
   <row name="row_id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>the edited row's id (soft reference across tables)</comment></row>
   <row name="column" null="1" autoincrement="0"><datatype>TEXT</datatype></row>

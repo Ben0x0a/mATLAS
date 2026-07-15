@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Deterministic worked-example run database for the settled 19-table model.
+"""Deterministic worked-example run database for the settled 21-table model.
 
 WHAT THIS FILE IS
 -----------------
 A hand-written **demonstration artefact** — *not Phase-1 code*. It builds
 ``docs/examples/matlas_example.sqlite`` directly from the settled schema
-([../run_db_schema.md](../run_db_schema.md), decisions 16-34) so the model can be
+([../run_db_schema.md](../run_db_schema.md), decisions 16-41) so the model can be
 exercised with realistic data *before* ``model_atlas/model/`` derives the real DDL
 from ``families.py``. The DDL, the digest recipes and the ingest order are transcribed
 by hand here; when the core lands, this script is superseded by the pipeline and kept
@@ -26,9 +26,10 @@ DETERMINISM (the whole point)
 -----------------------------
 Every id is ``uuid5`` over natural-key parts joined with the unit separator ``\\x1f``
 (D-"id scheme"; a ``|`` in a path could otherwise forge equal keys). The *only*
-non-deterministic rows are ``case`` and ``run`` (uuid4 — the run scope, D10/D28); they
-feed no child id, so running the builder twice yields byte-identical DBs apart from
-those two id columns. Floats are captured as **source text** (never re-parsed) so the
+non-deterministic roots are ``case`` and ``run`` (uuid4 — the run scope, D10/D28);
+no EVIDENCE id derives from them, so running the builder twice yields byte-identical
+DBs apart from those two rows and the run-scoped metadata that carries the run id
+(``run_archive``/``run_preset`` links, ``source.run_id``, ``edit_log``). Floats are captured as **source text** (never re-parsed) so the
 canonical-JSON rule (schema §Determinism rule 5, no float re-formatting) holds and the
 digests stay stable.
 
@@ -204,9 +205,13 @@ CREATE TABLE run (run_id TEXT PRIMARY KEY,
 CREATE TABLE matlas_meta (schema_version TEXT, families_version TEXT,
     normalisation_ruleset TEXT, stemming_ruleset TEXT);
 CREATE TABLE archive (archive_id TEXT PRIMARY KEY,
-    case_id TEXT NOT NULL REFERENCES case_metadata(case_id),
-    path TEXT, cd_sha256 TEXT, parsed_at TEXT,
-    UNIQUE (case_id, cd_sha256));
+    path TEXT NOT NULL UNIQUE, cd_sha256 TEXT NOT NULL);
+CREATE INDEX ix_archive_cd ON archive(cd_sha256);
+CREATE TABLE run_archive (run_archive_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES run(run_id),
+    archive_id TEXT NOT NULL REFERENCES archive(archive_id),
+    parsed_at TEXT, skipped INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (run_id, archive_id));
 CREATE TABLE source (source_id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES run(run_id),
     input_file_path TEXT NOT NULL, inner_path TEXT, data_source TEXT,
@@ -216,7 +221,12 @@ CREATE TABLE source (source_id TEXT PRIMARY KEY,
     UNIQUE (run_id, input_file_path, inner_path, subunit));
 CREATE INDEX ix_source_fp ON source(fingerprint_sha256);
 CREATE TABLE preset (preset_id TEXT PRIMARY KEY,
-    key TEXT NOT NULL, name TEXT, version TEXT, UNIQUE (key, version));
+    key TEXT NOT NULL, name TEXT, version TEXT,
+    definition_digest TEXT NOT NULL, UNIQUE (key, version));
+CREATE TABLE run_preset (run_preset_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES run(run_id),
+    preset_id TEXT NOT NULL REFERENCES preset(preset_id),
+    UNIQUE (run_id, preset_id));
 CREATE TABLE raw_record (raw_record_id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL REFERENCES source(source_id), line_no INTEGER NOT NULL,
     native_record_uid TEXT, input_record_id TEXT, recovery_state TEXT,
@@ -299,6 +309,7 @@ CREATE TABLE analysis (analysis_id TEXT PRIMARY KEY,
     method TEXT NOT NULL, record_type TEXT, record_rank INTEGER,
     UNIQUE (assertion_id, method));
 CREATE TABLE edit_log (edit_id TEXT PRIMARY KEY,
+    ordinal INTEGER NOT NULL UNIQUE,
     table_name TEXT, row_id TEXT, column TEXT, old_value TEXT, new_value TEXT,
     edit_kind TEXT, edited_by TEXT, edited_at TEXT);
 
@@ -346,10 +357,19 @@ class Builder:
 
     # ---- Layer 0 ---------------------------------------------------------
     def preset(self, key: str, name: str, version: str) -> str:
-        # Content-keyed (D27): a preset's definition IS its identity.
+        # Content-keyed (D27): a preset's definition IS its identity. D40 adds a
+        # definition_digest beside the version to catch un-bumped edits; the real
+        # pipeline hashes the canonical preset YAML — the demo hashes a stub.
         pid = u5("preset", key, version)
         if (key, version) not in self._presets:
-            self.cx.execute("INSERT INTO preset VALUES (?,?,?,?)", (pid, key, name, version))
+            dd = hashlib.sha256(
+                json.dumps({"key": key, "name": name, "version": version},
+                           sort_keys=True).encode()).hexdigest()
+            self.cx.execute("INSERT INTO preset VALUES (?,?,?,?,?)",
+                            (pid, key, name, version, dd))
+            # D39: the run records every preset selected for it.
+            self.cx.execute("INSERT INTO run_preset VALUES (?,?,?)",
+                            (u5("run_preset", self.run_id, pid), self.run_id, pid))
             self._presets[(key, version)] = pid
         return pid
 
@@ -363,10 +383,15 @@ class Builder:
              json.dumps(siblings or []), exhibit, tier, None))
         return sid
 
-    def archive(self, path, cd_sha256):
-        aid = u5("archive", self.case_id, cd_sha256)
-        self.cx.execute("INSERT INTO archive VALUES (?,?,?,?,?)",
-            (aid, self.case_id, path, cd_sha256, "2026-03-15T08:00:05Z"))
+    def archive(self, path, cd_sha256, skipped=0):
+        # D38: id from the path only (2c - a content hash is never a key); the
+        # run link is a row in run_archive (one run, many archives; one archive,
+        # many runs), so every encounter - including an opt-in skip - is recorded.
+        aid = u5("archive", path)
+        self.cx.execute("INSERT INTO archive VALUES (?,?,?)", (aid, path, cd_sha256))
+        self.cx.execute("INSERT INTO run_archive VALUES (?,?,?,?,?)",
+            (u5("run_archive", self.run_id, aid), self.run_id, aid,
+             "2026-03-15T08:00:05Z", skipped))
         return aid
 
     def record(self, sid, line, raw: dict, input_record_id=None, recovery="live"):
@@ -810,10 +835,12 @@ def build() -> sqlite3.Connection:
         "subject", "claimed_at", "never_during_interval", "continuous_during_interval",
         label="alibi")
 
-    # ---- one edit_log row (D34): an analyst corrected a geocode in place --
+    # ---- one edit_log row (D34/D41): an analyst corrected a geocode in place --
     # Integration rows MAY update in place; the change is audited, evidence untouched.
-    cx.execute("INSERT INTO edit_log VALUES (?,?,?,?,?,?,?,?,?)",
-        (str(uuid.uuid4()), "spatial_integration", "(demo)", "latitude_wgs84",
+    # D41: the ordinal makes the journal totally ordered, so replaying inverses in
+    # reverse ordinal order rewinds the DB to any earlier state.
+    cx.execute("INSERT INTO edit_log VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (str(uuid.uuid4()), 1, "spatial_integration", "(demo)", "latitude_wgs84",
          "46.2029", "46.2030", "update", "insp. Girard", "2026-03-15T09:12:00Z"))
 
     cx.commit()

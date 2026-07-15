@@ -1,12 +1,12 @@
 # Example run database — requests against the settled model
 
 Status: **demonstration artefact, regenerated 2026-07-14** for task
-[../../tasks/T00.md](../../tasks/T00.md) against the 19-table schema
-([../run_db_schema.md](../run_db_schema.md), decisions 16-36). Built by
+[../../tasks/T00.md](../../tasks/T00.md) against the 21-table schema
+([../run_db_schema.md](../run_db_schema.md), decisions 16-41). Built by
 [build_example_db.py](build_example_db.py) — deterministic, so rerunning it
 regenerates [matlas_example.sqlite](matlas_example.sqlite) byte-for-byte apart from the
-`case_metadata`/`run` uuid4 rows (and the `archive`/`source.run_id`/`edit_log` ids that
-derive from them). The DDL is hand-written here for demonstration; the real DDL is derived from
+`case_metadata`/`run` uuid4 rows and the run-scoped metadata that carries the run id
+(`run_archive`/`run_preset` links, `source.run_id`, `edit_log`). The DDL is hand-written here for demonstration; the real DDL is derived from
 `families.py` in Phase 1. This artefact is **not Phase-1 code**.
 
 **The story**: one night in Geneva. The suspect's phone (exhibit A) holds GPS fixes, a

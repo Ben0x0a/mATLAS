@@ -1,8 +1,8 @@
 # Worked examples — nine source types through the model
 
 Status: **validation annex, regenerated 2026-07-14** (task
-[../tasks/T00.md](../tasks/T00.md)) against the 19-table schema
-([run_db_schema.md](run_db_schema.md), decisions 16-36). Each example shows what one
+[../tasks/T00.md](../tasks/T00.md)) against the 21-table schema
+([run_db_schema.md](run_db_schema.md), decisions 16-41). Each example shows what one
 real record becomes under the settled model: the rows per layer, the flat CSV line(s),
 and what it exercises. The rows below are transcribed from
 [examples/matlas_example.sqlite](examples/matlas_example.sqlite) (built by

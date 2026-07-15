@@ -3,7 +3,7 @@
 Status: **plan, 2026-07-11; superseded by the executable roadmap 2026-07-14.** The
 brick architecture and phase structure below stand; the concrete, agent-ready task
 breakdown now lives in [../tasks/roadmap.md](../tasks/roadmap.md) (T00–T90) with one
-file per task. Phase 0 (docs closure) is **done**; the schema settled at **19 tables +
+file per task. Phase 0 (docs closure) is **done**; the schema settled at **21 tables +
 meta** (decisions 16–34, [run_db_schema.md](run_db_schema.md)). Rework of the whole
 codebase around the settled model
 ([conceptual_model.md](conceptual_model.md) → [run_db_schema.md](run_db_schema.md) →
@@ -40,7 +40,7 @@ model_atlas/
   core/                     # THE CORE — pure, stdlib(+sqlite3) only, no I/O policy
     vocabularies.py         #   enums + derivations (Genesis, Locates) + family dataclasses
     ids.py                  #   uuid5 namespaces, \x1f join, content_hash + claim_digest
-    schema.py               #   DDL derivation (19 tables + meta), CHECKs, indexes, user_version
+    schema.py               #   DDL derivation (21 tables + meta), CHECKs, indexes, user_version
     store.py                #   RunStore: temp on-disk SQLite, VACUUM INTO persist,
     #                           typed insert API per layer (write_source, write_assertion, …)
     projection.py           #   flat query generation (one line per assertion), orig_ explosion
@@ -121,7 +121,7 @@ wording); update matlas_run_db.xml; fix identity_model.md's stale entity excepti
 **Phase 1 — the core brick, standalone.**
 `core/` built and tested with no pipeline wiring: vocabularies (proposal in
 run_db_schema.md + statuted additions), ids (both digests, canonical JSON), schema
-(19 tables + meta + indexes), store (temp on-disk, VACUUM INTO, layer-typed API),
+(21 tables + meta + indexes), store (temp on-disk, VACUUM INTO, layer-typed API),
 projection, determinism helpers. *Gate: unit tests — the silent-loss inventory as
 constraint tests (each §2/R failure mode provably raises), double-run diffability
 test, folder==zip digest test, schema-from-vocabularies snapshot.*
