@@ -2,11 +2,14 @@
 
 Defines:    BuildEnv (pipeline-derived defaults), to_records (NaN->None) and build_assertions
             (the fan-out + reference + pipe + raw-capture engine, emitting typed family
-            objects into a RunStore and returning its transform warnings + the assertion count).
+            objects into a RunStore and returning its transform warnings + the assertion
+            count). Field resolution also evaluates conditional mapping values (decision 33,
+            ``_resolve_cond``) and ``format(...)`` templates (decision 42,
+            ``_resolve_template``); both yield ``NA_SENTINEL`` when they produce nothing.
 Used by:    the pipeline (fills one run-wide store) and the test helper ``tests.support``.
 Depends on: model.families (the family dataclasses + columns/types/units), model.store
-            (RunStore + the single passthrough-naming helper), presets.spec + expr +
-            fields (resolver), transforms.
+            (RunStore + the single passthrough-naming helper), presets.spec + expr
+            (refs, Cond, Template, NA_SENTINEL) + fields (resolver), transforms.
 
 Phase C (docs/relational_model.md): the pipeline creates ONE RunStore per run and
 build_assertions fills it per matched source (registering the ``source`` row with its
@@ -61,7 +64,14 @@ from model_atlas.model.store import (
     RunStore,
     SourceRow,
 )
-from model_atlas.presets.expr import Ref, parse_param_expr
+from model_atlas.presets.expr import (
+    NA_LITERAL,
+    NA_SENTINEL,
+    Cond,
+    Ref,
+    Template,
+    parse_param_expr,
+)
 from model_atlas.presets.fields import make_resolver
 from model_atlas.presets.spec import FieldSpec, InputSelector, PresetSpec, TimeSpec
 from model_atlas.transforms.builtin import (
@@ -192,6 +202,8 @@ def _resolve_ref(
     the value originates from a named source field (field/header), for provenance."""
     if ref.kind == "const":
         return ref.arg, None
+    if ref.kind == "format":
+        return _resolve_template(ref.arg, row, resolve, file_values, env, preset_values), None
     if ref.kind == "param":
         return (env.entity if ref.arg == "entity" else env.linked_entity), None
     if ref.kind == "filename":
@@ -203,6 +215,38 @@ def _resolve_ref(
         return col, col  # the value IS the matched field's header text
     col = resolve(ref.arg)  # field
     return (row.get(col) if col is not None else None), col
+
+
+def _resolve_template(
+    template: Template,
+    row: dict[str, Any],
+    resolve: Callable[[str | None], str | None],
+    file_values: dict[str, Any],
+    env: BuildEnv,
+    preset_values: dict[str, Any],
+) -> Any:
+    """Render a ``format(...)`` template (decision 42) for one row. Literal segments are kept
+    verbatim; each placeholder ref is resolved and a missing/NA value renders as EMPTY text,
+    so the connecting literals still appear. If EVERY placeholder is missing the whole value
+    is ``NA_SENTINEL`` (the same "produced nothing" marker as a conditional with no match) —
+    NOT an all-connectors string; a template with at least one present placeholder joins."""
+    parts: list[str] = []
+    has_placeholder = False
+    any_present = False
+    for segment in template.segments:
+        if isinstance(segment, Ref):
+            has_placeholder = True
+            value, _ = _resolve_ref(segment, row, resolve, file_values, env, preset_values)
+            if _is_missing(value):
+                parts.append("")   # a missing placeholder collapses to empty; connectors stay
+            else:
+                any_present = True
+                parts.append(str(value))
+        else:
+            parts.append(segment)
+    if has_placeholder and not any_present:
+        return NA_SENTINEL
+    return "".join(parts)
 
 
 def _resolve_param(
@@ -223,6 +267,48 @@ def _resolve_param(
     return None if value is None else str(value)
 
 
+def _resolve_cond(
+    cond: Cond,
+    row: dict[str, Any],
+    resolve: Callable[[str | None], str | None],
+    file_values: dict[str, Any],
+    env: BuildEnv,
+    preset_values: dict[str, Any],
+) -> tuple[Any, str | None]:
+    """Evaluate a conditional mapping value (decision 33). Branches are tested top-to-bottom
+    and the FIRST match wins; its ``then`` ref is resolved and returned. With no match and no
+    ``else`` the result is ``NA_SENTINEL`` — a distinct value, NOT None (None means the field
+    was never mapped; NA_SENTINEL means the conditional ran and nothing matched)."""
+    for branch in cond.branches:
+        test_value, _ = _resolve_ref(branch.test, row, resolve, file_values, env, preset_values)
+        comparand_value, _ = _resolve_ref(branch.comparand, row, resolve, file_values, env, preset_values)
+        if _cond_match(test_value, branch.op, branch.comparand, comparand_value):
+            return _resolve_ref(branch.then, row, resolve, file_values, env, preset_values)
+    if cond.else_ is not None:
+        return _resolve_ref(cond.else_, row, resolve, file_values, env, preset_values)
+    return NA_SENTINEL, None
+
+
+def _cond_match(test_value: Any, op: str, comparand_ref: Ref, comparand_value: Any) -> bool:
+    """NA-aware comparison for one conditional branch. A ``const(NA)`` comparand is the
+    explicit missing-value test (``field(X) == "NA"`` means "X is absent"); otherwise values
+    are compared for equality, tolerating source type drift (a CSV "1" vs a numeric 1) by
+    falling back to a string comparison. Only ``==``/``!=`` are supported."""
+    # WHY the const(NA) special case: "NA" is not a value that lives in the source; the owner
+    # made it the spelling of the missing test, so it must consult _is_missing, not compare
+    # the literal string "NA" against the cell.
+    if comparand_ref.kind == "const" and comparand_ref.arg == NA_LITERAL:
+        missing = _is_missing(test_value)
+        return missing if op == "==" else not missing
+    if _is_missing(test_value) or _is_missing(comparand_value):
+        equal = _is_missing(test_value) and _is_missing(comparand_value)
+    else:
+        # Direct equality first (int == int); fall back to textual equality so a source
+        # value typed differently from the literal (CSV "1" vs const 1) still matches.
+        equal = (test_value == comparand_value) or (str(test_value) == str(comparand_value))
+    return equal if op == "==" else not equal
+
+
 def _resolve_field(
     spec: FieldSpec,
     row: dict[str, Any],
@@ -233,7 +319,19 @@ def _resolve_field(
     ctx: PipeContext,
     preset_values: dict[str, Any],
 ) -> tuple[Any, str | None]:
-    value, source_col = _resolve_ref(spec.ref, row, resolve, file_values, env, preset_values)
+    # A conditional (decision 33) resolves to its first-matching branch / else / NA_SENTINEL;
+    # a plain ref (including a format(...) template, decision 42) resolves directly. Either may
+    # yield NA_SENTINEL ("produced nothing" — a conditional with no match, or a template whose
+    # every placeholder was missing); the sentinel short-circuits the transform tail below,
+    # being a terminal marker, not a value to extract/pipe/unit/cast. A real value (a matched
+    # branch, or a joined template) flows through the SAME tail as any ref, so type/unit/
+    # extract/pipe still apply to it.
+    if spec.condition is not None:
+        value, source_col = _resolve_cond(spec.condition, row, resolve, file_values, env, preset_values)
+    else:
+        value, source_col = _resolve_ref(spec.ref, row, resolve, file_values, env, preset_values)
+    if value is NA_SENTINEL:
+        return value, source_col
     if spec.extract is not None and value is not None:
         pattern_name, group = spec.extract
         match = re.search(ctx.patterns[pattern_name], str(value))

@@ -1,9 +1,10 @@
-"""Mini-parser for v3 preset reference and pipe expressions.
+"""Mini-parser for v3 preset reference, pipe and conditional expressions.
 
-Defines:    Ref (a typed value source), PipeCall (one transform step), and
-            parse_ref / parse_pipe which turn the call-form strings used in v3
-            presets into those structures.
-Used by:    presets.spec (parse + validate), transforms.assemble (resolve refs),
+Defines:    Ref (a typed value source), PipeCall (one transform step), Cond / CondBranch
+            (a conditional mapping value) plus the ``NA_SENTINEL`` it yields, and
+            parse_ref / parse_pipe / parse_cond which turn the call-form strings used in
+            v3 presets into those structures.
+Used by:    presets.spec (parse + validate), transforms.assemble (resolve refs + conditions),
             transforms.builtin (run pipe steps).
 Depends on: standard library only.
 
@@ -14,6 +15,23 @@ Reference forms — the value of a mapped field is ONE explicit call:
     param(linked_entity)      a run-level parameter (entity | linked_entity)
     preset(in_archive)        a key from the CURRENT preset's own definition (match/meta)
     const(VALUE)              a literal (number / bool / string)
+    format("{field(A)} at {field(B)}")   an f-string-style template (decision 42): literal
+                              text with ``{<ref>}`` placeholders (each an existing ref);
+                              ``{{`` / ``}}`` are literal braces
+
+Conditional form (decision 33) — a mapping value may instead be an if/elif/else chain
+over those same refs; branches evaluate top-to-bottom, first match wins::
+
+    if field(X) == "NA" then const(instant)
+    if field(X) == "NA" then const(instant) else const(continuous)
+    if field(X) == "NA" then const(instant) elif field(Y) == "1" then const(interval)
+        else const(continuous)
+
+The left operand of each test is a ref; the comparand is a ref OR a bare literal (a
+bare/quoted ``NA`` is the explicit "value is missing" test). With no ``else`` and no
+matching branch the chain yields ``NA_SENTINEL`` — DELIBERATELY distinct from an
+unmapped field (which is None): ``NA_SENTINEL`` means "the conditional was evaluated and
+nothing matched", None means "never mapped".
 
 Pipe form — the procedural escape hatch, left-to-right, '|'-separated calls:
     "cast(int) | scale(3.6)"
@@ -27,7 +45,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-REF_KINDS = ("field", "header", "filename", "const", "param", "preset")
+REF_KINDS = ("field", "header", "filename", "const", "param", "preset", "format")
 FILENAME_TOKENS = ("name", "stem", "path")
 PARAM_TOKENS = ("entity", "linked_entity")
 # Keys a preset(...) ref may read from the current preset (match block + meta).
@@ -38,6 +56,45 @@ PRESET_TOKENS = (
 
 _CALL_RE = re.compile(r"^\s*([a-z_]+)\s*\((.*)\)\s*$", re.DOTALL)
 _BARE_CALL_RE = re.compile(r"^\s*([a-z_]+)\s*$")
+
+# Conditional (decision 33) keywords + comparison operators.
+_COND_OPS = ("==", "!=")
+_COND_PREFIX_RE = re.compile(r"^\s*if\s+", re.IGNORECASE)
+# The comparand spelling that means "the tested value is missing/absent" rather than a
+# literal string comparison. Both `"NA"` (quoted) and bare `NA` coerce to this string.
+NA_LITERAL = "NA"
+
+
+class _NASentinel(str):
+    """The value a conditional (decision 33) or template (decision 42) yields when it was
+    evaluated but produced nothing — a conditional with no matching branch and no ``else``,
+    or a template whose every placeholder was missing.
+
+    It is a ``str`` subclass whose text is exactly ``N/A`` (the same spelling as the existing
+    ``UTC_OFFSET_UNKNOWN`` sentinel), chosen so it:
+    - STORES/SERIALISES as the plain TEXT ``N/A`` — SQLite-bindable, renders in the CSV, and
+      ALWAYS distinguishable from None (the "field was never mapped" case, which is NULL);
+    - keeps a distinct TYPE, so in-process resolution recognises it by IDENTITY
+      (``value is NA_SENTINEL``) and a real source cell that happens to read ``N/A`` (an
+      ordinary ``str``) is never mistaken for it and never short-circuits the transform tail.
+
+    (After a SQLite round-trip the value returns as a plain ``str`` ``N/A`` — the type, not
+    the value, is what is lost, so downstream still sees a distinct-from-None sentinel.)"""
+
+    _instance: "_NASentinel | None" = None
+
+    def __new__(cls) -> "_NASentinel":
+        # HOW: cache the sole instance so every "produced nothing" resolves to the SAME object.
+        # WHY: identity is the in-process contract — a fresh object per call would defeat the
+        # ``is NA_SENTINEL`` test used to short-circuit the transform tail.
+        if cls._instance is None:
+            cls._instance = super().__new__(cls, "N/A")
+        return cls._instance
+
+
+# The single sentinel instance shared across the whole engine (produced by conditional /
+# template resolution in transforms.assemble; T23's successor engine imports it unchanged).
+NA_SENTINEL = _NASentinel()
 
 
 @dataclass(frozen=True)
@@ -50,12 +107,56 @@ class Ref:
 
 
 @dataclass(frozen=True)
+class Template:
+    """A ``format(...)`` template (decision 42): an ordered sequence of segments, each either
+    a literal ``str`` or an embedded ``Ref`` placeholder. Carried as the ``arg`` of a
+    ``Ref(kind="format")`` so it composes with conditionals and the pipe tail for free."""
+
+    segments: tuple[Any, ...]   # str literals interleaved with Ref placeholders
+
+    def refs(self) -> tuple["Ref", ...]:
+        """The placeholder refs, in order — for the linter / field-inventory helpers."""
+        return tuple(seg for seg in self.segments if isinstance(seg, Ref))
+
+
+@dataclass(frozen=True)
 class PipeCall:
     """One transform step: a transform ``name`` with positional/keyword arguments."""
 
     name: str
     args: tuple[Any, ...] = ()
     kwargs: dict[str, Any] = field(default_factory=dict)  # mutable default avoided via factory
+
+
+@dataclass(frozen=True)
+class CondBranch:
+    """One ``if``/``elif`` branch: ``then`` is resolved when ``test <op> comparand`` holds.
+    ``test`` is a value ref (usually ``field(...)``); ``comparand`` is a ref or a literal
+    wrapped as ``const(...)`` — a ``const(NA)`` comparand is the explicit missing-value test."""
+
+    test: Ref
+    op: str            # one of _COND_OPS
+    comparand: Ref
+    then: Ref
+
+
+@dataclass(frozen=True)
+class Cond:
+    """A conditional mapping value: ordered branches (first match wins) + an optional
+    ``else_``. With no match and no ``else_`` the resolver yields ``NA_SENTINEL``."""
+
+    branches: tuple[CondBranch, ...]
+    else_: Ref | None = None
+
+    def refs(self) -> tuple[Ref, ...]:
+        """Every Ref this conditional mentions — tests, comparands, results — so the linter
+        and field-inventory helpers can see the source fields a conditional reads."""
+        out: list[Ref] = []
+        for branch in self.branches:
+            out.extend((branch.test, branch.comparand, branch.then))
+        if self.else_ is not None:
+            out.append(self.else_)
+        return tuple(out)
 
 
 def _split_top_level(text: str, sep: str) -> list[str]:
@@ -132,6 +233,8 @@ def parse_ref(text: Any) -> Ref:
         raise ValueError(f"unknown reference kind {kind!r}; expected one of {REF_KINDS}")
     if kind == "const":
         return Ref(kind="const", arg=_coerce(raw))
+    if kind == "format":
+        return Ref(kind="format", arg=parse_template(_unquote(raw)))
     arg = _unquote(raw)
     if kind == "filename" and arg not in FILENAME_TOKENS:
         raise ValueError(f"filename(...) takes one of {FILENAME_TOKENS}, got {arg!r}")
@@ -142,6 +245,162 @@ def parse_ref(text: Any) -> Ref:
     if kind in ("field", "header") and not arg:
         raise ValueError(f"{kind}(...) needs a field name or glob")
     return Ref(kind=kind, arg=arg)
+
+
+def parse_template(text: str) -> Template:
+    """Parse a ``format(...)`` template body into a ``Template`` (decision 42).
+
+    HOW: scan the (already unquoted) text left to right. ``{{`` / ``}}`` emit a literal brace
+    (f-string convention); a ``{`` opens a placeholder whose matching ``}`` is found while
+    honouring nested parentheses/quotes (so ``{field("a}b")}`` is not split at the inner
+    brace), and the enclosed text is parsed as a call-form ref via ``parse_ref``; everything
+    else is literal text. WHY brace-matching rather than a regex: a placeholder holds a full
+    ref call that may itself contain braces or parens inside a quoted argument.
+
+    Raises ``ValueError`` on an unbalanced brace, an empty ``{}`` placeholder, an unknown ref
+    kind inside braces, or an empty template — a preset authoring error surfaced at load."""
+    segments: list[Any] = []
+    literal: list[str] = []
+    index = 0
+    total = len(text)
+
+    def _flush_literal() -> None:
+        if literal:
+            segments.append("".join(literal))
+            literal.clear()
+
+    while index < total:
+        char = text[index]
+        if char == "{":
+            if index + 1 < total and text[index + 1] == "{":   # escaped literal brace
+                literal.append("{")
+                index += 2
+                continue
+            end = _find_close_brace(text, index + 1)
+            if end == -1:
+                raise ValueError(f"format template {text!r}: unbalanced '{{'")
+            inner = text[index + 1:end].strip()
+            if not inner:
+                raise ValueError(f"format template {text!r}: empty '{{}}' placeholder")
+            _flush_literal()
+            segments.append(parse_ref(inner))   # raises on an unknown ref kind
+            index = end + 1
+            continue
+        if char == "}":
+            if index + 1 < total and text[index + 1] == "}":    # escaped literal brace
+                literal.append("}")
+                index += 2
+                continue
+            raise ValueError(f"format template {text!r}: unbalanced '}}'")
+        literal.append(char)
+        index += 1
+    _flush_literal()
+    if not segments:
+        raise ValueError(f"format template {text!r}: empty template")
+    return Template(segments=tuple(segments))
+
+
+def _find_close_brace(text: str, start: int) -> int:
+    """Index of the ``}`` that closes a placeholder opened before ``start``, at parenthesis
+    depth 0 and outside quotes; -1 if there is none."""
+    depth = 0
+    quote: str | None = None
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote is not None:
+            if char == quote:
+                quote = None
+            continue
+        if char in ("'", '"'):
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "}" and depth == 0:
+            return index
+    return -1
+
+
+def flatten_ref(ref: Ref) -> tuple[Ref, ...]:
+    """Expand a composite ref into its atomic refs: a ``format`` template yields its
+    placeholder refs (recursively); any other ref yields itself. Lets the linter and
+    field-inventory helpers see the source fields a template reads."""
+    if ref.kind == "format":
+        out: list[Ref] = []
+        for embedded in ref.arg.refs():
+            out.extend(flatten_ref(embedded))
+        return tuple(out)
+    return (ref,)
+
+
+def _parse_operand(token: str) -> Ref:
+    """Parse a conditional comparand: a call-form ref (``field(Y)``) stays a ref; anything
+    else (``"NA"``, ``NA``, ``"1"``, ``42``) becomes ``const(<coerced-literal>)`` so both the
+    test's left operand and its comparand resolve through the one ``_resolve_ref`` path."""
+    match = _CALL_RE.match(token)
+    if match is not None and match.group(1) in REF_KINDS:
+        return parse_ref(token)
+    return Ref(kind="const", arg=_coerce(token))
+
+
+def is_condition(text: Any) -> bool:
+    """True when a mapping value is a conditional chain (starts with the ``if`` keyword)."""
+    return isinstance(text, str) and _COND_PREFIX_RE.match(text) is not None
+
+
+def parse_cond(text: str) -> Cond:
+    """Parse ``if <ref> <op> <operand> then <ref> (elif <ref> <op> <operand> then <ref>)*
+    (else <ref>)?`` into a ``Cond``.
+
+    HOW: the string is tokenised on top-level whitespace (quotes and parentheses are kept
+    intact, so ``const("a b")`` / ``field(Foo Bar)`` stay single tokens), then a small state
+    machine walks ``<test> <op> <comparand> then <result>`` groups separated by ``elif`` and
+    closed by an optional ``else``. WHY tokenise rather than regex-split on the keywords: a
+    field name or literal could itself contain ``then``/``else``; splitting on whitespace-
+    delimited top-level tokens avoids matching those inside a ref or a quoted literal.
+
+    A malformed chain raises ``ValueError`` — a preset authoring error, surfaced at load
+    time (never silently), consistent with the rest of this parser."""
+    if not is_condition(text):
+        raise ValueError(f"conditional must start with 'if', got {text!r}")
+    body = _COND_PREFIX_RE.sub("", text, count=1).strip()
+    tokens = [tok for tok in _split_top_level(body, " ") if tok.strip()]
+
+    branches: list[CondBranch] = []
+    else_: Ref | None = None
+    index = 0
+    total = len(tokens)
+
+    def _take(what: str) -> str:
+        nonlocal index
+        if index >= total:
+            raise ValueError(f"conditional {text!r} is truncated: expected {what}")
+        token = tokens[index]
+        index += 1
+        return token
+
+    while True:
+        test = parse_ref(_take("a test reference"))
+        op = _take("a comparison operator")
+        if op not in _COND_OPS:
+            raise ValueError(f"conditional {text!r}: unknown operator {op!r}; expected one of {_COND_OPS}")
+        comparand = _parse_operand(_take("a comparand"))
+        keyword = _take("'then'")
+        if keyword != "then":
+            raise ValueError(f"conditional {text!r}: expected 'then' after the test, got {keyword!r}")
+        branches.append(CondBranch(test=test, op=op, comparand=comparand, then=parse_ref(_take("a result reference"))))
+        if index < total and tokens[index] == "elif":
+            index += 1
+            continue
+        if index < total and tokens[index] == "else":
+            index += 1
+            else_ = parse_ref(_take("an else reference"))
+        break
+
+    if index != total:
+        raise ValueError(f"conditional {text!r}: unexpected trailing tokens {tokens[index:]}")
+    return Cond(branches=tuple(branches), else_=else_)
 
 
 # Reference kinds a run-level param (entity / linked_entity) may itself be. ``param`` is

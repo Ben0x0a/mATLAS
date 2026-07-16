@@ -142,14 +142,18 @@ TIMESPAN_COLUMNS: list[tuple[str, str]] = _temporal_columns()
 # --- CHECK-constraint helper -----------------------------------------------
 
 def _enum_check(column: str, enum_type: type[Enum]) -> str:
-    """A ``CHECK (col IN (...) OR col IS NULL)`` clause from an enum's values.
+    """A ``CHECK (col IN (...) OR col IS NULL OR col = 'N/A')`` clause from an enum's values.
 
     NULL is always allowed: every controlled-vocabulary column is nullable today (an
     unmapped edge / state is None, rendered as an empty CSV cell), so the constraint must
-    not reject it.
+    not reject it. The literal ``N/A`` is also allowed: it is the decision-33 conditional
+    sentinel ("the mapping's conditional evaluated and nothing matched" — presets.expr
+    NA_SENTINEL, which stores as this TEXT), deliberately distinct from NULL ("never
+    mapped"); without it the assertion INSERT OR IGNORE would silently DROP any row whose
+    conditional matched no branch — evidence loss.
     """
     values = ", ".join(f"'{member.value}'" for member in enum_type)
-    return f"CHECK ({column} IN ({values}) OR {column} IS NULL)"
+    return f"CHECK ({column} IN ({values}) OR {column} IS NULL OR {column} = 'N/A')"
 
 
 # --- table DDL -------------------------------------------------------------

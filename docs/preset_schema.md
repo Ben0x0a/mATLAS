@@ -130,7 +130,8 @@ mapping reads a field the inventory does not cover.
 
 ## Reference vocabulary (field values)
 
-Every mapped value is exactly one explicit call:
+Every mapped value is exactly one explicit call (or a conditional chain over such
+calls — see Conditional values below):
 
 | Form | Value |
 | --- | --- |
@@ -140,6 +141,7 @@ Every mapped value is exactly one explicit call:
 | `param(entity\|linked_entity)` | a run-level argument |
 | `preset(path\|name\|table\|id\|...)` | a key from the matched `input_selector` / preset `meta` |
 | `const(VALUE)` | a literal |
+| `format("…{ref}…")` | a text template composing several refs with literal text (see Templates) |
 
 A field may instead be a mapping with attributes:
 
@@ -162,6 +164,56 @@ Numeric model fields are **cast automatically** from their declared type, so a p
 
 Bare scalars are allowed only where the position is a known keyword/enum — link values,
 `epoch`, `zone` — never where a field reference could be meant.
+
+## Conditional values (`if / elif / else`)
+
+A mapped value may be a conditional chain over the same reference vocabulary instead of a
+single call. Branches are evaluated top-to-bottom and the **first match wins**:
+
+```yaml
+common:
+  spatial_temporal_link: if field(X) == "NA" then const(instant)
+                         elif field(Y) == "1" then const(interval)
+                         else const(continuous)
+```
+
+- Each test is `<ref> == <operand>` or `<ref> != <operand>`; the operand is another ref
+  or a bare/quoted literal.
+- The comparand `"NA"` (or bare `NA`) is the explicit **missing-value test**: it holds
+  when the tested field is absent/empty, not when it literally reads `NA`.
+- With **no `else` and no matching branch** the value is the **`N/A` sentinel** —
+  deliberately distinct from an unmapped field: `N/A` means "the conditional was
+  evaluated and nothing matched"; an empty (NULL) cell means "never mapped". This keeps
+  the two situations distinguishable in the output.
+- A `const(...)` branch result assigned to a controlled-vocabulary field is validated
+  against that vocabulary at load time, exactly like a plain `const`.
+- Conditionals work anywhere `_parse_field` mappings do — `common`, `position`, time
+  overrides, `zone`, `source_record_uid`. The short `links:` block stays bare-enum only;
+  map a conditional link by its full column name (as above). Conditional **time bounds**
+  are a noted follow-up, not yet supported.
+- In the mapping form, `from` may hold a conditional; the winning branch's value then
+  flows through `type` / `unit` / `extract` / `pipe` as usual (the `N/A` sentinel skips
+  them — it is a terminal marker, not a value to transform).
+
+## Templates (`format(...)`)
+
+A mapped value may compose several source values with literal connecting text,
+f-string style:
+
+```yaml
+common:
+  source_label: format("{field(FirstName)} {field(LastName)} from {field(City)}")
+```
+
+- Every `{…}` placeholder is one reference call from the vocabulary above; text outside
+  the braces is verbatim. `{{` / `}}` write a literal brace.
+- A missing/NA placeholder renders as **empty text** (the connecting literals stay);
+  when **every** placeholder is missing the whole value is the **`N/A` sentinel**
+  (consistent with conditionals — "evaluated, produced nothing", distinct from NULL).
+- `format(...)` is an ordinary reference kind, so it composes with conditionals
+  (`… then format(…)`) and with the `pipe` tail for free.
+- A malformed template (unbalanced brace, empty `{}`, unknown ref kind) is a load-time
+  error.
 
 ## `time`
 

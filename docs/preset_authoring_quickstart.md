@@ -59,7 +59,8 @@ expected_fields:
 ## 3. Reference values explicitly
 
 Every value is one call: `field(...)`, `header(...)`, `filename(...)`,
-`param(...)`, or `const(...)`.
+`param(...)`, `const(...)`, or `format(...)` (a text template, see 6c). A value may
+also be an `if / elif / else` conditional over those calls (see 6b).
 
 ```yaml
 common:
@@ -130,6 +131,39 @@ patterns:      {coords: "(?P<lat>-?\\d+\\.\\d+) - (?P<lon>-?\\d+\\.\\d+)"}
 
 `regex` requires named groups, and you name which group to extract — so what is pulled
 out is explicit.
+
+## 6b. Conditional values (`if / elif / else`)
+
+When a field's meaning depends on another field, map it as a conditional chain —
+branches evaluate top-to-bottom, first match wins:
+
+```yaml
+common:
+  spatial_temporal_link: if field(ExitTime) == "NA" then const(instant)
+                         elif field(Confirmed) == "1" then const(continuous_during_interval)
+                         else const(once_during_interval)
+```
+
+The comparand `"NA"` is the explicit *missing-value* test (the field is absent/empty).
+`==` and `!=` are supported; a comparand may also be another ref (`field(A) != field(B)`).
+With no `else` and no match the cell holds **`N/A`** — meaning "the conditional ran,
+nothing matched" — which is deliberately different from an empty cell (the field was
+never mapped). Conditional time *bounds* are not yet supported.
+
+## 6c. Composed text (`format(...)`)
+
+To build one value out of several source fields plus literal text, use a `format(...)`
+template — each `{…}` placeholder is an ordinary reference call:
+
+```yaml
+common:
+  source_label: format("{field(FirstName)} {field(LastName)} from {field(City)}")
+```
+
+A missing placeholder renders as empty text (the surrounding literals stay); if *every*
+placeholder is missing the whole cell holds `N/A`, as for conditionals. `{{` / `}}`
+write a literal brace. A template also works as a conditional branch result
+(`… then format(…)`).
 
 ## 7. Run it
 

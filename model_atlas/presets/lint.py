@@ -4,7 +4,8 @@ Defines:    Severity, LintFinding, lint_spec / lint_file / lint_paths — a publ
             that checks one or more v3 presets and returns findings instead of raising.
 Used by:    the utils/lint_presets.py CLI, and any caller wanting to validate presets
             programmatically.
-Depends on: presets.spec (parser), reporting (referenced-field derivation), pyyaml.
+Depends on: presets.spec (parser) + presets.expr (Ref/Cond), reporting (referenced-field
+            derivation), pyyaml.
 
 Three severities:
 - ERROR  : the preset does not parse/validate and will not load.
@@ -25,7 +26,8 @@ from typing import Iterable
 
 import yaml
 
-from model_atlas.presets.spec import PresetSpec, preset_spec_from_yaml
+from model_atlas.presets.expr import Ref, flatten_ref
+from model_atlas.presets.spec import FieldSpec, PresetSpec, preset_spec_from_yaml
 
 ERROR = "error"
 WARNING = "warning"
@@ -103,31 +105,53 @@ def lint_spec(spec: PresetSpec, *, preset_label: str | None = None) -> list[Lint
     return findings
 
 
+def _field_spec_refs(spec: FieldSpec) -> tuple[Ref, ...]:
+    """The atomic refs a FieldSpec reads: its single ``ref``, or every ref of its
+    ``condition`` (decision 33), each expanded through ``flatten_ref`` so a ``format(...)``
+    template's placeholder fields (decision 42) are surfaced too. Lets the field-inventory
+    checks below see every source field a conditional/template reads — a conditional or
+    template referencing an undeclared field lint-WARNS, never crashes."""
+    if spec.condition is not None:
+        base: tuple[Ref, ...] = spec.condition.refs()
+    elif spec.ref is not None:
+        base = (spec.ref,)
+    else:
+        base = ()
+    out: list[Ref] = []
+    for ref in base:
+        out.extend(flatten_ref(ref))
+    return tuple(out)
+
+
 def _plain_fields(spec: PresetSpec) -> set[str]:
     """Plain (non-glob) source fields the mapping reads, for the declared-vs-mapped check."""
     names: set[str] = set()
 
-    def add(ref) -> None:
+    def add(ref: Ref) -> None:
         arg = str(ref.arg)
         # Skip TODO placeholders — they are flagged by _check_unfilled_placeholders with a
         # clearer message, not as a phantom "undeclared field".
         if ref.kind == "field" and "TODO" not in arg and not any(ch in arg for ch in "*?["):
             names.add(arg)
 
+    def add_spec(field: FieldSpec) -> None:
+        for ref in _field_spec_refs(field):
+            add(ref)
+
     if spec.source_record_uid is not None:
-        add(spec.source_record_uid.ref)
+        add_spec(spec.source_record_uid)
     for field in spec.common:
-        add(field.ref)
+        add_spec(field)
     for tmpl in spec.assertions:
         for field in tmpl.fields:
-            add(field.ref)
+            add_spec(field)
         for time in tmpl.temporal:
             add(time.lower)
             add(time.upper)
             if time.zone is not None:
-                add(time.zone.ref)
+                add_spec(time.zone)
             for override in time.overrides:
-                add(override.ref)
+                add_spec(override)
     return names
 
 
@@ -175,7 +199,9 @@ def _check_raw_source_path(spec: PresetSpec, label: str) -> list[LintFinding]:
 
 def _check_record_uid_not_rowid(spec: PresetSpec, label: str) -> list[LintFinding]:
     uid = spec.source_record_uid
-    if uid is None or uid.ref.kind != "field":
+    # A conditional source_record_uid (ref is None) is not a single field ref, so the
+    # rowid-lookalike heuristic does not apply — skip it rather than crash.
+    if uid is None or uid.ref is None or uid.ref.kind != "field":
         return []
     name = str(uid.ref.arg)
     if name.casefold() in _ROWID_NAMES or name.casefold().endswith("_pk"):
@@ -265,8 +291,14 @@ def _author_values(spec: PresetSpec) -> list[tuple[str, str]]:
     selector values + all reference args + timestamp formats."""
     out: list[tuple[str, str]] = []
 
-    def addref(ref, where: str) -> None:
+    def addref(ref: Ref, where: str) -> None:
         out.append((str(ref.arg), where))
+
+    def addspec(field: FieldSpec, where: str) -> None:
+        # A conditional (decision 33) exposes every ref it mentions, so a TODO placeholder
+        # inside any branch is still surfaced by the placeholder check.
+        for ref in _field_spec_refs(field):
+            addref(ref, where)
 
     for selector in spec.input_selectors:
         for value, key in (
@@ -276,21 +308,21 @@ def _author_values(spec: PresetSpec) -> list[tuple[str, str]]:
             if value:
                 out.append((str(value), f"input_selector.{key}"))
     if spec.source_record_uid is not None:
-        addref(spec.source_record_uid.ref, "source_record_uid")
+        addspec(spec.source_record_uid, "source_record_uid")
     for field in spec.common:
-        addref(field.ref, f"common.{field.model_field}")
+        addspec(field, f"common.{field.model_field}")
     for index, tmpl in enumerate(spec.assertions):
         for field in tmpl.fields:
-            addref(field.ref, f"assertions[{index}].{field.model_field}")
+            addspec(field, f"assertions[{index}].{field.model_field}")
         for time in tmpl.temporal:
             addref(time.lower, f"assertions[{index}].time")
             addref(time.upper, f"assertions[{index}].time")
             if time.format:
                 out.append((time.format, f"assertions[{index}].time.format"))
             if time.zone is not None:
-                addref(time.zone.ref, f"assertions[{index}].time.zone")
+                addspec(time.zone, f"assertions[{index}].time.zone")
             for override in time.overrides:
-                addref(override.ref, f"assertions[{index}].{override.model_field}")
+                addspec(override, f"assertions[{index}].{override.model_field}")
     return out
 
 

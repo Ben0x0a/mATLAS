@@ -32,8 +32,9 @@ v3 layout (readable, examiner-first)::
         time:     {instant: field(ZTIMESTAMP), epoch: cocoa, zone: UTC}
         links:    {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 
-A value is ONE explicit reference call (field/header/filename/param/const) or a
-mapping ``{from: <ref>, type:, unit:, extract:, pipe:}``. See presets.expr.
+A value is ONE explicit reference call (field/header/filename/param/const/format), an
+``if / elif / else`` conditional chain over such calls (decision 33), or a mapping
+``{from: <ref-or-conditional>, type:, unit:, extract:, pipe:}``. See presets.expr.
 """
 from __future__ import annotations
 
@@ -50,7 +51,15 @@ from model_atlas.model.families import (
     SourceTier,
     SpatialTemporalLink,
 )
-from model_atlas.presets.expr import PipeCall, Ref, parse_pipe, parse_ref
+from model_atlas.presets.expr import (
+    Cond,
+    PipeCall,
+    Ref,
+    is_condition,
+    parse_cond,
+    parse_pipe,
+    parse_ref,
+)
 from model_atlas.sources.pathmatch import validate_selector_path
 
 # Columns the engine owns; presets never assign them directly. The temporal bounds come
@@ -154,10 +163,14 @@ class InputSelector:
 
 @dataclass(frozen=True)
 class FieldSpec:
-    """How one model field is populated: a typed reference plus optional attributes."""
+    """How one model field is populated: either a single typed reference (``ref``) OR a
+    conditional chain (``condition``, decision 33) — exactly one is set — plus optional
+    attributes. When a ``condition`` is set, ``ref`` is None; the compat accessors below
+    then report None (a conditional is not a single field/header reference)."""
 
     model_field: str
-    ref: Ref
+    ref: Ref | None = None                         # a single ref; None when ``condition`` set
+    condition: Cond | None = None                  # an if/elif/else chain; None for a plain ref
     type: str | None = None                       # explicit cast override
     unit: str | None = None                       # source unit -> canonical
     extract: tuple[str, str] | None = None        # (pattern_name, group_name)
@@ -168,11 +181,11 @@ class FieldSpec:
     # --- v2-compat accessors used by presets.fields.field_refs ---
     @property
     def field(self) -> str | None:
-        return self.ref.arg if self.ref.kind == "field" else None
+        return self.ref.arg if self.ref is not None and self.ref.kind == "field" else None
 
     @property
     def from_name_pattern(self) -> str | None:
-        return self.ref.arg if self.ref.kind == "header" else None
+        return self.ref.arg if self.ref is not None and self.ref.kind == "header" else None
 
 
 @dataclass(frozen=True)
@@ -292,11 +305,16 @@ def _parse_field(
     if isinstance(raw, dict):
         if "from" not in raw:
             raise ValueError(f"{path}: {model_field!r} mapping must set 'from' (a reference)")
-        ref = parse_ref(raw["from"])
+        # A conditional chain (decision 33) is accepted anywhere a plain ref is: as the bare
+        # value or as the dict form's ``from``. The remaining attributes (type/unit/extract/
+        # pipe) still apply to whichever branch value wins.
+        from_value = raw["from"]
+        ref, condition = _parse_ref_or_cond(from_value)
         extract = _parse_extract(raw["extract"], patterns, path) if "extract" in raw else None
         spec = FieldSpec(
             model_field=model_field,
             ref=ref,
+            condition=condition,
             type=raw.get("type"),
             unit=raw.get("unit"),
             extract=extract,
@@ -304,10 +322,35 @@ def _parse_field(
             optional=bool(raw.get("optional", False)),
         )
     else:
-        spec = FieldSpec(model_field=model_field, ref=parse_ref(raw))
-    if spec.ref.kind == "const":
+        ref, condition = _parse_ref_or_cond(raw)
+        spec = FieldSpec(model_field=model_field, ref=ref, condition=condition)
+    # A controlled-vocabulary field must hold a valid value however it is produced: a plain
+    # const, or any const RESULT of a conditional (a const test/comparand is a value to
+    # compare against, not an assigned value, so it is not enum-checked).
+    if spec.ref is not None and spec.ref.kind == "const":
         _validate_enum(model_field, spec.ref.arg, path)
+    if spec.condition is not None:
+        for result in _condition_result_refs(spec.condition):
+            if result.kind == "const":
+                _validate_enum(model_field, result.arg, path)
     return spec
+
+
+def _parse_ref_or_cond(raw: Any) -> tuple[Ref | None, Cond | None]:
+    """Parse a mapping value into either a single ``Ref`` or a conditional ``Cond``
+    (decision 33). Exactly one of the returned pair is non-None."""
+    if is_condition(raw):
+        return None, parse_cond(raw)
+    return parse_ref(raw), None
+
+
+def _condition_result_refs(condition: Cond) -> tuple[Ref, ...]:
+    """The refs a conditional can ASSIGN (each branch's ``then`` + the ``else_``), used to
+    enum-check the produced values without checking the test/comparand refs."""
+    results = [branch.then for branch in condition.branches]
+    if condition.else_ is not None:
+        results.append(condition.else_)
+    return tuple(results)
 
 
 def _parse_links(raw: Any, path: Path) -> Links:
