@@ -5,7 +5,7 @@ Used by:    every concrete reader module (decorates its class) and, later, the a
             brick (T23) to dispatch a source's declared format to its reader.
 Depends on: ``model_atlas.ingest.readers.base`` (the ``Reader`` protocol) only.
 
-WHY a class decorator (mirrors the old ``model_atlas/sources/readers/base.py`` pattern):
+WHY a class decorator (mirrors the old ``sources/readers/base.py`` pattern):
 one line at the reader's definition site registers it — no separate wiring file to keep in
 sync, so a new format module is genuinely the only change (docs/refactor_plan.md §3,
 contract 4: "no core edit").

@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 
 from model_atlas.presets.spec import preset_spec_from_yaml
-from model_atlas.reporting import frontier_report
+from model_atlas.app.reporting import frontier_report
 
 
 def _preset(longitude_ref: str) -> object:

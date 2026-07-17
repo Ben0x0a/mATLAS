@@ -6,11 +6,11 @@ from pathlib import Path, PurePosixPath
 import pytest
 import yaml
 
-from model_atlas.pipeline import process
+from model_atlas.app.pipeline import process
+from model_atlas.ingest.containers import FilesystemContainer, SourceFile
+from model_atlas.ingest.format_detect import detect_source_format
 from model_atlas.presets.matcher import match_files_detailed
 from model_atlas.presets.spec import preset_spec_from_yaml
-from model_atlas.sources.container import FilesystemContainer, SourceFile
-from model_atlas.sources.format_detect import detect_source_format
 
 
 def _preset(text: str):
@@ -92,4 +92,4 @@ def test_force_mode_format_mismatch_is_hard_error(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="format mismatch"):
-        process(src, preset, tmp_path / "out.csv", linked_entity="s")
+        process(src, preset, tmp_path / "out", linked_entity="s")

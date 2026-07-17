@@ -9,17 +9,15 @@ Defines:    the named temporal ``Method`` implementations of the refactor-plan �
             rows, the Method input), ``standard_methods`` (the ordered default set)
             and ``integrate_expression`` (first applicable method wins, writes ONE
             ``timespan_integration`` row through the store).
-Used by:    the app-layer pipeline (once T60 wires L2 after ingest) and
+Used by:    the app-layer pipeline (``model_atlas.app.pipeline``) and
             tests/integrate/test_temporal.py.
 Depends on: ``model_atlas.core`` (``ids`` — the integration id derivation,
             ``vocabularies`` — the ``TimespanIntegration`` family + the
             ``UTC_OFFSET_UNKNOWN`` sentinel, ``store`` — the layer-typed writer) and
-            the FENCED ``model_atlas.transforms.builtin`` for its pure zone/ISO
-            helpers (``parse_zone_token`` / ``parse_iso8601`` /
-            ``local_naive_to_utc_us`` / ``zone_standard_offset_hours`` /
-            ``datetime_to_us``) — imported, never re-ported, so the decode semantics
-            cannot drift between the old and new engines (same policy as
-            ``ingest/assemble.py``).
+            ``model_atlas.integrate.timeparse`` for the pure zone/ISO helpers
+            (``parse_zone_token`` / ``parse_iso8601`` / ``local_naive_to_utc_us`` /
+            ``zone_standard_offset_hours`` / ``datetime_to_us`` — their T60 home,
+            folded verbatim from the retired ``transforms.builtin``).
 
 This is the T30 port of the old ``transforms/assemble.py`` ``_decode_time`` /
 ``_apply_time`` logic into named, versioned Methods (refactor_plan.md §3, phase 3).
@@ -68,7 +66,7 @@ from dataclasses import dataclass
 from model_atlas.core import ids
 from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore
-from model_atlas.transforms.builtin import (
+from model_atlas.integrate.timeparse import (
     datetime_to_us,
     local_naive_to_utc_us,
     parse_iso8601,

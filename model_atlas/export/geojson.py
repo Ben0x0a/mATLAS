@@ -1,5 +1,5 @@
 """GeoJSON export brick: a Point FeatureCollection over the flat-projected rows that
-carry coordinates (T51 — ports ``model_atlas/exporters/builtin.py``'s
+carry coordinates (T51 — ports ``exporters/builtin.py``'s
 ``export_geojson``).
 
 Defines:    GeojsonExporter (the ``Exporter`` protocol brick, ``format = "geojson"``),

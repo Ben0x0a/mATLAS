@@ -1,7 +1,7 @@
 """Tests for the ingest engine's ported path/name matcher (ingest/pathmatch.py).
 
 The ingest engine owns its own copy of the selector path model (the old
-``model_atlas/sources/pathmatch.py`` stays until T60); these pin the ported behaviour —
+the old ``sources/pathmatch.py`` retired at T60); these pin the ported behaviour —
 segment-wise anchored matching, the ``{uuid}``/``*`` wildcards, the root-prefix skip
 budget, and the ``**`` rejection.
 """

@@ -3,14 +3,20 @@
 Defines:    match_files_detailed (path/name pre-filter -> type guard -> required-field
             gate -> structural tie-break, returning matches + unsatisfied units) and
             resolve_force_selector (force-preset in-file sub-unit resolution).
-Used by:    the pipeline.
-Depends on: sources (Container/SourceFile, pathmatch, format_detect, readers), presets.spec,
-            presets.fields (field_refs/make_resolver/required_fields/structural_score).
+Used by:    the app-layer pipeline (``model_atlas.app.pipeline``).
+Depends on: ingest (SourceFile, pathmatch, format_detect, readers.xml_reader for the
+            namespace sniff), presets.spec, presets.fields (field_refs / make_resolver /
+            required_fields / structural_score).
 
 Iteration is per file: each SourceFile is matched independently, so a selector that fans
 out (a ``name`` present in many folders, or a ``{uuid}`` path) applies the preset to each
 matching file. Same-role selectors are OR alternatives; the first to match supplies the
 reader params.
+
+T60: matching now rides the ingest Container model, and the two reader touch points
+(``peek`` for column peeks, ``subtables`` for force-mode sub-unit listing) are INJECTED
+callables rather than reader imports — the pipeline decides how a peek is served (the
+run store's already-ingested records), so the matcher stays free of any reader contract.
 """
 from __future__ import annotations
 
@@ -19,6 +25,9 @@ import logging
 import zipfile
 from typing import Callable
 
+from model_atlas.ingest.containers import SourceFile
+from model_atlas.ingest.format_detect import detect_source_format
+from model_atlas.ingest.pathmatch import name_matches, path_matches
 from model_atlas.presets.fields import (
     field_refs,
     make_resolver,
@@ -26,19 +35,18 @@ from model_atlas.presets.fields import (
     structural_score,
 )
 from model_atlas.presets.spec import InputSelector, PresetSpec
-from model_atlas.sources.container import SourceFile
-from model_atlas.sources.format_detect import detect_source_format
-from model_atlas.sources.pathmatch import name_matches, path_matches
-from model_atlas.sources.readers import get_reader
 
 log = logging.getLogger(__name__)
 
 PeekFn = Callable[[SourceFile, InputSelector], "set[str] | None"]
+# Force-mode sub-unit listing: the in-file units (tables / sheets / model types) of one
+# file, dispatched by the selector's format. Injected for the same reason as PeekFn.
+SubtablesFn = Callable[[SourceFile, InputSelector], "list[str]"]
 
 
 def _file_namespace(file: SourceFile) -> str | None:
     """Sniff the XML root namespace (the dialect discriminator) from the file's head."""
-    from model_atlas.sources.readers.xml_reader import sniff_namespace
+    from model_atlas.ingest.readers.xml_reader import sniff_namespace
 
     try:
         with file.container.open(file) as fh:
@@ -171,13 +179,19 @@ def match_files_detailed(
 
 
 def resolve_force_selector(
-    file: SourceFile, preset: PresetSpec, detected: str | None
+    file: SourceFile,
+    preset: PresetSpec,
+    detected: str | None,
+    *,
+    subtables: SubtablesFn,
+    peek: PeekFn,
 ) -> InputSelector:
     """Force mode: ignore location, but verify ``format`` and resolve the in-file sub-unit.
 
     Picks the first selector whose format matches the file (hard error on mismatch), then
     for excel/sqlite falls back to a structurally-best sheet/table when the declared one is
-    absent (force-mode only — auto matching stays precise)."""
+    absent (force-mode only — auto matching stays precise). ``subtables`` / ``peek`` are
+    the caller-injected reader touch points (see the module header)."""
     selectors = [s for s in preset.input_selectors if s.format == detected]
     if not selectors:
         raise ValueError(
@@ -185,23 +199,22 @@ def resolve_force_selector(
             f"preset {preset.name!r} declares {[s.format for s in preset.input_selectors]}"
         )
     selector = selectors[0]
-    reader = get_reader(selector.format)
     if selector.format == "csv" or selector.sql:
         return selector  # csv: whole file; sql: run as written (a missing table just errors)
 
     declared = selector.sheet if selector.format == "excel" else selector.table
-    subtables = reader.list_subtables(file)
-    if declared in subtables:
+    units = subtables(file, selector)
+    if declared in units:
         return selector
 
     # Choose the qualifying sub-unit (all referenced columns present) with the best score.
     refs = list(preset.expected_fields) or field_refs(preset)
     best: tuple[int, str] | None = None
-    for sub in subtables:
+    for sub in units:
         probe = dataclasses.replace(
             selector, **({"sheet": sub} if selector.format == "excel" else {"table": sub})
         )
-        columns = reader.peek_fields(file, probe)
+        columns = peek(file, probe)
         if columns is None:
             continue
         resolve = make_resolver(sorted(columns))

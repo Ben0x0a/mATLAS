@@ -11,9 +11,9 @@ Depends on: ``model_atlas.core`` (``ids`` — the analysis id derivation,
             ``vocabularies`` — the ``Analysis`` family + the ``RecordType`` labels,
             ``store`` — the layer-typed L3 writer, ``projection`` — the shared
             component subqueries, so this read and the flat CSV read the SAME
-            component the same way) and pandas. The FENCED
-            ``model_atlas/transforms/rank.py`` is the normative reference: its
-            ranking is ported here VERBATIM (see "The port", below), never modified.
+            component the same way) and pandas. The retired ``transforms/rank.py``
+            was the normative reference: its ranking is ported here VERBATIM (see
+            "The port", below), never modified.
 
 The L3 contract (docs/run_db_schema.md decision 19)
 ---------------------------------------------------
@@ -27,7 +27,7 @@ One row is written for EVERY assertion, ranked or not: a NULL verdict records
 "examined, not part of a duplicate time group", which is evidence in itself and
 distinct from "this method never ran".
 
-The port (transforms/rank.py ``untangle()``, semantics UNCHANGED)
+The port (the retired transforms/rank.py ``untangle()``, semantics UNCHANGED)
 -----------------------------------------------------------------
 ``_has_value`` / ``_completeness`` / ``_rank`` below are the old engine's code
 verbatim (only the ``RecordType`` import moved to ``core.vocabularies`` — same

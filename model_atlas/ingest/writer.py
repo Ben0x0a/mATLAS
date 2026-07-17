@@ -17,7 +17,7 @@ WHY this is the L0 writer and not the old ``sources`` pipeline: the new engine's
 discipline lives entirely in ``core`` (paths-only ids, the two evidence digests, the
 canonical joins), so the acquisition layer is rebuilt here against ``core.store`` while the
 old engine keeps running until T60. The container *walk* is ported from
-``model_atlas/sources/discover.py`` (see ``discover.py``); what is NEW is the persistence:
+``sources/discover.py`` (see ``discover.py``); what is NEW is the persistence:
 
   * every archive encounter is recorded (``archive`` + ``run_archive``), decision 38 — an
     archive id is derived from its PATH only (never the central-directory hash), so two
@@ -137,9 +137,12 @@ def _preset_signature(presets: tuple[Preset, ...]) -> str:
     return canonical_json(triples)
 
 
-def _input_file_path(file: SourceFile) -> Path:
+def opened_input_path(file: SourceFile) -> Path:
     """The outermost on-disk artefact opened for ``file``: the first archive with an
-    on-disk path in its container chain, else the loose file's own path."""
+    on-disk path in its container chain, else the loose file's own path.
+
+    Public (T60): the app pipeline derives each source's id from the SAME opened path
+    the writer used, so the two derivations can never drift."""
     for container in file.containers:
         if isinstance(container, ZipContainer) and container.path is not None:
             return container.path
@@ -278,7 +281,7 @@ def _ingest_file(
         report.warnings.append(message)
         return
 
-    input_file_path = canonical_path(str(_input_file_path(file).resolve()))
+    input_file_path = canonical_path(str(opened_input_path(file).resolve()))
     inner_path = container_inner_path(file.inner_chain)
     fingerprint = file.container.content_sha256(file)
     siblings = file.container.sibling_sha256(file)

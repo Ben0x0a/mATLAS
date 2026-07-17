@@ -1,17 +1,16 @@
 """Tests for the untangle L3 brick (``model_atlas.analyze.untangle``).
 
-Defines:    the old-engine parity test (ONE fixture spec drives BOTH paths: the old
-            ``transforms.rank.untangle`` over the flat frame, and the new store-read
-            ``analyse`` — per-assertion ``(record_type, record_rank)`` must match),
-            the decision-19 re-run tests (a bumped version ADDS a second row per
-            assertion and the projection picks the current method's verdict; the
-            SAME version re-run RAISES), the analysis id derivation check, and the
-            empty-store no-op.
+Defines:    the pinned-oracle verdict test (the ``_EXPECTED`` tuple was verified
+            against the retired ``transforms.rank.untangle`` before the T60 cut-over,
+            so the store-read ``analyse`` still answers to the old engine's exact
+            per-assertion ``(record_type, record_rank)``), the decision-19 re-run
+            tests (a bumped version ADDS a second row per assertion and the
+            projection picks the current method's verdict; the SAME version re-run
+            RAISES), the analysis id derivation check, and the empty-store no-op.
 Used by:    the T40 verification gate (pytest tests/analyze/test_untangle.py).
-Depends on: ``model_atlas.analyze.untangle`` (under test), the FENCED
-            ``model_atlas.transforms.rank`` (the parity oracle — read-only),
-            ``model_atlas.core`` (``ids`` / ``vocabularies`` / ``store`` /
-            ``projection``), pandas and pytest.
+Depends on: ``model_atlas.analyze.untangle`` (under test), ``model_atlas.core``
+            (``ids`` / ``vocabularies`` / ``store`` / ``projection``), pandas and
+            pytest.
 """
 from __future__ import annotations
 
@@ -25,14 +24,12 @@ from model_atlas.core import ids
 from model_atlas.core import projection
 from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore
-from model_atlas.transforms import rank as old_rank
 
-# --- ONE fixture spec, consumed by BOTH engines ------------------------------
-# Each spec is a dict of OLD flat column names -> values. The old path feeds the
-# specs straight into ``transforms.rank.untangle`` as a frame; the new path writes
-# the same values into their settled relational homes and runs ``analyse``. A single
-# spec source means any divergence between the two results is a real port defect,
-# never a fixture transcription slip.
+# --- ONE fixture spec + a pinned oracle --------------------------------------
+# Each spec is a dict of OLD flat column names -> values, written into their settled
+# relational homes and ranked by ``analyse``. ``_EXPECTED`` is the verdict tuple the
+# retired ``transforms.rank.untangle`` produced for the SAME specs (verified while
+# both engines coexisted), so the oracle survives the old engine's deletion.
 
 _SECOND_US = 1_700_000_000_000_000   # 2023-11-14T22:13:20Z, in microseconds
 
@@ -176,28 +173,16 @@ def _analysis_verdicts(store: RunStore, method: str) -> dict[str, tuple]:
     }
 
 
-# --- parity: the new store-read path matches the old flat engine -------------
+# --- parity: the store-read path matches the pinned old-engine oracle ---------
 
-def test_parity_with_the_old_engine() -> None:
-    # OLD path: the specs as the flat frame the v3 pipeline would have ranked.
-    old_frame = old_rank.untangle(pd.DataFrame(list(_SPECS)))
-    old_verdicts = [
-        (None if pd.isna(record_type) else str(record_type),
-         None if pd.isna(record_rank) else int(record_rank))
-        for record_type, record_rank in zip(old_frame["record_type"],
-                                            old_frame["record_rank"])
-    ]
-    # The oracle is pinned: an accidental everything-unranked parity would be hollow.
-    assert tuple(old_verdicts) == _EXPECTED
-
-    # NEW path: the same specs through the relational store + analyse.
+def test_parity_with_the_pinned_old_engine_oracle() -> None:
     with RunStore() as store:
         assertion_ids = _build_scenario(store)
         written = untangle.analyse(store)
         assert written == len(_SPECS)   # one verdict row per assertion, ranked or not
         new_verdicts = _analysis_verdicts(store, "untangle/2.0")
 
-    assert [new_verdicts[assertion_id] for assertion_id in assertion_ids] == old_verdicts
+    assert tuple(new_verdicts[assertion_id] for assertion_id in assertion_ids) == _EXPECTED
 
 
 def test_analysis_id_is_the_core_derivation() -> None:

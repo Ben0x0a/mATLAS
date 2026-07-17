@@ -21,7 +21,7 @@ def run(argv: list[str] | None = None) -> int:
         )
         raise SystemExit(1) from exc
 
-    from model_atlas.diagnostics import install_excepthook
+    from model_atlas.app.diagnostics import install_excepthook
 
     from gui.app import MainController
     from gui.theme import configure_application_font

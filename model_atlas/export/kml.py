@@ -1,5 +1,5 @@
 """KML export brick: Google-Earth placemarks for the flat-projected rows that carry a
-coordinate (T51 — ports ``model_atlas/exporters/builtin.py``'s ``export_kml``).
+coordinate (T51 — ports ``exporters/builtin.py``'s ``export_kml``).
 
 Defines:    KmlExporter (the ``Exporter`` protocol brick, ``format = "kml"``),
             registered in model_atlas.export.registry at import time.

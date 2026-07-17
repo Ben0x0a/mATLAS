@@ -10,8 +10,8 @@ from model_atlas.presets.spec import preset_spec_from_yaml
 import pytest
 
 pytest.importorskip("lxml")
-from model_atlas.sources.container import FilesystemContainer, SourceFile
-from tests.sources.test_xml_cellebrite import _REPORT
+from model_atlas.ingest.containers import FilesystemContainer, SourceFile
+from tests.ingest.test_xml_reader import _REPORT
 
 _NS = "http://pa.cellebrite.com/report/2.0"
 

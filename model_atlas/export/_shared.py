@@ -10,9 +10,9 @@ Used by:    model_atlas.export.kml / .geojson / .xlsx / .geovisualizer.
 Depends on: model_atlas.export.csv_flat (``ExportContext``, ``PRESET_ID_COLNAME`` —
             read-only imports, csv_flat itself is never modified), pandas.
 
-Not touching model_atlas/exporters/builtin.py (fenced, read-only)
+Why these helpers were re-declared rather than imported (T51)
 -------------------------------------------------------------------
-model_atlas/exporters/builtin.py declares near-identical helpers for the OLD
+The old engine's exporters declared near-identical helpers for the OLD
 ``fn(ctx) -> list[Path]`` exporters. That module is fenced (read, never modify) for
 T51, and importing from it would wire the new query+serialiser bricks back onto the
 old engine's ``ExportContext`` shape, so these are re-declared here as this
@@ -28,7 +28,7 @@ import pandas as pd
 
 from model_atlas.export.csv_flat import PRESET_ID_COLNAME, ExportContext
 
-# Cross-platform epoch anchor (mirrors model_atlas.transforms.builtin / the old
+# Cross-platform epoch anchor (mirrors integrate.timeparse / the old
 # exporters.builtin): timedelta arithmetic is valid across the whole datetime range,
 # unlike datetime.fromtimestamp, which raises on Windows for out-of-range microseconds.
 UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)

@@ -7,9 +7,9 @@ Used by:    xml_reader's dialect registry (imported for its registration side ef
 Depends on: xml_reader (shared SOURCE_COLUMNS / OpenStream / _local), ufdr_parser
             (scan / BlockRangeReader / source_lookup — one-way reuse), lxml, pandas.
 
-Ported verbatim from ``model_atlas/sources/readers/xml_specifics/cellebrite_xml_reports.py``
+Ported verbatim from ``sources/readers/xml_specifics/cellebrite_xml_reports.py``
 (only the import of the shared helpers now points at ``model_atlas.ingest.readers.
-xml_reader`` instead of ``model_atlas.sources.readers.xml_reader``) — the flattening and
+xml_reader`` instead of ``sources.readers.xml_reader``) — the flattening and
 block-scan logic are unchanged.
 
 WHY reuse ufdr_parser: its streaming scan, byte-range block reader, and extraInfos source

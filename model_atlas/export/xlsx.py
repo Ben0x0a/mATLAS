@@ -1,5 +1,5 @@
 """XLSX export brick: the flat-projected rows as an Excel worksheet (T51 — ports
-``model_atlas/exporters/builtin.py``'s ``export_xlsx``).
+``exporters/builtin.py``'s ``export_xlsx``).
 
 Defines:    XlsxExporter (the ``Exporter`` protocol brick, ``format = "xlsx"``),
             registered in model_atlas.export.registry at import time.

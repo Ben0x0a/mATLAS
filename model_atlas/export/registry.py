@@ -2,27 +2,20 @@
 ``Exporter`` bricks in this package.
 
 Defines:    ExporterSpec, register_exporter, available_exporters, get_exporter,
-            run_exporters — the same register/list/run shape as
-            ``model_atlas.exporters.registry``, mirrored for the new ``Exporter``
-            protocol (``export(store, ctx) -> list[Path]``, T50).
-Used by:    kml.py / geojson.py / xlsx.py / geovisualizer.py / sqlite_db.py (each
+            run_exporters (register / list / run for the ``Exporter`` protocol —
+            ``export(store, ctx) -> list[Path]``, T50), ``load_builtin_exporters``
+            (imports every shipped brick for its registration side effect) and the
+            registration of the primary ``csv`` brick.
+Used by:    the app-layer pipeline (``model_atlas.app.pipeline`` runs the selected
+            bricks), gui.app / launcher.cli (list the available bricks),
+            kml.py / geojson.py / xlsx.py / geovisualizer.py / sqlite_db.py (each
             registers its brick instance at import time) and tests/export/*.
 Depends on: model_atlas.core.store.RunStore, model_atlas.export.csv_flat (the
             ``Exporter`` protocol + ``ExportContext``), the standard library only.
 
-Why a second registry, rather than reusing model_atlas/exporters/registry.py (T51 fence)
-------------------------------------------------------------------------------------------
-``model_atlas/exporters/registry.py`` is FENCED for this task and its
-``ExportContext`` carries a pre-built pandas ``DataFrame`` plus a raw
-``sqlite3.Connection`` — the OLD exporter contract, ``fn(ctx) -> list[Path]``. The
-bricks in this package follow the T50 ``Exporter`` protocol instead —
-``export(store: RunStore, ctx: ExportContext) -> list[Path]`` — so they query the
-store directly rather than receiving an already-assembled frame. The two contracts
-cannot share one registry without changing the fenced module, so this is a
-deliberately small, parallel mirror of the same mechanism, scoped to the new engine.
-A later switch task rewires ``model_atlas.pipeline`` to run exporters from THIS
-registry (dropping the old one) once the app-layer pipeline is cut over (T60); until
-then both registries coexist and neither is driven by the app yet.
+T60: this became the ONE exporter registry — the old flat-frame registry (its
+``ExportContext`` carried a pre-built pandas ``DataFrame``; ``fn(ctx)`` contract)
+retired with the old engine, and the app pipeline now drives these bricks directly.
 """
 from __future__ import annotations
 
@@ -31,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from model_atlas.core.store import RunStore
-from model_atlas.export.csv_flat import Exporter, ExportContext
+from model_atlas.export.csv_flat import CsvFlatExporter, Exporter, ExportContext
 
 log = logging.getLogger(__name__)
 
@@ -88,3 +81,27 @@ def run_exporters(names: "list[str] | None", store: RunStore, ctx: ExportContext
         written.extend(paths)
         log.info(f"Export {name!r} wrote {len(paths)} file(s)")
     return written
+
+
+def load_builtin_exporters() -> None:
+    """Import every shipped export-brick module for its registration side effect.
+
+    HOW: plain lazy imports inside the function — the bricks import THIS module to
+    register themselves, so a module-level import here would be a cycle. WHY needed:
+    the GUI/CLI list the available bricks before any run; without this call only the
+    ``csv`` brick (registered below) would be visible."""
+    import model_atlas.export.geojson  # noqa: F401 - registration side effect
+    import model_atlas.export.geovisualizer  # noqa: F401
+    import model_atlas.export.kml  # noqa: F401
+    import model_atlas.export.sqlite_db  # noqa: F401
+    import model_atlas.export.xlsx  # noqa: F401
+
+
+# The primary flat-CSV brick, registered HERE rather than in csv_flat.py: the registry
+# already imports csv_flat (the Exporter protocol lives there), so a csv_flat-side
+# registration would be a circular import. Registered under the historic name "csv" so
+# the GUI's default selection and the CLI's --export vocabulary carry over unchanged.
+register_exporter(
+    "csv", "CSV", CsvFlatExporter(),
+    "The flat assertion CSV (merged, or one file per preset in split mode).",
+)

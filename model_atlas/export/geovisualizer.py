@@ -1,5 +1,5 @@
 """GeoVisualizer export brick: the fixed 15-column CSV the GeoVisualizer tool imports
-(T51 — ports ``model_atlas/exporters/builtin.py``'s ``export_geovisualizer``, including
+(T51 — ports ``exporters/builtin.py``'s ``export_geovisualizer``, including
 its interval-expansion logic).
 
 Defines:    GeovisualizerExporter (the ``Exporter`` protocol brick,

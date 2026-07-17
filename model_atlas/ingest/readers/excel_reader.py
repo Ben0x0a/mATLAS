@@ -6,7 +6,7 @@ Depends on: ``model_atlas.core.determinism`` (``excel_line_no`` — rule 3),
             ``model_atlas.core.vocabularies`` (``RecordState``), ``model_atlas.ingest.
             readers.base``/``registry``, and ``pandas``/``openpyxl``.
 
-Ported from ``model_atlas/sources/readers/excel_reader.py`` (same ``pandas.read_excel`` +
+Ported from ``sources/readers/excel_reader.py`` (same ``pandas.read_excel`` +
 ``openpyxl`` engine, same ``sheet``/``skip_rows``/``header_row`` params), plus this task's
 two additions: R9 ``line_no`` (rule 3: the sheet row number itself) and verbatim values via
 ``dtype=str`` — this reader's "parse_float=str-style option": pandas skips numeric

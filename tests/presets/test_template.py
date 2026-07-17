@@ -1,13 +1,14 @@
 """Tests for preset template mapping values (decision 42: ``format(...)``).
 
 Covers the expr parser (``parse_template`` via ``parse_ref``) — literal/placeholder
-segmentation, ``{{``/``}}`` escapes, malformed templates — the assemble-time renderer
-(mixed render, a missing placeholder rendering empty, EVERY placeholder missing yielding
-the same ``NA_SENTINEL`` identity as decision 33), a template as a conditional branch
-result, and the end-to-end spec-loading + assemble path.
+segmentation, ``{{``/``}}`` escapes, malformed templates — the resolver
+(``presets.resolve.resolve_ref`` over a format ref: mixed render, a missing placeholder
+rendering empty, EVERY placeholder missing yielding the same ``NA_SENTINEL`` identity as
+decision 33), a template as a conditional branch result, and the load-time lint path.
+The end-to-end assemble coverage lives in tests/ingest/test_assemble.py.
 Used by:    pytest.
-Depends on: presets.expr, presets.spec, presets.fields, presets.lint, transforms.assemble,
-            tests.support, pyyaml.
+Depends on: presets.expr, presets.spec, presets.fields, presets.lint, presets.resolve,
+            pyyaml.
 """
 from __future__ import annotations
 
@@ -27,13 +28,18 @@ from model_atlas.presets.expr import (
 from model_atlas.presets.fields import make_resolver
 from model_atlas.presets.lint import lint_spec
 from model_atlas.presets.spec import preset_spec_from_yaml
-from model_atlas.transforms.assemble import BuildEnv, _resolve_cond, _resolve_ref
-from tests.support import build_rows
+from model_atlas.presets.resolve import resolve_cond as _resolve_cond
+from model_atlas.presets.resolve import resolve_ref as _resolve_ref
 
-_ENV = BuildEnv(
-    input_file_path="/dev/v.csv", input_file_name="v.csv", source_fingerprint="fp",
-    source_file_path="/dev/file", source_tier="secondary",
-)
+
+class _Env:
+    """The resolvers' duck-typed env: only ``.entity`` / ``.linked_entity`` are read."""
+
+    entity = None
+    linked_entity = None
+
+
+_ENV = _Env()
 
 
 def _render(text: str, row: dict[str, object]) -> object:
@@ -83,7 +89,7 @@ def test_malformed_template_raises(text: str) -> None:
         parse_ref(text)
 
 
-# --- rendering (assemble._resolve_template via _resolve_ref) -------------------
+# --- rendering (presets.resolve.resolve_template via resolve_ref) --------------
 
 def test_mixed_literals_and_refs_render() -> None:
     row = {"FirstName": "Ada", "LastName": "Lovelace", "City": "London"}
@@ -120,7 +126,7 @@ def test_template_as_a_conditional_branch_result() -> None:
     assert value == "gps"
 
 
-# --- end-to-end through spec loading + assemble --------------------------------
+# --- load-time lint over a template-bearing spec --------------------------------
 
 _TEMPLATE_PRESET = """
 preset: {id: t.tmpl, name: Tmpl, version: 1.0, tier: secondary}
@@ -138,21 +144,6 @@ assertions:
       instant: field(Created)
     links: {entity_position: at, entity_time: recorded_at, spatial_temporal: instant}
 """
-
-
-def test_end_to_end_template_column() -> None:
-    records = [
-        {"Lat": "1.5", "Lon": "2.5", "Created": "150", "First": "Ada", "Last": "Lovelace", "ItemID": "A1"},
-        {"Lat": "1.5", "Lon": "2.5", "Created": "160", "First": None, "Last": None, "ItemID": "A2"},
-    ]
-    frame, warnings = build_rows(records, _preset(_TEMPLATE_PRESET), _ENV)
-    assert warnings == []
-    both_present, both_missing = frame.iloc[0], frame.iloc[1]
-    assert both_present["source_label"] == "Ada Lovelace"
-    # All placeholders missing -> the sentinel value ("N/A" text after the store round-trip),
-    # distinct from an unmapped field's None.
-    assert both_missing["source_label"] == NA_SENTINEL == "N/A"
-    assert both_missing["source_label"] is not None
 
 
 def test_template_field_undeclared_lint_warns_not_crashes() -> None:

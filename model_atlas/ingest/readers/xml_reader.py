@@ -11,7 +11,7 @@ Depends on: ``model_atlas.core.vocabularies`` (``RecordState``), ``model_atlas.i
             readers.base``/``registry``, and the standard library only (dialects pull in
             lxml/ufdr_parser, imported lazily so this module stays light).
 
-Ported from ``model_atlas/sources/readers/xml_reader.py``: the dialect Protocol/registry,
+Ported from ``sources/readers/xml_reader.py``: the dialect Protocol/registry,
 ``sniff_namespace`` and the per-report prepare/cache shape are kept verbatim. What is
 DROPPED (deliberately, not an oversight) is the old reader's staging-tier machinery
 (``STAGING_TIER``, ``acquire_source``/``container.finalize``): T21 (discover/containers)

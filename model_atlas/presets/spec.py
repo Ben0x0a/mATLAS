@@ -4,8 +4,8 @@ Defines:    the typed preset structures (PresetMeta, InputSelector, FieldSpec, T
             Links, AssertionTemplate, PresetSpec) and preset_spec_from_yaml(), which
             parses + validates a v3 YAML preset against the canonical model.
 Used by:    the loader, the assembly engine, the matcher, and reporting.
-Depends on: model.families (columns/types/enums), presets.expr (ref + pipe parser),
-            sources.pathmatch (selector path validation).
+Depends on: core.vocabularies (the link/tier/state enums), presets.expr (ref + pipe
+            parser), ingest.pathmatch (selector path validation).
 
 v3 layout (readable, examiner-first)::
 
@@ -43,14 +43,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from model_atlas.model.families import (
-    OUTPUT_COLUMNS,
+from model_atlas.core.vocabularies import (
     EntityPositionLink,
     EntityTimeLink,
     RecordState,
     SourceTier,
     SpatialTemporalLink,
 )
+from model_atlas.ingest.pathmatch import validate_selector_path
 from model_atlas.presets.expr import (
     Cond,
     PipeCall,
@@ -60,23 +60,35 @@ from model_atlas.presets.expr import (
     parse_pipe,
     parse_ref,
 )
-from model_atlas.sources.pathmatch import validate_selector_path
 
-# Columns the engine owns; presets never assign them directly. The temporal bounds come
-# from a `time:` block, the lat/lon source fields are auto-captured, ``input_file_path`` /
-# ``preset_id`` / ``preset_name`` come from the run + matched preset, ``source_record_uid``
-# from the top-level `source_record_uid:` key (or is generated), ``row_uid`` is generated
-# per output row, and the derived columns come from untangle.
-# ``raw_source_path`` and ``input_record_id`` are intentionally NOT engine-owned: a preset maps
-# them (e.g. AXIOM Source / Location), and the engine only fills a default when it does not.
-_ENGINE_OWNED_FIELDS: frozenset[str] = frozenset({
-    "time_lower_raw", "time_lower_source_field", "time_lower_unix_utc_us",
-    "time_upper_raw", "time_upper_source_field", "time_upper_unix_utc_us",
-    "latitude_source_field", "longitude_source_field",
-    "input_file_path", "source_record_uid", "row_uid", "preset_id", "preset_name",
-    "record_type", "record_rank",
+# The model fields a preset may assign — the historic 45-column flat vocabulary MINUS
+# the engine-owned columns (temporal bounds come from a `time:` block, lat/lon source
+# fields are auto-captured, ``input_file_path`` / ``preset_id`` / ``preset_name`` came
+# from the run + matched preset, ``source_record_uid`` from its top-level key,
+# ``row_uid`` was generated per output row, and record_type/record_rank come from
+# untangle). ``raw_source_path`` and ``input_record_id`` stay assignable: a preset maps
+# them (e.g. AXIOM Source / Location) and the engine only fills a default when it does not.
+# T60: formerly derived from ``model.families.OUTPUT_COLUMNS``; with the flat model
+# retired, the preset language's target vocabulary is declared HERE, once. The new L1
+# targets (entity_role, activity_kind, context.<key>, ...) are constructed
+# programmatically by ingest.assemble and deliberately NOT admitted here yet —
+# extending this YAML gate is a parked, owner-tracked change (tasks/reports.md).
+ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
+    # entity
+    "entity", "entity_type", "linked_entity",
+    # temporal (assignable subset)
+    "utc_offset_hours", "time_accuracy_us", "temporal_source",
+    # spatial
+    "latitude_wgs84", "longitude_wgs84", "altitude_m", "position_type", "raw_position",
+    "position_source", "horizontal_accuracy_m", "vertical_accuracy_m",
+    "horizontal_speed_kmh", "vertical_speed_kmh", "horizontal_speed_accuracy_kmh",
+    "vertical_speed_accuracy_kmh", "heading_deg", "heading_accuracy_deg",
+    "beam_azimuth_deg", "beam_width_deg",
+    # bindings
+    "entity_position_link", "entity_time_link", "spatial_temporal_link",
+    # provenance (assignable subset)
+    "raw_source_path", "input_record_id", "source_label", "source_tier", "deleted",
 })
-ASSIGNABLE_FIELDS: frozenset[str] = frozenset(OUTPUT_COLUMNS) - _ENGINE_OWNED_FIELDS
 
 # Fields whose constant value must belong to a controlled vocabulary.
 _ENUM_FIELDS: dict[str, frozenset[str]] = {

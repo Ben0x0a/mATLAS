@@ -1,13 +1,13 @@
 """Tests for preset conditional mapping values (decision 33: ``if / elif / else``).
 
-Covers the expr parser (``parse_cond``), the assemble-time evaluator (``_resolve_cond`` +
-``_cond_match``) — first-match-wins, elif chains, else fall-through, ``!=``, the explicit
-``NA`` missing test and ref comparands — and the end-to-end spec-loading + assemble path,
-pinning the crucial invariant that the ``NA_SENTINEL`` (conditional matched nothing) is
-DISTINGUISHABLE from None (field never mapped).
+Covers the expr parser (``parse_cond``), the resolver (``presets.resolve.resolve_cond``
++ ``cond_match``) — first-match-wins, elif chains, else fall-through, ``!=``, the
+explicit ``NA`` missing test and ref comparands — and the spec-loading validation path.
+The end-to-end assemble coverage lives in tests/ingest/test_assemble.py (the engine the
+resolvers now feed).
 Used by:    pytest.
-Depends on: presets.expr, presets.spec, presets.fields, presets.lint, transforms.assemble,
-            tests.support, pandas, pyyaml.
+Depends on: presets.expr, presets.spec, presets.fields, presets.lint, presets.resolve,
+            pyyaml.
 """
 from __future__ import annotations
 
@@ -27,13 +27,18 @@ from model_atlas.presets.expr import (
 from model_atlas.presets.fields import make_resolver
 from model_atlas.presets.lint import lint_spec
 from model_atlas.presets.spec import preset_spec_from_yaml
-from model_atlas.transforms.assemble import BuildEnv, _cond_match, _resolve_cond
-from tests.support import build_rows
+from model_atlas.presets.resolve import cond_match as _cond_match
+from model_atlas.presets.resolve import resolve_cond as _resolve_cond
 
-_ENV = BuildEnv(
-    input_file_path="/dev/v.csv", input_file_name="v.csv", source_fingerprint="fp",
-    source_file_path="/dev/file", source_tier="secondary",
-)
+
+class _Env:
+    """The resolvers' duck-typed env: only ``.entity`` / ``.linked_entity`` are read."""
+
+    entity = None
+    linked_entity = None
+
+
+_ENV = _Env()
 
 
 def _resolve(text: str, row: dict[str, object]) -> object:
@@ -103,7 +108,7 @@ def test_malformed_conditional_raises(text: str) -> None:
         parse_cond(text)
 
 
-# --- evaluation (assemble._resolve_cond / _cond_match) ----------------------
+# --- evaluation (presets.resolve.resolve_cond / cond_match) ------------------
 
 def test_na_test_true_when_missing_false_when_present() -> None:
     # field(X) == "NA" is the explicit missing test.
@@ -151,7 +156,7 @@ def test_equality_tolerates_source_type_drift() -> None:
     assert _cond_match(2, "==", Ref("const", "1"), "1") is False
 
 
-# --- end-to-end through spec loading + assemble -----------------------------
+# --- load-time validation over a conditional-bearing spec --------------------
 
 _LINK_COND = """
 preset: {id: t.cond, name: Cond, version: 1.0, tier: secondary}
@@ -175,31 +180,6 @@ assertions:
       entity_position: at
       entity_time: recorded_at
 """
-
-
-def test_end_to_end_conditional_link_and_non_link_column() -> None:
-    records = [
-        {"Lat": "1.5", "Lon": "2.5", "Created": "150", "Kind": "cell", "ItemID": "A1"},
-        {"Lat": "1.5", "Lon": "2.5", "Created": None, "Kind": "gps", "ItemID": "A2"},
-    ]
-    frame, warnings = build_rows(records, _preset(_LINK_COND), _ENV)
-    assert warnings == []
-    row_present, row_missing = frame.iloc[0], frame.iloc[1]
-
-    # Non-link column (position_type) resolves through the very same conditional path.
-    assert row_present["position_type"] == "tower"   # Kind == "cell" -> then branch
-    assert row_missing["position_type"] == "gps"     # else branch
-
-    # Link column: Created present + no else -> the sentinel; Created NA -> the then branch.
-    # Through the store round-trip the sentinel keeps its VALUE (the "N/A" text NA_SENTINEL
-    # equals) though not its Python type — still unmistakably distinct from a NULL.
-    assert row_present["spatial_temporal_link"] == NA_SENTINEL == "N/A"
-    assert row_missing["spatial_temporal_link"] == "instant"
-
-    # The crucial distinction: the sentinel (conditional matched nothing) is NOT None, and an
-    # unmapped model field (altitude_m — never mentioned) IS None. They are distinguishable.
-    assert row_present["spatial_temporal_link"] is not None
-    assert row_present["altitude_m"] is None
 
 
 def test_conditional_enum_result_is_validated_at_load() -> None:

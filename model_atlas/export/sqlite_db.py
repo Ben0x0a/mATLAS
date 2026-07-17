@@ -1,6 +1,6 @@
 """sqlite_db export brick: persist the run database itself via ``VACUUM INTO`` (T51 —
 the new-engine replacement for the old flat-table ``sqlite`` export in
-``model_atlas/exporters/builtin.py``).
+``exporters/builtin.py``).
 
 Defines:    SqliteDbExporter (the ``Exporter`` protocol brick,
             ``format = "sqlite_db"``), registered in model_atlas.export.registry at

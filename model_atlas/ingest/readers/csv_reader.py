@@ -7,7 +7,7 @@ Depends on: ``model_atlas.core.determinism`` (``csv_data_line_numbers`` — rule
             ``model_atlas.core.vocabularies`` (``RecordState``), ``model_atlas.ingest.
             readers.base``/``registry``, and the standard library ``csv`` module.
 
-Ported from ``model_atlas/sources/readers/csv_reader.py`` (its ``delimiter``/``encoding``/
+Ported from ``sources/readers/csv_reader.py`` (its ``delimiter``/``encoding``/
 ``skip_rows``/``header_row`` params are kept verbatim), with two additions this task
 requires: R9 ``line_no`` assignment and verbatim values. WHY the stdlib ``csv`` module
 replaces the old reader's ``pandas.read_csv``: pandas infers a column's dtype and would

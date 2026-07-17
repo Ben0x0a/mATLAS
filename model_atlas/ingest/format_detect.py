@@ -10,7 +10,7 @@ Used by:    ``model_atlas.ingest.discover`` (an archive-vs-leaf test during trav
 Depends on: ``model_atlas.ingest.containers`` (``SourceFile``) and the standard library
             only.
 
-Ported verbatim from ``model_atlas/sources/format_detect.py``: magic bytes always win;
+Ported verbatim from ``sources/format_detect.py``: magic bytes always win;
 the suffix is consulted only for CSV/TSV, which have no reliable signature.
 ``plist``/``xml``/``archive`` are recognised for classification and skip/recursion even
 where no reader ships for them.

@@ -11,7 +11,7 @@ Depends on: ``model_atlas.core.determinism`` (``sqlite_enumeration_sql``, ``numb
             unchanged two-pass origin-labelling algorithm), and ``pandas`` (the shape
             ``merge_with_source`` operates on).
 
-Ported from ``model_atlas/sources/readers/sqlite_reader.py``: the WAL/journal two-pass
+Ported from ``sources/readers/sqlite_reader.py``: the WAL/journal two-pass
 merge algorithm (``merge_with_source``) is reused UNCHANGED. What differs is the row
 FETCH: the old reader (via ``model_atlas.sqlite.extractor.extract_table``) ran a bare
 ``SELECT * FROM table`` with no explicit order, relying on SQLite's incidental scan order.

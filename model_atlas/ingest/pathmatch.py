@@ -7,7 +7,7 @@ Used by:    the ingest preset matcher (a later brick — the path/name pre-filte
             preset-spec validation; carried here so the ingest engine owns its path model.
 Depends on: the standard library only.
 
-Ported verbatim from ``model_atlas/sources/pathmatch.py``. A folder and an archive are
+Ported verbatim from ``sources/pathmatch.py``. A folder and an archive are
 both addressed by a logical path inside a Container, so a selector path matches the same
 way in either. Acquisition tools wrap the filesystem in one root folder (``filesystem1/``,
 ``_/``, ``Dump/``); ``root_prefix_depth`` skips up to that many leading candidate segments

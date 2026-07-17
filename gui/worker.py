@@ -7,8 +7,8 @@ Defines:    ProgressBridge (thread-safe per-phase signal), TaskRunner (owns the
             _TaskWorker, _LogBridge and _GuiLogHandler back these public helpers; the
             log-level -> colour map lives with the handler.
 Used by:    gui.app (MainController owns a TaskRunner and installs the log handler).
-Depends on: PySide6 (QtCore threading/signals), model_atlas.config (get_settings),
-            model_atlas.logging_setup (build_formatter).
+Depends on: PySide6 (QtCore threading/signals), model_atlas.app.config (get_settings),
+            model_atlas.app.logging_setup (build_formatter).
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
 
-from model_atlas.config import get_settings
-from model_atlas.logging_setup import build_formatter
+from model_atlas.app.config import get_settings
+from model_atlas.app.logging_setup import build_formatter
 
 
 class _LogBridge(QObject):

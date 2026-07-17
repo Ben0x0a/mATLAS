@@ -14,7 +14,7 @@ Depends on: ``model_atlas.integrity`` (``sha256_file``), ``model_atlas.sqlite.in
             (``fingerprint_zip`` — the strategic central-directory hash, REUSED, no new
             hashing here) and the standard library only.
 
-Ported from ``model_atlas/sources/container.py`` — the container model (folder and zip
+Ported from ``sources/container.py`` — the container model (folder and zip
 BOTH a ``Container`` addressing files by a logical path) is kept verbatim, per decision
 29 (a source is the *opened unit*: folder->file, zip->inner file). The staging/finalize
 integrity machinery of the old module is deliberately NOT ported: the T20 readers do

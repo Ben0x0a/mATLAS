@@ -8,7 +8,7 @@ if str(ROOT) not in sys.path:
 
 import pytest
 
-from model_atlas.config import Settings, reset_settings, set_settings
+from model_atlas.app.config import Settings, reset_settings, set_settings
 
 
 @pytest.fixture(autouse=True)

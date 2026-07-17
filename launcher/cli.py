@@ -7,12 +7,11 @@ import tempfile
 from pathlib import Path
 
 from model_atlas import __version__
-from model_atlas.config import get_settings
-from model_atlas.diagnostics import install_excepthook
-from model_atlas.exporters import available_exporters
-from model_atlas.logging_setup import configure_logging
-from model_atlas.model.families import OUTPUT_COLUMNS
-from model_atlas.pipeline import process
+from model_atlas.app.config import get_settings
+from model_atlas.app.diagnostics import install_excepthook
+from model_atlas.app.logging_setup import configure_logging
+from model_atlas.app.pipeline import process
+from model_atlas.export.registry import available_exporters, load_builtin_exporters
 from launcher.profiles import build_profile_preset_folder, load_profile
 
 log = logging.getLogger("model_atlas.cli")
@@ -22,9 +21,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="matlas",
         description=(
-            "SpatioTemporal Analysis - Forensic Data Processing. Process CSV, Excel and "
-            f"SQLite sources into a merged {len(OUTPUT_COLUMNS)}-column spatio-temporal "
-            "assertion model."
+            "SpatioTemporal Analysis - Forensic Data Processing. Process CSV, Excel, "
+            "SQLite and XML sources into the relational spatio-temporal assertion "
+            "model (flat CSV projection by default)."
         ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -139,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
             "canonical schema (default). Use --no-source-columns for canonical columns only."
         ),
     )
+    load_builtin_exporters()
     builtin_names = ", ".join(spec.name for spec in available_exporters())
     process_parser.add_argument(
         "--export",
@@ -147,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Write an additional export alongside the CSV; repeatable. "
-            f"Available: {builtin_names} (plus any drop-in plugins in the export plugins folder)."
+            f"Available: {builtin_names}."
         ),
     )
 

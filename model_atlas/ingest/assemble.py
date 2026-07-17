@@ -9,31 +9,31 @@ Defines:    ``assemble_source`` (the fan-out engine: one reader record × one ma
             ``activity_kind``, ``context.<key>``, ``multiplicity``, the two referentials,
             the per-bound temporal role/part names, ``data_source``) that maps the new
             L1 columns the old flat model never had.
-Used by:    the app-layer pipeline (once T60 lands) and tests/ingest/test_assemble.py.
+Used by:    the app-layer pipeline (``model_atlas.app.pipeline``) and
+            tests/ingest/test_assemble.py.
 Depends on: ``model_atlas.core`` (``ids`` — every id and both digests, ``vocabularies``,
             ``store``), ``model_atlas.ingest.readers.base`` (the reader ``RawRecord``),
             ``model_atlas.presets`` (``spec``, ``fields``, ``expr`` — the unchanged v3
-            preset language), ``model_atlas.transforms.registry`` (``PipeContext``) and —
-            deliberately — the OLD engine ``model_atlas.transforms.assemble`` for its
-            pure resolver functions (see "Reused resolvers" below).
+            preset language; ``pipes`` — ``PipeContext``; ``resolve`` — the pure
+            resolver functions, see "Reused resolvers" below).
 
-This is the successor to ``model_atlas/transforms/assemble.py`` (T23). The old module
-stays untouched and working — the two engines coexist until T60. What is ported is the
-RESOLUTION machinery (refs, conditionals, templates, params, extract); what is NEW is the
-EMISSION: instead of one flat 45-column row per assertion, the engine writes the settled
-relational L1 shape (docs/run_db_schema.md, decisions 14-42).
+This is the successor to ``transforms/assemble.py`` (T23; the old module was
+deleted at the T60 cut-over). What was ported is the RESOLUTION machinery (refs,
+conditionals, templates, params, extract); what is NEW is the EMISSION: instead of one
+flat 45-column row per assertion, the engine writes the settled relational L1 shape
+(docs/run_db_schema.md, decisions 14-42).
 
 Reused resolvers (T22 survival)
 -------------------------------
-``_is_missing`` / ``_resolve_ref`` / ``_resolve_field`` / ``_resolve_cond`` /
-``_resolve_param`` / ``_preset_values`` are IMPORTED from the old module rather than
-re-ported. WHY: they are pure functions of their arguments (row dict + parsed refs +
-an ``entity``/``linked_entity`` param holder — no store, no module state), and the T22
-conditional (decision 33) / template (decision 42) semantics — first-match-wins,
-``NA_SENTINEL`` on no-match, empty-rendered missing placeholders — live inside them.
-Importing guarantees byte-identical behaviour in both engines until T60 folds them;
-re-porting would create a second copy that could silently drift. The ``env`` they take
-is duck-typed here by ``_ParamEnv`` (only ``.entity`` / ``.linked_entity`` are read).
+``is_missing`` / ``resolve_ref`` / ``resolve_field`` / ``resolve_cond`` /
+``resolve_param`` / ``preset_values`` are IMPORTED from ``presets.resolve`` (their T60
+home) rather than re-ported. WHY: they are pure functions of their arguments (row dict +
+parsed refs + an ``entity``/``linked_entity`` param holder — no store, no module state),
+and the T22 conditional (decision 33) / template (decision 42) semantics —
+first-match-wins, ``NA_SENTINEL`` on no-match, empty-rendered missing placeholders —
+live inside them. Importing keeps them single-sourced; a re-port would create a second
+copy that could silently drift. The ``env`` they take is duck-typed here by
+``_ParamEnv`` (only ``.entity`` / ``.linked_entity`` are read).
 
 The old→new field mapping (cross-check table of run_db_schema.md)
 -----------------------------------------------------------------
@@ -104,17 +104,18 @@ from model_atlas.ingest.readers.base import RawRecord
 from model_atlas.presets.expr import NA_SENTINEL, parse_param_expr
 from model_atlas.presets.fields import make_resolver
 from model_atlas.presets.spec import FieldSpec, InputSelector, PresetSpec, TimeSpec
-from model_atlas.transforms.assemble import (
-    # Pure resolver functions reused from the old engine (see the module header for the
-    # WHY); they carry the T22 conditional/template semantics with them by construction.
-    _is_missing,
-    _preset_values,
-    _resolve_cond,
-    _resolve_field,
-    _resolve_param,
-    _resolve_ref,
+from model_atlas.presets.pipes import PipeContext
+from model_atlas.presets.resolve import (
+    # The folded pure resolvers (T60: ``presets.resolve`` is their settled home); they
+    # carry the T22 conditional/template semantics with them by construction. Aliased to
+    # the historic private spellings so every call site below reads unchanged.
+    is_missing as _is_missing,
+    preset_values as _preset_values,
+    resolve_cond as _resolve_cond,
+    resolve_field as _resolve_field,
+    resolve_param as _resolve_param,
+    resolve_ref as _resolve_ref,
 )
-from model_atlas.transforms.registry import PipeContext
 
 # --- the extended field vocabulary (identifier-string constants) ------------
 # One constant per NEW L1 mapping target; suffixed _NAME because each is a field-name

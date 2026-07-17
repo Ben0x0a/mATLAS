@@ -7,7 +7,7 @@ Used by:    launcher.gui (the GUI entry point constructs and shows MainControlle
 Depends on: gui.worker (TaskRunner / ProgressBridge / install_gui_log_handler),
             gui.header_assets (window icon + header images), gui.accessibility,
             gui.completion, gui.theme, gui.widgets.drag_drop_line_edit, launcher.profiles,
-            and the model_atlas package pipeline/config/exporters/presets APIs.
+            and the model_atlas package app.pipeline/app.config/export/presets APIs.
 """
 from __future__ import annotations
 
@@ -49,9 +49,9 @@ from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
 from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler
 from launcher.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
-from model_atlas.config import get_settings
-from model_atlas.exporters import available_exporters, load_plugins
-from model_atlas.pipeline import ProcessResult, process
+from model_atlas.app.config import get_settings
+from model_atlas.export.registry import available_exporters, load_builtin_exporters
+from model_atlas.app.pipeline import ProcessResult, process
 from model_atlas.presets.spec_loader import load_preset_specs
 
 log = logging.getLogger("model_atlas.gui")
@@ -72,7 +72,7 @@ def _should_show_single_preset_notice(
     """Return True only when the pipeline's force-preset mode will actually trigger.
 
     The "one preset applied without filename selector filtering" notice is truthful
-    only when force-preset mode fires (model_atlas.pipeline): a single preset is in play
+    only when force-preset mode fires (model_atlas.app.pipeline): a single preset is in play
     AND the source is a single ordinary file whose format is not an archive. A single
     preset is "in play" when exactly one preset is selected (selected mode) or exactly
     one preset is loaded (auto mode). We approximate "not an archive" as "not .zip" here
@@ -228,7 +228,7 @@ class MainController(QObject):
         """Populate the 'Additional export' button with a checkable menu, one item per registered
         exporter (built-ins + any drop-in plugins). Built with Qt's QMenu/QAction — no custom
         widget. The selection is read at run time and passed to process()."""
-        load_plugins(Path(get_settings().export.plugins_dir))
+        load_builtin_exporters()
         menu = QMenu(self.additional_export_button)
         self._export_actions: dict[str, QAction] = {}
         for spec in available_exporters():
@@ -755,7 +755,7 @@ class MainController(QObject):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_output_folder)))
 
     def _open_error_reports(self) -> None:
-        """Open the crash-report folder (model_atlas.diagnostics writes matlas_error_*.json here
+        """Open the crash-report folder (model_atlas.app.diagnostics writes matlas_error_*.json here
         on any unhandled error). Always available; if nothing has failed yet the folder may not
         exist, so tell the user rather than opening a missing path."""
         crash_dir = Path(get_settings().diagnostics.crash_dir).expanduser()

@@ -6,7 +6,7 @@ WHAT THIS FILE IS
 A hand-written **demonstration artefact** — *not Phase-1 code*. It builds
 ``docs/examples/matlas_example.sqlite`` directly from the settled schema
 ([../run_db_schema.md](../run_db_schema.md), decisions 16-41) so the model can be
-exercised with realistic data *before* ``model_atlas/model/`` derives the real DDL
+exercised with realistic data *before* ``model/`` derives the real DDL
 from ``families.py``. The DDL, the digest recipes and the ingest order are transcribed
 by hand here; when the core lands, this script is superseded by the pipeline and kept
 only as a readable reference.

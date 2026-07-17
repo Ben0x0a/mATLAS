@@ -12,7 +12,7 @@ Depends on: ``model_atlas.ingest.containers`` (the Container model), ``model_atl
             integrity`` (``fingerprint_zip`` — the central-directory hash, REUSED) and the
             standard library.
 
-Ported from ``model_atlas/sources/discover.py``. Two changes vs the original, both
+Ported from ``sources/discover.py``. Two changes vs the original, both
 required by decision 38 and justified in the writer's header:
   * the walk now EMITS an ``ArchiveFound`` event per container (the old discover returned
     only leaf ``SourceFile``s), so the writer can record every archive encounter and an
