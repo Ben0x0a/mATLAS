@@ -111,6 +111,16 @@
      </layout>
     </item>
     <item>
+     <widget class="QTabWidget" name="mainTabWidget">
+      <property name="currentIndex">
+       <number>0</number>
+      </property>
+      <widget class="QWidget" name="transformTab">
+       <attribute name="title">
+        <string>Transform</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="transformTabLayout">
+    <item>
      <widget class="QGroupBox" name="inputGroup">
       <property name="title">
        <string>Inputs</string>
@@ -648,6 +658,44 @@
       <property name="placeholderText">
        <string>Run logs appear here.</string>
       </property>
+     </widget>
+    </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="databaseEditTab">
+       <attribute name="title">
+        <string>Database Edit</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="databaseEditTabLayout">
+        <item>
+         <widget class="QLabel" name="databaseEditPlaceholderLabel">
+          <property name="text">
+           <string>Database editing tools will arrive in a later update.</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="spatiotemporalTab">
+       <attribute name="title">
+        <string>Spatiotemporal Analysis</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="spatiotemporalTabLayout">
+        <item>
+         <widget class="QLabel" name="spatiotemporalPlaceholderLabel">
+          <property name="text">
+           <string>Spatiotemporal analysis tools will arrive in a later update.</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
      </widget>
     </item>
    </layout>

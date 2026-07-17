@@ -239,6 +239,34 @@ def build_stylesheet() -> str:
         border-color: #bfdbfe;
     }
 
+    /* Tab shell: style the built-in QTabWidget to match the group-box chrome, so the
+       Transform / Database Edit / Spatiotemporal Analysis tabs sit in the light theme
+       (the selected tab shares the pane background to read as attached to it). */
+    QTabWidget::pane {
+        border: 1px solid #c7d3e1;
+        border-radius: 6px;
+        background: #f9fbfd;
+        top: -1px;
+    }
+    QTabBar::tab {
+        background: #e8eef6;
+        color: #334155;
+        border: 1px solid #c7d3e1;
+        border-bottom: none;
+        border-top-left-radius: 6px;
+        border-top-right-radius: 6px;
+        padding: 7px 16px;
+        margin-right: 2px;
+        font-weight: 600;
+    }
+    QTabBar::tab:selected {
+        background: #f9fbfd;
+        color: #16233a;
+    }
+    QTabBar::tab:hover:!selected {
+        background: #eef4fb;
+    }
+
     QTextEdit#logEdit {
         font-family: "__MONO_FONT__";
         font-size: 12px;

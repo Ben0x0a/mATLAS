@@ -37,8 +37,10 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QTabWidget,
     QTextEdit,
     QToolButton,
+    QWidget,
 )
 
 from gui import accessibility, header_assets
@@ -152,6 +154,14 @@ class MainController(QObject):
             if widget is None:
                 raise RuntimeError(f"Missing widget {name!r} in main_window.ui")
             return widget
+
+        # Tab shell: the Transform form lives unchanged inside the first tab; the other two
+        # tabs are placeholders for the Database Edit and Spatiotemporal Analysis panels.
+        # All other bindings below still resolve because findChild searches recursively.
+        self.tab_widget: QTabWidget = child(QTabWidget, "mainTabWidget")
+        self.transform_tab: QWidget = child(QWidget, "transformTab")
+        self.database_edit_tab: QWidget = child(QWidget, "databaseEditTab")
+        self.spatiotemporal_tab: QWidget = child(QWidget, "spatiotemporalTab")
 
         self.source_edit: QLineEdit = child(QLineEdit, "sourceEdit")
         self.presets_path_edit: QLineEdit = child(QLineEdit, "presetsPathEdit")

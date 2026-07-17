@@ -1,4 +1,13 @@
-"""Accessibility helpers for the PySide6 GUI."""
+"""Accessibility helpers for the PySide6 GUI.
+
+Defines:    configure_accessibility (accessible names/descriptions, label buddies,
+            shortcuts, and keyboard tab order for the main window, its tab shell, and
+            the Transform form), configure_status_label / set_status /
+            handle_status_resize / refresh_status_label (elided status label with a
+            stable accessible description), and update_output_accessibility.
+Used by:    gui.app (MainController calls these during window construction).
+Depends on: PySide6 widgets only; reads controller attributes bound in gui.app.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -39,6 +48,27 @@ def configure_accessibility(controller: Any) -> None:
     controller.window.setAccessibleName("mATLAS Transformer")
     controller.window.setAccessibleDescription(
         "Main window for selecting a source, presets, output settings, and running a transform."
+    )
+
+    # Tab shell: name the tab widget, its tab bar, and each page so a screen reader
+    # announces which section is active and what the other tabs offer. QTabWidget itself
+    # provides the keyboard behaviour (arrow keys, Ctrl+Tab); only the naming is ours.
+    controller.tab_widget.setAccessibleName("Main sections")
+    controller.tab_widget.setAccessibleDescription(
+        "Tabs switching between the Transform form, Database Edit, and Spatiotemporal Analysis sections."
+    )
+    controller.tab_widget.tabBar().setAccessibleName("Main section tabs")
+    controller.transform_tab.setAccessibleName("Transform tab")
+    controller.transform_tab.setAccessibleDescription(
+        "Form for selecting a source, presets, and output settings, and running a transform."
+    )
+    controller.database_edit_tab.setAccessibleName("Database Edit tab")
+    controller.database_edit_tab.setAccessibleDescription(
+        "Placeholder for the database editing tools; arrives in a later update."
+    )
+    controller.spatiotemporal_tab.setAccessibleName("Spatiotemporal Analysis tab")
+    controller.spatiotemporal_tab.setAccessibleDescription(
+        "Placeholder for the spatiotemporal analysis tools; arrives in a later update."
     )
 
     for widget_name, buddy in (
@@ -183,6 +213,9 @@ def _configure_shortcuts(controller: Any) -> None:
 
 def _configure_tab_order(controller: Any) -> None:
     widgets: tuple[QWidget, ...] = (
+        # The tab widget comes first so keyboard users reach the section tabs before
+        # entering the Transform form; focus then flows into the form's fields.
+        controller.tab_widget,
         controller.source_edit,
         controller.source_file_button,
         controller.source_folder_button,
