@@ -313,6 +313,57 @@ def test_scenario_persists_and_reopens_clean(tmp_path) -> None:
         reopened.close()
 
 
+# --- open_persisted: attach to an existing run DB --------------------------
+
+def _persist_scenario(tmp_path) -> "Path":
+    """Build the scenario and persist it, returning the run-DB path."""
+    out = tmp_path / "run.matlas.sqlite"
+    with RunStore() as store:
+        _build_scenario(store, case_id=ids.case_metadata_id(), run_id=ids.run_id())
+        store.persist(out)
+    return out
+
+
+def test_open_persisted_reads_and_keeps_the_file(tmp_path) -> None:
+    out = _persist_scenario(tmp_path)
+    store = RunStore.open_persisted(out)
+    try:
+        assert store.connection.execute(
+            "SELECT COUNT(*) FROM assertion").fetchone()[0] == 4
+    finally:
+        store.close()
+    # An existing run DB is evidence: close() must NOT delete it (unlike a scratch store).
+    assert out.exists()
+    # And it can be reopened again after close.
+    store2 = RunStore.open_persisted(out)
+    store2.close()
+
+
+def test_open_persisted_read_only_rejects_writes(tmp_path) -> None:
+    out = _persist_scenario(tmp_path)
+    store = RunStore.open_persisted(out, read_only=True)
+    try:
+        # A read-only handle answers queries but a write hits SQLite's read-only guard.
+        assert store.connection.execute("SELECT COUNT(*) FROM analysis").fetchone()[0] == 2
+        with pytest.raises(sqlite3.OperationalError):
+            store.connection.execute("DELETE FROM analysis")
+    finally:
+        store.close()
+    assert out.exists()
+
+
+def test_open_persisted_rejects_foreign_and_missing(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError):
+        RunStore.open_persisted(tmp_path / "nope.sqlite")
+    foreign = tmp_path / "foreign.sqlite"
+    conn = sqlite3.connect(foreign)
+    conn.execute("CREATE TABLE t (x)")
+    conn.commit()
+    conn.close()
+    with pytest.raises(ValueError):
+        RunStore.open_persisted(foreign)
+
+
 # --- silent-loss inventory: one test per store-relevant row ----------------
 
 def test_two_exhibits_collapse_into_one_source_raises() -> None:

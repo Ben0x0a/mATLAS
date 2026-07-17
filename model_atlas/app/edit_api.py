@@ -10,12 +10,13 @@ Defines:    ``EditApi`` — opens an ALREADY-PERSISTED ``<name>.matlas.sqlite`` 
             may be updated in place.
 Used by:    ``gui.db_edit_controller`` (the Database Edit panel calls this and nothing else
             touches the run DB from the GUI) and ``tests.app.test_edit_api``.
-Depends on: ``model_atlas.core.schema`` (the versioning stamps ``APPLICATION_ID`` /
-            ``USER_VERSION`` used to authenticate an opened file), ``model_atlas.core.store``
-            (the L0-L3 layer partition — the single source of truth for which tables are
-            editable in place), ``model_atlas.core.ids`` (``canonical_json`` for the full-row
-            snapshots and ``id_for`` for minting fresh occurrence ids) and the standard
-            library only (``sqlite3``, ``re``, ``json``, ``getpass``, ``datetime``).
+Depends on: ``model_atlas.core.store`` (``RunStore.open_persisted`` — which opens and
+            authenticates the run DB — and the L0-L3 layer partition, the single source of
+            truth for which tables are editable in place), ``model_atlas.core.schema``
+            (``COPYABLE_TABLES`` — the editable/navigable table set), ``model_atlas.core.ids``
+            (``canonical_json`` for the full-row snapshots and ``id_for`` for minting fresh
+            occurrence ids) and the standard library only (``sqlite3``, ``re``, ``json``,
+            ``getpass``, ``datetime``).
 
 Editable-table set (single source of truth)
 --------------------------------------------
@@ -92,10 +93,11 @@ class EditApi:
             api.update("spatial_integration", si_id, "latitude_wgs84", 46.20)
     """
 
-    def __init__(self, connection: sqlite3.Connection, *, who: str | None = None) -> None:
+    def __init__(self, store: "store_mod.RunStore", *, who: str | None = None) -> None:
         # ``who`` stamps every edit_log row; default to the OS user so an audit trail always
         # names an actor even when the caller does not pass one.
-        self._conn = connection
+        self._store = store
+        self._conn = store.connection
         self._conn.row_factory = sqlite3.Row
         self._who = who or getpass.getuser()
 
@@ -105,37 +107,17 @@ class EditApi:
     def open(cls, path: str | Path, *, who: str | None = None) -> "EditApi":
         """Open ``path`` read-write and REJECT anything that is not a real mATLAS run DB.
 
-        HOW: connect a plain sqlite3 connection (FK enforcement ON, as the model relies on
-        it), then read ``PRAGMA application_id`` / ``user_version`` and require they match the
-        schema's stamps and that the single ``matlas_meta`` row is present.
-        WHY authenticate loudly: this API mutates a forensic artefact in place; opening the
-        wrong file (or a foreign SQLite DB) and writing to it must fail immediately, never
-        corrupt an unrelated database.
+        The store's ``open_persisted`` attaches to the existing run database, turns on FK
+        enforcement and authenticates the versioning stamps + ``matlas_meta`` marker (a
+        missing file raises ``FileNotFoundError``; a foreign/wrong-generation DB raises
+        ``ValueError``) — so opening the wrong file can never mutate an unrelated database.
         """
-        target = Path(path)
-        if not target.is_file():
-            raise FileNotFoundError(f"no such mATLAS run DB: {target}")
-        conn = sqlite3.connect(target)
-        conn.execute("PRAGMA foreign_keys = ON;")
-        app_id = conn.execute("PRAGMA application_id;").fetchone()[0]
-        user_version = conn.execute("PRAGMA user_version;").fetchone()[0]
-        if app_id != schema.APPLICATION_ID or user_version != schema.USER_VERSION:
-            conn.close()
-            raise ValueError(
-                f"{target} is not a mATLAS run database "
-                f"(application_id={app_id:#x}, user_version={user_version}; "
-                f"expected {schema.APPLICATION_ID:#x} / {schema.USER_VERSION})")
-        meta = conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master "
-            "WHERE type = 'table' AND name = 'matlas_meta';").fetchone()[0]
-        if meta != 1 or conn.execute("SELECT COUNT(*) FROM matlas_meta;").fetchone()[0] < 1:
-            conn.close()
-            raise ValueError(f"{target} carries the mATLAS stamps but no matlas_meta row")
-        return cls(conn, who=who)
+        store = store_mod.RunStore.open_persisted(path)
+        return cls(store, who=who)
 
     def close(self) -> None:
-        """Close the underlying connection (idempotent)."""
-        self._conn.close()
+        """Close the underlying store (the persisted DB file is kept — it is evidence)."""
+        self._store.close()
 
     def __enter__(self) -> "EditApi":
         return self

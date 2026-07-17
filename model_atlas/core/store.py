@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any
 
 from model_atlas.core import vocabularies as V
-from model_atlas.core.schema import create_schema
+from model_atlas.core.schema import APPLICATION_ID, USER_VERSION, create_schema
 
 # --- the layer partition of the write API ----------------------------------
 # One tuple per layer; the write API is partitioned by these. Each public writer targets
@@ -90,6 +90,30 @@ for _layer, _tables in (("L0", L0_TABLES), ("L1", L1_TABLES),
     for _table in _tables:
         assert _table not in TABLE_LAYER, f"table {_table!r} listed in two layers"
         TABLE_LAYER[_table] = _layer
+
+
+def _authenticate_run_db(conn: sqlite3.Connection, path: Path) -> None:
+    """Reject a connection that is not a genuine mATLAS run database.
+
+    HOW: read the two versioning stamps the schema writes (``application_id`` /
+    ``user_version``) and require the single ``matlas_meta`` marker table with at least one
+    row. WHY: opening an existing file for editing or analysis touches a forensic artefact,
+    so a foreign SQLite file (or a wrong-generation DB) must fail loudly here rather than be
+    read or written as if it were ours.
+    """
+    application_id = conn.execute("PRAGMA application_id;").fetchone()[0]
+    user_version = conn.execute("PRAGMA user_version;").fetchone()[0]
+    if application_id != APPLICATION_ID or user_version != USER_VERSION:
+        conn.close()
+        raise ValueError(
+            f"{path} is not a mATLAS run database (application_id={application_id:#x}, "
+            f"user_version={user_version}; expected {APPLICATION_ID:#x} / {USER_VERSION})")
+    has_meta = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'matlas_meta';"
+    ).fetchone()[0]
+    if has_meta != 1 or conn.execute("SELECT COUNT(*) FROM matlas_meta;").fetchone()[0] < 1:
+        conn.close()
+        raise ValueError(f"{path} carries the mATLAS stamps but no matlas_meta row")
 
 
 def _bind(value: Any) -> Any:
@@ -158,6 +182,9 @@ class RunStore:
         os.close(fd)
         self._path = Path(path)
         self._conn = sqlite3.connect(self._path)
+        # This store OWNS a scratch temp file, so close() deletes it. The persisted-DB opener
+        # below clears this flag: an existing run DB is evidence, never deleted on close.
+        self._owns_temp = True
         # Reproducible scratch (R3): no rollback journal, no fsync — crash-safety is not a
         # fidelity property here, and the run DB is a deterministic function of the inputs.
         self._conn.execute("PRAGMA journal_mode = OFF;")
@@ -165,6 +192,33 @@ class RunStore:
         # create_schema turns on foreign_keys, stamps user_version/application_id, builds the
         # DDL and writes the single matlas_meta row (then commits).
         create_schema(self._conn)
+
+    @classmethod
+    def open_persisted(cls, path: str | Path, *, read_only: bool = False) -> "RunStore":
+        """Attach to an EXISTING persisted run DB (a ``<name>.matlas.sqlite``).
+
+        Unlike the constructor, which mints a fresh scratch database, this opens a real,
+        already-written run database — the file an operator edits (``read_only=False``) or an
+        analysis reads (``read_only=True``) — and authenticates it as a genuine mATLAS run DB
+        before returning. The file is NEVER deleted on ``close()``: it is evidence, not
+        scratch. The full write API is available on a read-write handle; a read-only handle
+        exposes ``.connection`` for queries and rejects writes at the SQLite level.
+        """
+        target = Path(path)
+        if not target.is_file():
+            raise FileNotFoundError(f"no such mATLAS run DB: {target}")
+        if read_only:
+            conn = sqlite3.connect(f"file:{target}?mode=ro", uri=True)
+        else:
+            conn = sqlite3.connect(target)
+        # The model relies on FK enforcement; turn it on before any read or write.
+        conn.execute("PRAGMA foreign_keys = ON;")
+        _authenticate_run_db(conn, target)   # raises + closes on a non-mATLAS file
+        store = cls.__new__(cls)             # bypass __init__: no temp file is created here
+        store._path = target
+        store._conn = conn
+        store._owns_temp = False             # an existing run DB is never deleted on close
+        return store
 
     # --- the single private mechanism -------------------------------------
 
@@ -313,11 +367,15 @@ class RunStore:
         return target
 
     def close(self) -> None:
-        """Close the connection and delete the temp DB file (idempotent)."""
+        """Close the connection; delete the file only if this store owns a scratch temp DB.
+
+        A store opened over an EXISTING persisted run DB (``open_persisted``) keeps the file —
+        it is evidence. Idempotent."""
         self._conn.close()
-        # missing_ok: close may run after a failed __init__ or a second call; a run DB is
-        # scratch, so a missing file is never an error.
-        self._path.unlink(missing_ok=True)
+        if self._owns_temp:
+            # missing_ok: close may run after a failed __init__ or a second call; a scratch run
+            # DB is disposable, so a missing file is never an error.
+            self._path.unlink(missing_ok=True)
 
     def __enter__(self) -> "RunStore":
         return self
