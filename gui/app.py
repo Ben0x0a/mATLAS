@@ -45,6 +45,8 @@ from PySide6.QtWidgets import (
 
 from gui import accessibility, header_assets
 from gui.completion import param_completions
+from gui.db_edit_controller import DbEditController
+from gui.spatiotemporal_controller import SpatiotemporalController
 from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
 from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler
@@ -120,6 +122,7 @@ class MainController(QObject):
         self._bind_widgets()
         self._configure_ui_defaults()
         self._wire_signals()
+        self._attach_panels()
         self._log_handler = install_gui_log_handler(self, self._append_log)
         self._apply_log_level()
         # Progress reporting: the pipeline calls a plain callback per phase; the bridge turns each
@@ -223,6 +226,27 @@ class MainController(QObject):
         self._configure_entity_completion()
         self._configure_exports()
         accessibility.configure_accessibility(self)
+
+    def _attach_panels(self) -> None:
+        """Build the two MVC panels inside their tab placeholders (T71/T72).
+
+        Each controller owns its whole panel and takes only the tab QWidget; all logic
+        lives in the model layer (edit_api / analyze.concomitance) — the shell just
+        constructs them. The edit panel reuses the shared TaskRunner so the app keeps a
+        single lifecycle-managed worker (waited on aboutToQuit)."""
+        # Drop T70's placeholder labels first: they were scaffolding for exactly these
+        # panels, and each controller reuses the tab's existing layout, so a surviving
+        # placeholder would render above the real panel.
+        for tab, placeholder_name in (
+            (self.database_edit_tab, "databaseEditPlaceholderLabel"),
+            (self.spatiotemporal_tab, "spatiotemporalPlaceholderLabel"),
+        ):
+            placeholder = tab.findChild(QLabel, placeholder_name)
+            if placeholder is not None:
+                placeholder.setParent(None)
+                placeholder.deleteLater()
+        self._db_edit_controller = DbEditController(self.database_edit_tab, runner=self._runner)
+        self._spatiotemporal_controller = SpatiotemporalController(self.spatiotemporal_tab)
 
     def _configure_exports(self) -> None:
         """Populate the 'Additional export' button with a checkable menu, one item per registered

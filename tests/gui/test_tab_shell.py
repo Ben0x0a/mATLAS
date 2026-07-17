@@ -3,7 +3,8 @@
 Constructs the real MainController offscreen and checks the QTabWidget shell: three
 named tabs in order, the Transform form reparented (not rewritten) into the first tab
 with its widgets still bound and reachable, and accessible names on the tab bar and
-each page. Placeholder pages must stay minimal: one static label, no machinery.
+each page. The other two tabs now hold the T71/T72 panels (their placeholder labels
+removed so nothing renders above the real panel).
 Used by:    pytest (headless: QT_QPA_PLATFORM=offscreen is forced below).
 Depends on: gui.app (MainController), gui/main_window.ui, PySide6.
 """
@@ -20,7 +21,7 @@ import pytest
 
 pytest.importorskip("PySide6", reason="GUI extra not installed")
 
-from PySide6.QtWidgets import QApplication, QLabel, QTabWidget
+from PySide6.QtWidgets import QApplication, QLabel, QTabWidget, QWidget
 
 from gui.app import MainController
 
@@ -76,15 +77,18 @@ def test_transform_form_lives_inside_first_tab(controller) -> None:
         assert transform_page.isAncestorOf(widget)
 
 
-def test_placeholder_tabs_are_minimal_labelled_pages(controller) -> None:
-    for page, label_name in (
+def test_panels_replace_placeholders_in_their_tabs(controller) -> None:
+    # T71/T72 now fill the two once-placeholder tabs: the controllers are attached and
+    # each tab holds its real panel (child widgets), with T70's scaffolding label removed
+    # so it can never render above the panel.
+    assert controller._db_edit_controller is not None
+    assert controller._spatiotemporal_controller is not None
+    for page, placeholder_name in (
         (controller.database_edit_tab, "databaseEditPlaceholderLabel"),
         (controller.spatiotemporal_tab, "spatiotemporalPlaceholderLabel"),
     ):
-        label = page.findChild(QLabel, label_name)
-        assert label is not None and label.text()
-        # Placeholders stay empty shells for T71/T72: exactly one child label, nothing else.
-        assert page.findChildren(QLabel) == [label]
+        assert page.findChild(QLabel, placeholder_name) is None
+        assert page.findChildren(QWidget)  # the panel was built inside the tab
 
 
 def test_tab_shell_accessibility_registered(controller) -> None:
