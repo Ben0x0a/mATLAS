@@ -26,186 +26,28 @@ Covers the T50 Verify bullets:
 """
 from __future__ import annotations
 
-import hashlib
 import io
-import json
 import os
 import zipfile
 from pathlib import Path
 
 import pytest
 
-from model_atlas.core import ids
-from model_atlas.core import vocabularies as V
 from model_atlas.core.projection import CANONICAL_COLUMNS, PASSTHROUGH_PREFIX, project
 from model_atlas.core.store import RunStore
 from model_atlas.export.csv_flat import CsvFlatExporter, ExportContext
-from model_atlas.ingest.assemble import assemble_source
-from model_atlas.ingest.readers.base import RawRecord
-from model_atlas.ingest.writer import ingest_input
-from model_atlas.integrate.entity import normalise_entities
-from model_atlas.integrate.spatial import integrate_spatial
-from model_atlas.integrate.temporal import (
-    TemporalExpressionBundle,
-    integrate_expression,
-    standard_methods,
-)
-from model_atlas.analyze.untangle import analyse
 from model_atlas.presets.spec import PresetSpec
 from model_atlas.presets.spec_loader import load_preset_specs
 
-_GOLDEN_SRC = Path(__file__).resolve().parents[1] / "fixtures" / "golden"
+from tests.export._pipeline import GOLDEN_SRC as _GOLDEN_SRC
+from tests.export._pipeline import rows as _rows
+from tests.export._pipeline import run_relational_pipeline
+
 _GOLDEN_NEW = Path(__file__).resolve().parents[1] / "fixtures" / "golden_relational"
 _CASES = ("secondary", "primary")
 # Mirrors the old golden run's operator input (process(..., linked_entity="subject")),
 # so the reviewed old->new diff stays apples-to-apples.
 _LINKED_ENTITY = "subject"
-
-
-# --- the test-side pipeline runner -------------------------------------------
-# WHY a test-side runner: the app-layer pipeline that wires these bricks together is a
-# later task (T60); until it exists the new engine's chain is driven here, following the
-# established pattern of tests/ingest/test_assemble.py (drive the writers directly).
-
-def _preset_row(spec: PresetSpec) -> V.Preset:
-    """The store's ``preset`` row for a loaded spec.
-
-    ``preset_id`` derives from (key ⟂ version) exactly as ``assemble_source`` re-derives
-    it, so the assertion FK matches by construction; ``name`` carries the spec's display
-    title (the human string the old flat model showed as ``preset_name``); the
-    ``definition_digest`` is the YAML bytes' sha256 (stable + change-detecting for D40).
-    """
-    return V.Preset(
-        preset_id=ids.preset_id(spec.meta.id, spec.meta.version),
-        key=spec.meta.id,
-        name=spec.meta.title,
-        version=spec.meta.version,
-        definition_digest=hashlib.sha256(spec.path.read_bytes()).hexdigest(),
-    )
-
-
-def _rows(store: RunStore, sql: str, *args: object) -> list[dict]:
-    cursor = store.connection.execute(sql, args)
-    columns = [d[0] for d in cursor.description]
-    return [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-
-def _source_units(specs: list[PresetSpec]) -> dict[str, str]:
-    """The part -> declared source unit map (e.g. horizontal_speed_kmh -> m/s), gathered
-    from every spec's field ``unit`` attributes — the reference data L2's UnitConvert needs
-    to read a verbatim metric value into its canonical unit."""
-    units: dict[str, str] = {}
-    for spec in specs:
-        for field_spec in spec.common:
-            if field_spec.unit:
-                units[field_spec.model_field] = field_spec.unit
-        for template in spec.assertions:
-            for field_spec in template.fields:
-                if field_spec.unit:
-                    units[field_spec.model_field] = field_spec.unit
-    return units
-
-
-def _datetime_format(spec: PresetSpec) -> str | None:
-    """The strptime format the spec's (single) time declares — the local_string decode
-    instruction L2's TzLocalise needs; None for an epoch/ISO spec."""
-    for template in spec.assertions:
-        for time_spec in template.temporal:
-            return time_spec.format
-    return None
-
-
-def _integrate_temporal_for_preset(store: RunStore, spec: PresetSpec) -> None:
-    """Integrate the not-yet-integrated temporal expressions this spec produced.
-
-    HOW: re-read each temporal_expression reachable from this preset's assertions plus its
-    verbatim component rows, wrap them as a method bundle, and run the standard method set
-    configured with the spec's own datetime format. WHY per preset (not one whole-store
-    pass): the parsing format/zone live in the preset, not the store, so each preset's
-    expressions must be integrated with THAT preset's decode configuration.
-    """
-    methods = standard_methods(datetime_format=_datetime_format(spec))
-    preset_id = ids.preset_id(spec.meta.id, spec.meta.version)
-    expressions = _rows(
-        store,
-        "SELECT DISTINCT te.temporal_expression_id, te.kind, te.referential, "
-        "te.temporal_source FROM temporal_expression te "
-        "JOIN assertion a ON a.temporal_expression_id = te.temporal_expression_id "
-        "WHERE a.preset_id = ? AND te.temporal_expression_id NOT IN "
-        "(SELECT temporal_expression_id FROM timespan_integration)",
-        preset_id,
-    )
-    for expression in expressions:
-        components = _rows(
-            store,
-            "SELECT temporal_component_id, temporal_expression_id, ordinal, part, "
-            "temporal_role, stated_offset, source_field, raw_value FROM temporal_component "
-            "WHERE temporal_expression_id = ? ORDER BY ordinal",
-            expression["temporal_expression_id"],
-        )
-        bundle = TemporalExpressionBundle(
-            expression=V.TemporalExpression(**expression),
-            components=tuple(V.TemporalComponent(**component) for component in components),
-        )
-        integrate_expression(store, bundle, methods)
-
-
-def run_relational_pipeline(
-    store: RunStore,
-    input_path: Path,
-    specs: list[PresetSpec],
-    *,
-    case_number: str = "C1",
-    linked_entity: str | None = None,
-) -> None:
-    """Drive the full new-engine chain over ``input_path`` into ``store``.
-
-    Ingest (L0) writes case/run/preset/source/raw_record; each matching preset is
-    assembled onto every source (L1); spatial + temporal integrations are written (L2);
-    entities are normalised (MUST precede untangle so a converged identifier is visible);
-    untangle writes the analysis verdicts (L3). ``data_source`` resolved by assemble is
-    set back on the source row here (decision 24 — the L0 owner's job, which this runner
-    stands in for), so ``raw_source_path`` reports the in-artefact path, not the opened
-    file. Digests are unaffected (data_source is source-grain, outside both digests), so
-    folder==zip parity holds.
-    """
-    preset_rows = tuple(_preset_row(spec) for spec in specs)
-    ingest_input(input_path, store, case_number=case_number, presets=preset_rows)
-
-    # activity ids are record-scoped (preset-free), so one ordinal registry is shared
-    # across every assemble call in the run (see assemble_source's caller contract).
-    activity_ordinals: dict[str, int] = {}
-    for source in _rows(store, "SELECT source_id, fingerprint_sha256, format FROM source"):
-        records = [
-            RawRecord(line_no=row["line_no"], fields=json.loads(row["raw_json"]))
-            for row in _rows(
-                store,
-                "SELECT line_no, raw_json FROM raw_record WHERE source_id = ? ORDER BY line_no",
-                source["source_id"],
-            )
-        ]
-        for spec in specs:
-            # A spec applies to a source when its selector format matches (the golden
-            # presets select cached.csv by name; the single CSV source matches both).
-            if spec.input_selectors[0].format != source["format"]:
-                continue
-            report = assemble_source(
-                records, spec, store,
-                source_id=source["source_id"],
-                fingerprint_sha256=source["fingerprint_sha256"],
-                linked_entity=linked_entity,
-                activity_ordinals=activity_ordinals,
-            )
-            if report.data_source is not None:
-                store.connection.execute(
-                    "UPDATE source SET data_source = ? WHERE source_id = ?",
-                    (report.data_source, source["source_id"]),
-                )
-            _integrate_temporal_for_preset(store, spec)
-
-    integrate_spatial(store, source_units=_source_units(specs))
-    normalise_entities(store)
-    analyse(store)
 
 
 def _export_merged(store: RunStore, out_dir: Path) -> Path:
