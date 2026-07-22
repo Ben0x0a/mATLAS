@@ -69,26 +69,42 @@ from model_atlas.presets.expr import (
 # untangle). ``raw_source_path`` and ``input_record_id`` stay assignable: a preset maps
 # them (e.g. AXIOM Source / Location) and the engine only fills a default when it does not.
 # T60: formerly derived from ``model.families.OUTPUT_COLUMNS``; with the flat model
-# retired, the preset language's target vocabulary is declared HERE, once. The new L1
-# targets (entity_role, activity_kind, context.<key>, ...) are constructed
-# programmatically by ingest.assemble and deliberately NOT admitted here yet —
-# extending this YAML gate is a parked, owner-tracked change (tasks/reports.md).
+# retired, the preset language's target vocabulary is declared HERE, once. The extended L1
+# targets (entity_role, activity_kind, context.<key>, ...) that ingest.assemble consumes are
+# admitted here too, so a real YAML preset can map them (not only the programmatic tests).
+
+# Keys under this prefix become entries in the activity's context object (one per party /
+# attribute the record mentions without positioning) — the key after the dot is free text,
+# so the assignable gate matches the PREFIX rather than a fixed name.
+CONTEXT_FIELD_PREFIX = "context."
+
 ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
     # entity
-    "entity", "entity_type", "linked_entity",
+    "entity", "entity_type", "linked_entity", "entity_role", "identifier_type",
     # temporal (assignable subset)
-    "utc_offset_hours", "time_accuracy_us", "temporal_source",
+    "utc_offset_hours", "time_accuracy_us", "temporal_source", "temporal_referential",
+    "temporal_role_lower", "temporal_role_upper",
+    "temporal_part_lower", "temporal_part_upper",
     # spatial
     "latitude_wgs84", "longitude_wgs84", "altitude_m", "position_type", "raw_position",
     "position_source", "horizontal_accuracy_m", "vertical_accuracy_m",
     "horizontal_speed_kmh", "vertical_speed_kmh", "horizontal_speed_accuracy_kmh",
     "vertical_speed_accuracy_kmh", "heading_deg", "heading_accuracy_deg",
-    "beam_azimuth_deg", "beam_width_deg",
+    "beam_azimuth_deg", "beam_width_deg", "spatial_referential",
+    # activity
+    "activity_kind", "multiplicity",
     # bindings
     "entity_position_link", "entity_time_link", "spatial_temporal_link",
     # provenance (assignable subset)
-    "raw_source_path", "input_record_id", "source_label", "source_tier", "deleted",
+    "raw_source_path", "data_source", "input_record_id", "source_label", "source_tier",
+    "deleted",
 })
+
+
+def _is_assignable(model_field: str) -> bool:
+    """Whether a preset may map ``model_field``: a listed target, or a ``context.<key>``
+    (whose free key names one entry of the activity context object)."""
+    return model_field in ASSIGNABLE_FIELDS or model_field.startswith(CONTEXT_FIELD_PREFIX)
 
 # Fields whose constant value must belong to a controlled vocabulary.
 _ENUM_FIELDS: dict[str, frozenset[str]] = {
@@ -312,7 +328,7 @@ def _parse_extract(raw: Any, patterns: dict[str, str], path: Path) -> tuple[str,
 def _parse_field(
     model_field: str, raw: Any, path: Path, patterns: dict[str, str], *, assignable: bool = True
 ) -> FieldSpec:
-    if assignable and model_field not in ASSIGNABLE_FIELDS:
+    if assignable and not _is_assignable(model_field):
         raise ValueError(f"{path}: {model_field!r} is not an assignable model field")
     if isinstance(raw, dict):
         if "from" not in raw:

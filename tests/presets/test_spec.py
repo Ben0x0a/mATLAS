@@ -218,3 +218,40 @@ def test_shipped_presets_all_load() -> None:
     assert len(specs) >= 5
     ids = [s.meta.id for s in specs]
     assert len(ids) == len(set(ids))  # ids are unique
+
+
+def test_extended_l1_vocabulary_is_assignable() -> None:
+    """A preset may now map the extended L1 targets (entity_role, activity_kind,
+    multiplicity, referentials) and any ``context.<key>`` in its ``common:`` block, and a
+    spatial referential in a position — not only the programmatic assemble path."""
+    text = _MIN.replace(
+        "assertions:",
+        "common:\n"
+        "  entity_role: const(caller)\n"
+        "  activity_kind: const(call)\n"
+        "  identifier_type: const(bssid)\n"
+        "  multiplicity: field(N)\n"
+        "  context.callee: field(Callee)\n"
+        "  context.imei: field(IMEI)\n"
+        "assertions:",
+    ).replace(
+        "position: {latitude_wgs84: field(Lat)}",
+        "position: {latitude_wgs84: field(Lat), spatial_referential: const(epsg:4326)}",
+    )
+    preset = _parse(text)
+    common = {f.model_field: f for f in preset.common}
+    assert common["entity_role"].ref.arg == "caller"
+    assert common["activity_kind"].ref.arg == "call"
+    assert common["identifier_type"].ref.arg == "bssid"   # free identifier type accepted
+    assert common["context.callee"].ref.arg == "Callee"
+    assert common["context.imei"].ref.arg == "IMEI"
+    position = {f.model_field: f for f in preset.assertions[0].fields}
+    assert position["spatial_referential"].ref.arg == "epsg:4326"
+
+
+def test_unknown_field_still_rejected() -> None:
+    """The gate stays closed for genuinely-unknown targets and stray ``context`` (no dot)."""
+    with pytest.raises(ValueError):
+        _parse(_MIN.replace("latitude_wgs84: field(Lat)", "not_a_field: field(Lat)"))
+    with pytest.raises(ValueError):
+        _parse(_MIN.replace("latitude_wgs84: field(Lat)", "context: field(Lat)"))
