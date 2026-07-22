@@ -45,7 +45,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from model_atlas.core import ids
-from model_atlas.core.determinism import canonical_json, canonical_path, container_inner_path
+from model_atlas.core.determinism import (
+    canonical_json, canonical_path, container_inner_path, source_order_json)
 from model_atlas.core.schema import APPLICATION_ID
 from model_atlas.core.store import RunStore
 from model_atlas.core.vocabularies import (
@@ -341,7 +342,9 @@ def _ingest_subunit(
             RawRecord(
                 raw_record_id=ids.raw_record_id(source_id, record.line_no),
                 source_id=source_id, line_no=record.line_no,
-                raw_json=canonical_json(record.fields),
+                # SOURCE column order, not sorted: the exported orig_<col> passthrough follows
+                # the source's own order (feeds no digest — safe to differ from canonical).
+                raw_json=source_order_json(record.fields),
                 recovery_state=record.recovery_state,
             )
         )

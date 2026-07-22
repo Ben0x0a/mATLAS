@@ -37,7 +37,10 @@ import unicodedata
 from collections.abc import Iterable, Iterator, Sequence
 from enum import Enum
 
-from model_atlas.core.ids import canonical_json  # rule 5 — the ONE definition, reused
+from model_atlas.core.ids import (  # rule 5 — the ONE definition, reused
+    canonical_json,
+    source_order_json,
+)
 
 __all__ = [
     "BLOB_KEY",
@@ -46,6 +49,7 @@ __all__ = [
     "canonical_json",
     "canonical_path",
     "container_inner_path",
+    "source_order_json",
     "csv_data_line_numbers",
     "excel_line_no",
     "numbered_records",

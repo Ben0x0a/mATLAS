@@ -252,6 +252,19 @@ def canonical_json(obj: object) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def source_order_json(obj: object) -> str:
+    """Like ``canonical_json`` but PRESERVING key order (the source's own column order).
+
+    Used for ``raw_record.raw_json`` so the exported ``orig_<col>`` passthrough follows the
+    source's column order rather than a sorted one (better readability / recognisability).
+    Safe to differ from canonical here: ``raw_json`` feeds NO digest — the content/claim
+    digests hash the L1 projection, never the raw row — so key order carries no determinism
+    consequence for evidence identity. Same tight separators / ``ensure_ascii`` as
+    ``canonical_json``; only the key ORDER differs (Python dicts preserve insertion order).
+    """
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
 # --- The typed projection input (what the assembler builds; no store) ------
 # Plain frozen dataclasses so T23's assemble brick can construct the exact projection
 # input without touching a store or the wider family dataclasses. Fields are ONLY the

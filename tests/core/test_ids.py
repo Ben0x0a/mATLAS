@@ -99,6 +99,13 @@ def test_canonical_json_does_not_reformat_float_source_text():
     assert ids.canonical_json({"lat": "46.2030"}) == '{"lat":"46.2030"}'
 
 
+def test_source_order_json_preserves_key_order():
+    # raw_json keeps the source's column order so the exported orig_<col> tail is in source
+    # order; same separators as canonical, only the ordering differs.
+    assert ids.source_order_json({"b": "1", "a": "2"}) == '{"b":"1","a":"2"}'
+    assert ids.source_order_json({"lat": "46.2030"}) == '{"lat":"46.2030"}'
+
+
 # --- folder == zip parity ---------------------------------------------------
 
 def test_folder_and_zip_of_same_evidence_share_both_digests():
