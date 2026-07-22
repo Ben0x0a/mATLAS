@@ -553,6 +553,13 @@ def _assemble_match(
             "UPDATE source SET data_source = ? WHERE source_id = ?",
             (report.data_source, source_id),
         )
+    # source_tier is declared by the preset (the author knows the source's nature), but the
+    # L0 writer is preset-free and defaults it to 'primary'; now that a preset has matched,
+    # write its tier back. Also source-grain, outside both digests — parity is unaffected.
+    store.connection.execute(
+        "UPDATE source SET source_tier = ? WHERE source_id = ?",
+        (preset.source_tier, source_id),
+    )
     log.info(f"{label}: {len(records)} source row(s) -> {report.assertion_count} assertion(s)")
 
     source_fields = list(records[0].fields.keys()) if records else []

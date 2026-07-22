@@ -187,6 +187,12 @@ def run_relational_pipeline(
                     "UPDATE source SET data_source = ? WHERE source_id = ?",
                     (report.data_source, source["source_id"]),
                 )
+            # The matched preset's declared tier overrides the L0 'primary' default
+            # (mirrors the pipeline; source-grain, outside the digests).
+            store.connection.execute(
+                "UPDATE source SET source_tier = ? WHERE source_id = ?",
+                (spec.source_tier, source["source_id"]),
+            )
             _integrate_temporal_for_preset(store, spec)
 
     integrate_spatial(store, source_units=_source_units(specs))

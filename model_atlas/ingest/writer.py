@@ -332,6 +332,8 @@ def _ingest_subunit(
             source_id=source_id, run_id=run_id, input_file_path=input_file_path,
             inner_path=inner_path, data_source=None, format=reader.format, subunit=subunit,
             fingerprint_sha256=fingerprint, sibling_fingerprints_json=sibling_json,
+            # L0 is preset-free, so tier defaults to 'primary'; the app writes the matched
+            # preset's declared tier back onto the source row after matching.
             exhibit_ref=exhibit_ref, source_tier=SourceTier.PRIMARY, record_count=len(records),
         )
     )

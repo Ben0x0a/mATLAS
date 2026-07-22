@@ -48,6 +48,16 @@ def _digest_pairs(rows: list[dict[str, str]]) -> set[tuple[str, str]]:
     return {(row["content_uid"], row["claim_digest"]) for row in rows}
 
 
+def test_source_tier_follows_the_matched_preset(tmp_path: Path) -> None:
+    # #1: the matched preset's declared tier ('secondary') overrides the L0 'primary'
+    # default — previously the preset's tier was ignored and everything stamped primary.
+    secondary = _GOLDEN / "secondary_cached.preset.yaml"
+    result = process(_fixture_folder(tmp_path), secondary, tmp_path / "out",
+                     linked_entity=_LINKED)
+    rows = _read_rows(result.output_csv)
+    assert rows and all(row["source_tier"] == "secondary" for row in rows)
+
+
 def test_merge_run_writes_csv_and_sidecars(tmp_path: Path) -> None:
     result = process(_fixture_folder(tmp_path), _GOLDEN, tmp_path / "out",
                      linked_entity=_LINKED)
