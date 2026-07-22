@@ -225,6 +225,11 @@ class TimeSpec:
     format: str | None = None
     zone: FieldSpec | None = None   # const or header(...) -> utc_offset_hours, applied to parsing
     overrides: tuple[FieldSpec, ...] = ()  # other temporal model fields (accuracy, ...)
+    # Optional per-bound substring selection (pattern_name, group) — e.g. pulling "14:00"
+    # out of a free-text witness statement. A selection of verbatim source characters, so it
+    # stays within the L1 no-conversion rule (same as a field's ``extract``).
+    lower_extract: tuple[str, str] | None = None
+    upper_extract: tuple[str, str] | None = None
 
     # compat for presets.fields.field_refs (it reads lower_field/upper_field)
     @property
@@ -408,13 +413,15 @@ def _parse_time(raw: Any, path: Path, patterns: dict[str, str]) -> TimeSpec:
     if epoch is not None and epoch not in _EPOCHS:
         raise ValueError(f"{path}: unknown epoch {epoch!r}; expected one of {sorted(_EPOCHS)}")
     if has_instant:
-        ref = parse_ref(raw["instant"])
+        ref, extract = _parse_time_bound(raw["instant"], path, patterns)
         lower = upper = ref
+        lower_extract = upper_extract = extract
     else:
         interval = raw["interval"]
         if not isinstance(interval, dict) or "lower" not in interval or "upper" not in interval:
             raise ValueError(f"{path}: interval needs 'lower' and 'upper'")
-        lower, upper = parse_ref(interval["lower"]), parse_ref(interval["upper"])
+        lower, lower_extract = _parse_time_bound(interval["lower"], path, patterns)
+        upper, upper_extract = _parse_time_bound(interval["upper"], path, patterns)
     zone = _parse_field("utc_offset_hours", raw["zone"], path, patterns) if "zone" in raw else None
     overrides = tuple(
         _parse_field(key, value, path, patterns)
@@ -425,7 +432,23 @@ def _parse_time(raw: Any, path: Path, patterns: dict[str, str]) -> TimeSpec:
         kind="instant" if has_instant else "interval",
         lower=lower, upper=upper, epoch=epoch, format=raw.get("format"),
         zone=zone, overrides=overrides,
+        lower_extract=lower_extract, upper_extract=upper_extract,
     )
+
+
+def _parse_time_bound(raw: Any, path: Path, patterns: dict[str, str]) -> tuple[Ref, tuple[str, str] | None]:
+    """One time bound: a bare reference, or ``{from: <ref>, extract: pattern.group}``.
+
+    The dict form lets a bound pull a substring out of a messy source cell (e.g. a time out
+    of a free-text statement), exactly as a field mapping's ``extract`` does — returning the
+    parsed reference and the optional (pattern, group) selection."""
+    if isinstance(raw, dict):
+        if "from" not in raw:
+            raise ValueError(f"{path}: a time-bound mapping must set 'from' (a reference)")
+        ref = parse_ref(raw["from"])
+        extract = _parse_extract(raw["extract"], patterns, path) if "extract" in raw else None
+        return ref, extract
+    return parse_ref(raw), None
 
 
 def _parse_assertion(raw: Any, path: Path, patterns: dict[str, str]) -> AssertionTemplate:

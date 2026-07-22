@@ -249,6 +249,26 @@ def test_extended_l1_vocabulary_is_assignable() -> None:
     assert position["spatial_referential"].ref.arg == "epsg:4326"
 
 
+def test_time_bound_extract_parses() -> None:
+    """A time bound may carry ``{from: <ref>, extract: pattern.group}`` to pull a time out
+    of a messy source cell."""
+    text = _MIN.replace(
+        "input_selector: {format: csv, name: f.csv}",
+        "input_selector: {format: csv, name: f.csv}\n"
+        "patterns: {clock: \"(?P<t>[0-9][0-9]:[0-9][0-9])\"}",
+    ).replace(
+        'time: {instant: field(TS), format: "%Y"}',
+        'time: {instant: {from: field(TS), extract: clock.t}, format: "%H:%M"}',
+    )
+    ts = _parse(text).assertions[0].temporal[0]
+    assert ts.lower_extract == ("clock", "t") and ts.upper_extract == ("clock", "t")
+    # A bound mapping with no 'from' is rejected.
+    bad = _MIN.replace('time: {instant: field(TS), format: "%Y"}',
+                       'time: {instant: {extract: clock.t}, format: "%H:%M"}')
+    with pytest.raises(ValueError):
+        _parse(bad)
+
+
 def test_unknown_field_still_rejected() -> None:
     """The gate stays closed for genuinely-unknown targets and stray ``context`` (no dot)."""
     with pytest.raises(ValueError):

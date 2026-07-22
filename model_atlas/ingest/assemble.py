@@ -237,6 +237,21 @@ def _resolve_verbatim(
     return value, source_col
 
 
+def _apply_extract(
+    value: Any, extract: tuple[str, str] | None, ctx: PipeContext) -> Any:
+    """Select a substring of a resolved time-bound value (pattern, group), verbatim.
+
+    A time bound (unlike a field) resolves through ``_resolve_ref`` without a pipe tail, so
+    its optional ``extract`` is applied here — pulling e.g. "14:00" out of a free-text
+    statement. A selection of source characters, so it stays within the L1 no-conversion
+    rule; a missing value or no pattern passes straight through, a non-match yields None."""
+    if extract is None or _is_missing(value):
+        return value
+    pattern_name, group = extract
+    match = re.search(ctx.patterns[pattern_name], str(value))
+    return match.group(group) if match else None
+
+
 def _temporal_referential(time_spec: TimeSpec) -> str:
     """Derive the temporal referential from the time spec's decode declaration.
 
@@ -563,12 +578,14 @@ def _emit_assertion(
         stated_offset = _text(zone_value)
 
     lower_value, lower_col = _resolve_ref(time_spec.lower, row, resolve, file_values, env, preset_values)
+    lower_value = _apply_extract(lower_value, time_spec.lower_extract, ctx)
     bounds: list[tuple[str, str | None, str | None, str | None]] = []
     if not _is_missing(lower_value):
         part = _text(flat.get(TEMPORAL_PART_LOWER_NAME)) or "lower"
         bounds.append((part, _text(flat.get(TEMPORAL_ROLE_LOWER_NAME)), lower_col, _text(lower_value)))
     if time_spec.kind == "interval":
         upper_value, upper_col = _resolve_ref(time_spec.upper, row, resolve, file_values, env, preset_values)
+        upper_value = _apply_extract(upper_value, time_spec.upper_extract, ctx)
         if not _is_missing(upper_value):
             part = _text(flat.get(TEMPORAL_PART_UPPER_NAME)) or "upper"
             bounds.append((part, _text(flat.get(TEMPORAL_ROLE_UPPER_NAME)), upper_col, _text(upper_value)))

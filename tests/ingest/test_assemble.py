@@ -445,6 +445,28 @@ def test_anpr_shapes() -> None:
         assert assertion["source_label"] == "ANPR"
 
 
+def test_time_bound_extract_pulls_substring_from_free_text() -> None:
+    """A time bound's ``extract`` selects the time out of a free-text statement, so the
+    temporal component stores "14:00" verbatim, not the whole sentence."""
+    spec = _preset(
+        "witness_time",
+        common=[_f("entity", "const(witness)"), _f("identifier_type", "const(none)")],
+        assertions=[AssertionTemplate(
+            fields=tuple(_links("claimed_at", "observed_at", "instant")),
+            temporal=(TimeSpec(
+                kind="instant",
+                lower=parse_ref("field(statement)"), upper=parse_ref("field(statement)"),
+                format="%H:%M",
+                lower_extract=("clock", "t"), upper_extract=("clock", "t")),),
+        )],
+        patterns={"clock": r"(?P<t>\d{1,2}:\d{2})"},
+    )
+    records = _records({"statement": "I saw him near the station around 14:00"})
+    with _assembled(spec, records) as (store, _, _):
+        bound = _one(store, "SELECT * FROM temporal_component")
+        assert bound["raw_value"] == "14:00"    # the selection, not the whole statement
+
+
 def test_cdr_activity_context_and_duration_part() -> None:
     spec, records, _ = _example_cdr_a()
     with _assembled(spec, records) as (store, report, _):
