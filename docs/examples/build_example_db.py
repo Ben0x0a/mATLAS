@@ -613,11 +613,13 @@ def build() -> sqlite3.Connection:
     sx = b.spatial(rr, 0, "epsg:4326", "GNSS",
         [("latitude_wgs84", None, "ZLAT", "46.193000"),
          ("longitude_wgs84", None, "ZLON", "6.129000")],
-        "passthrough_wgs84/1.0", HOME[0], HOME[1], horizontal_accuracy_m=40.0)
-    # Each bound carries its OWN role (D25): lower=check_in, upper=check_out.
+        "passthrough_wgs84/1.0+unit_convert/1.0", HOME[0], HOME[1],
+        horizontal_accuracy_m=40.0)
+    # Each bound carries its OWN role (D25): lower=check_in, upper=check_out. An epoch is
+    # absolute UTC — the source states no zone, so stated_offset is None ('(none)').
     tx = b.temporal(rr, 0, "interval", "apple_cfabsolute", "internal_clock",
-        [("lower", "check_in", "N/A", "ZENTRYDATE", "763689600"),
-         ("upper", "check_out", "N/A", "ZEXITDATE", "763702200")],
+        [("lower", "check_in", None, "ZENTRYDATE", "763689600"),
+         ("upper", "check_out", None, "ZEXITDATE", "763702200")],
         "epoch_cfabsolute/1.0", us_from_iso("2026-03-13 20:00:00+01"),
         us_from_iso("2026-03-13 23:30:00+01"), off_lower="N/A", off_upper="N/A")
     b.assertion(rr, p_visit, "ios_visits", 0, ent, sx, tx, None,
@@ -786,7 +788,7 @@ def build() -> sqlite3.Connection:
          ("longitude_wgs84", None, "lon", "6.140000")],
         "passthrough_wgs84/1.0", SCENE[0], SCENE[1])
     tx = b.temporal(rr, 0, "instant", "unix_epoch_s", "NTP",
-        [("lower", "start", "N/A", "ts", "1773450680")],
+        [("lower", "start", None, "ts", "1773450680")],   # epoch: no stated zone
         "epoch_unix_s/1.0", 1773450680_000_000, 1773450680_000_000,
         off_lower="N/A", off_upper="N/A")
     # deleted = the APP's own flag (R11) — a different fact from raw_record.recovery_state.
