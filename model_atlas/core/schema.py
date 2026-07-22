@@ -189,8 +189,10 @@ def _table_specs() -> "list[dict[str, Any]]":
          "unique": [("activity_id", "raw_record_id")]},
         {"name": "entity", "dataclass": V.Entity, "pk": "entity_id",
          "not_null": ["identifier_type", "type"],
-         "enum_checks": {"identifier_type": V.IdentifierType, "type": V.EntityType,
-                         "concerns_origin": V.Origin},
+         # identifier_type carries NO enum CHECK: it is a free string (a preset may name any
+         # kind; IdentifierType only lists the ones the normaliser knows). NOT NULL still
+         # holds — every entity states a kind, defaulting to 'none'.
+         "enum_checks": {"type": V.EntityType, "concerns_origin": V.Origin},
          "indexes": [("ix_entity_norm", ("identifier_type", "identifier")),
                      ("ix_entity_concerns", ("concerns_uid",))]},
         {"name": "spatial_expression", "dataclass": V.SpatialExpression,

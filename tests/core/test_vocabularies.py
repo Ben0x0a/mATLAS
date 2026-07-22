@@ -24,7 +24,6 @@ from model_atlas.core.vocabularies import (
     EntityTimeLink,
     EntityType,
     Genesis,
-    IdentifierType,
     Locates,
     Origin,
     RecordState,
@@ -44,10 +43,10 @@ _DEMO_DB = (
 )
 
 # (table, column) -> the enum whose members must contain every stored value. The
-# columns are the enum-valued ones; free-text/method-defined columns (e.g.
-# analysis.record_type, activity.context_json) are deliberately excluded.
+# columns are the enum-valued (closed-vocabulary) ones; free-text/method-defined columns
+# (e.g. analysis.record_type, activity.context_json, entity.identifier_type — a free string
+# whose known kinds IdentifierType only suggests) are deliberately excluded.
 _ENUM_COLUMNS: dict[tuple[str, str], type[Enum]] = {
-    ("entity", "identifier_type"): IdentifierType,
     ("entity", "type"): EntityType,
     ("entity", "concerns_origin"): Origin,
     ("assertion", "entity_origin"): Origin,

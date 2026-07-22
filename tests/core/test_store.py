@@ -364,6 +364,18 @@ def test_open_persisted_rejects_foreign_and_missing(tmp_path) -> None:
         RunStore.open_persisted(foreign)
 
 
+def test_identifier_type_is_free_text() -> None:
+    """identifier_type carries no closed CHECK: a preset may name any kind (e.g. bssid),
+    which the store accepts and round-trips verbatim."""
+    with RunStore() as store:
+        store.write_entity(V.Entity(
+            entity_id="e-free", identifier=None, raw_identifier="AA:BB:CC:DD:EE:FF",
+            identifier_type="bssid", type=V.EntityType.DEVICE))
+        got = store.connection.execute(
+            "SELECT identifier_type FROM entity WHERE entity_id = 'e-free'").fetchone()
+        assert got[0] == "bssid"
+
+
 # --- silent-loss inventory: one test per store-relevant row ----------------
 
 def test_two_exhibits_collapse_into_one_source_raises() -> None:

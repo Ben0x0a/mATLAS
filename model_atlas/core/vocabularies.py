@@ -191,10 +191,12 @@ class EntityRole(str, Enum):
 # --- Corner referentials, kinds and their roles ---------------------------
 
 class IdentifierType(str, Enum):
-    """Which normalisation produced ``entity.identifier`` (decision 17).
+    """The identifier kinds the normaliser knows how to canonicalise (decision 17).
 
-    ``NONE`` = a purely typed mention ('the device'): ``identifier`` stays NULL, so
-    nothing can ever converge on it. Consolidates the ⊕ additions camera / case_ref.
+    These are the KNOWN/suggested kinds, NOT a closed constraint: ``entity.identifier_type``
+    is a free string column, so a preset may name any kind it likes; an unrecognised one is
+    simply never normalised (``identifier`` stays NULL). ``NONE`` = a purely typed mention
+    ('the device'): ``identifier`` stays NULL, so nothing can ever converge on it.
     """
 
     MSISDN = "msisdn"
@@ -622,7 +624,11 @@ class Entity:
     entity_id: str        # uuid5(assertion natural key ⟂ corner tag)
     identifier: str | None            # normalised; None = purely typed mention
     raw_identifier: str | None        # the source's own text, verbatim (decision 21)
-    identifier_type: IdentifierType   # names the normalisation applied
+    # FREE text, not a closed vocabulary: a preset may name any identifier kind (bssid,
+    # iccid, a bespoke register…). ``IdentifierType`` lists the kinds the normaliser knows
+    # how to canonicalise; an unrecognised kind is simply never normalised (identifier stays
+    # NULL). Typed ``str`` so the derived schema carries NO CHECK on this column.
+    identifier_type: str              # names the identifier kind (normalisation applied)
     type: EntityType                  # what the thing is
     concerns: str | None = None
     concerns_origin: Origin | None = None

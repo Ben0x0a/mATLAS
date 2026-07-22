@@ -103,7 +103,7 @@ CREATE TABLE entity (
     entity_id TEXT PRIMARY KEY,
     identifier TEXT,
     raw_identifier TEXT,
-    identifier_type TEXT NOT NULL CHECK (identifier_type IN ('msisdn', 'imei', 'imsi', 'email', 'plate', 'account', 'mac', 'ip', 'cell', 'camera', 'case_ref', 'other', 'none') OR identifier_type IS NULL),
+    identifier_type TEXT NOT NULL,
     type TEXT NOT NULL CHECK (type IN ('device', 'person', 'vehicle', 'account', 'camera', 'antenna', 'case', 'label', 'event', 'poi', 'unknown') OR type IS NULL),
     concerns TEXT,
     concerns_origin TEXT CHECK (concerns_origin IN ('preset_mapped', 'operator_param') OR concerns_origin IS NULL),
