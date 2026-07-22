@@ -81,7 +81,6 @@ CREATE TABLE raw_record (
     line_no INTEGER NOT NULL,
     raw_json TEXT NOT NULL,
     native_record_uid TEXT,
-    input_record_id TEXT,
     recovery_state TEXT CHECK (recovery_state IN ('live', 'intact', 'deleted', 'recovered', 'unknown') OR recovery_state IS NULL),
     UNIQUE (source_id, line_no)
 );
@@ -169,6 +168,7 @@ CREATE TABLE assertion (
     deleted TEXT CHECK (deleted IN ('live', 'intact', 'deleted', 'recovered', 'unknown') OR deleted IS NULL),
     multiplicity INTEGER,
     source_label TEXT,
+    input_record_id TEXT,
     UNIQUE (raw_record_id, preset_id, output_ordinal)
 );
 

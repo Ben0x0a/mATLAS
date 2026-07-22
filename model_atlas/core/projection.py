@@ -143,7 +143,7 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("spatial_temporal_link", "a.spatial_temporal_link"),
     ("raw_source_path", _RAW_SOURCE_PATH),
     ("input_file_path", "s.input_file_path"),
-    ("input_record_id", "r.input_record_id"),
+    ("input_record_id", "a.input_record_id"),
     ("source_record_uid", "r.raw_record_id"),
     ("row_uid", "a.assertion_id"),
     ("preset_id", "p.key"),                             # the preset KEY (migration row 61)

@@ -146,6 +146,7 @@ _SPATIAL_SOURCE_NAME = "position_source"
 _TEMPORAL_SOURCE_NAME = "temporal_source"
 _DELETED_NAME = "deleted"
 _SOURCE_LABEL_NAME = "source_label"
+_INPUT_RECORD_ID_NAME = "input_record_id"
 _EPL_NAME = "entity_position_link"
 _ETL_NAME = "entity_time_link"
 _STL_NAME = "spatial_temporal_link"
@@ -670,5 +671,6 @@ def _emit_assertion(
         deleted=deleted,
         multiplicity=multiplicity,
         source_label=_text(flat.get(_SOURCE_LABEL_NAME)),
+        input_record_id=_text(flat.get(_INPUT_RECORD_ID_NAME)),
     ))
     report.assertion_count += 1

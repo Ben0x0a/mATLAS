@@ -229,7 +229,7 @@ CREATE TABLE run_preset (run_preset_id TEXT PRIMARY KEY,
     UNIQUE (run_id, preset_id));
 CREATE TABLE raw_record (raw_record_id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL REFERENCES source(source_id), line_no INTEGER NOT NULL,
-    native_record_uid TEXT, input_record_id TEXT, recovery_state TEXT,
+    native_record_uid TEXT, recovery_state TEXT,
     raw_json TEXT NOT NULL, UNIQUE (source_id, line_no));
 
 -- Layer 1 ------------------------------------------------------------------
@@ -272,7 +272,8 @@ CREATE TABLE assertion (assertion_id TEXT PRIMARY KEY,
         REFERENCES temporal_expression(temporal_expression_id),
     entity_role TEXT, entity_position_link TEXT, entity_time_link TEXT,
     spatial_temporal_link TEXT, deleted TEXT, multiplicity INTEGER,
-    source_label TEXT, content_hash TEXT NOT NULL, claim_digest TEXT NOT NULL,
+    source_label TEXT, input_record_id TEXT,
+    content_hash TEXT NOT NULL, claim_digest TEXT NOT NULL,
     UNIQUE (raw_record_id, preset_id, output_ordinal));
 CREATE INDEX ix_assertion_ch ON assertion(content_hash);
 CREATE INDEX ix_assertion_cd ON assertion(claim_digest);
@@ -394,12 +395,11 @@ class Builder:
              "2026-03-15T08:00:05Z", skipped))
         return aid
 
-    def record(self, sid, line, raw: dict, input_record_id=None, recovery="live"):
+    def record(self, sid, line, raw: dict, recovery="live"):
         rrid = u5("record", sid, line)
-        # raw_json is the COMPLETE row, canonical (sorted keys, verbatim values).
-        self.cx.execute("INSERT INTO raw_record VALUES (?,?,?,?,?,?,?)",
-            (rrid, sid, line, None, input_record_id or f"#{line}", recovery,
-             canonical_json(raw)))
+        # raw_json is the COMPLETE row (verbatim values).
+        self.cx.execute("INSERT INTO raw_record VALUES (?,?,?,?,?,?)",
+            (rrid, sid, line, None, recovery, canonical_json(raw)))
         return rrid
 
     # ---- Layer 1 ---------------------------------------------------------
@@ -480,7 +480,8 @@ class Builder:
 
     def assertion(self, rrid, preset_id, preset_key, ordinal, entity_pair,
                   spatial_pair, temporal_pair, activity_pair, role, epl, etl, stl,
-                  deleted=None, multiplicity=None, label=None, entity_origin="preset_mapped"):
+                  deleted=None, multiplicity=None, label=None, input_record_id=None,
+                  entity_origin="preset_mapped"):
         eid, entity_l1 = entity_pair
         sx, spatial_l1 = spatial_pair or (None, None)
         tx, temporal_l1 = temporal_pair or (None, None)
@@ -506,9 +507,9 @@ class Builder:
             [_txt(fp), preset_key, str(line_no), str(ordinal), l1]))
         aid = u5("assertion", rrid, preset_key, ordinal)
         self.cx.execute("INSERT INTO assertion VALUES "
-                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (aid, rrid, preset_id, ordinal, eid, entity_origin, act_id, sx, tx,
-             role, epl, etl, stl, deleted, multiplicity, label,
+             role, epl, etl, stl, deleted, multiplicity, label, input_record_id,
              content_hash, claim_digest))
         return aid
 

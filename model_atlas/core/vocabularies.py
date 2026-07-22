@@ -580,7 +580,6 @@ class RawRecord:
     line_no: int
     raw_json: str         # the complete source row, canonical JSON
     native_record_uid: str | None = None   # the artefact's own key
-    input_record_id: str | None = None      # human locator
     recovery_state: RecordState | None = None
 
 
@@ -726,6 +725,11 @@ class Assertion:
     deleted: RecordState | None = None          # the app's own flag (R11)
     multiplicity: int | None = None             # NULL = 1
     source_label: str | None = None             # the one per-claim provenance field
+    # A human locator for the ORIGINAL source record (the source's own id column, e.g. a
+    # table PK), preset-mapped — so a row traces back to where it came from. On the
+    # assertion (L1), not the raw_record (L0): the value is preset-resolved, and L0 is
+    # preset-free. NULL when the preset maps none (line_no + raw_json still locate it).
+    input_record_id: str | None = None
 
 
 @dataclass(frozen=True)
