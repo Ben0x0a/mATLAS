@@ -258,7 +258,7 @@ def test_excel_serial_decodes_as_assumed_clock_with_epoch_in_method(store) -> No
     assert row["lower_datetime_iso"].endswith(" N/A")
 
 
-def test_unix_scale_decodes_and_quantum_accuracy(store) -> None:
+def test_unix_scale_decodes_and_leaves_accuracy_unset(store) -> None:
     ms = _bundle(store, "ms", "instant", "unix_epoch_ms",
                  [("lower", None, "1773450680123")])
     us = _bundle(store, "us", "instant", "unix_epoch_us",
@@ -268,9 +268,9 @@ def test_unix_scale_decodes_and_quantum_accuracy(store) -> None:
     ms_row, us_row = _row(store, ms), _row(store, us)
     assert ms_row["lower_unix_utc_us"] == 1_773_450_680_123_000
     assert us_row["lower_unix_utc_us"] == 1_773_450_680_123_456
-    # time_accuracy_us is the representation quantum the decode can vouch for.
-    assert int(ms_row["time_accuracy_us"]) == 1_000
-    assert int(us_row["time_accuracy_us"]) == 1
+    # Accuracy is NOT the clock's resolution: an epoch decode invents none (source-provided).
+    assert ms_row["time_accuracy_us"] is None
+    assert us_row["time_accuracy_us"] is None
     # A pass-through is a method too: the µs rule still stamps itself.
     assert us_row["method"] == "epoch_unix_us/1.0"
 
@@ -303,13 +303,15 @@ def test_datetime_combine_with_zone_localises_and_stamps_tzdb(store) -> None:
     assert row["method"].startswith("datetime_combine/1.0+tz_localize/1.0/tzdb=")
 
 
-def test_datetime_combine_date_only_claims_day_accuracy(store) -> None:
+def test_datetime_combine_date_only_decodes_at_midnight_without_inventing_accuracy(store) -> None:
     bundle = _bundle(store, "dateonly", "instant", "local_string",
                      [("lower_date", None, "2026-03-14")])
     integrate_expression(store, bundle, [DatetimeCombineMethod(zone="Europe/Paris")])
     row = _row(store, bundle)
     assert row["lower_unix_utc_us"] == _us(2026, 3, 13, 23, 0, 0)   # local midnight
-    assert int(row["time_accuracy_us"]) == _US_PER_DAY
+    # A bare date decodes at midnight but claims NO accuracy (day-granularity is
+    # representation, not a stated uncertainty).
+    assert row["time_accuracy_us"] is None
 
 
 # --- D32 cells + identity + dispatch --------------------------------------------

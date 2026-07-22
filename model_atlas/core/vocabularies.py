@@ -793,7 +793,7 @@ class TimespanIntegration:
     # UTC_OFFSET_UNKNOWN (a naive timestamp materialised by ASSUMING UTC).
     utc_offset_hours_lower: float | str | None = None
     utc_offset_hours_upper: float | str | None = None
-    time_accuracy_us: int | float | None = None
+    time_accuracy_us: int | None = None      # whole microseconds -> INTEGER column
 
 
 @dataclass(frozen=True)

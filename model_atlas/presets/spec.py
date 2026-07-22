@@ -81,8 +81,11 @@ CONTEXT_FIELD_PREFIX = "context."
 ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
     # entity
     "entity", "entity_type", "linked_entity", "entity_role", "identifier_type",
-    # temporal (assignable subset)
-    "utc_offset_hours", "time_accuracy_us", "temporal_source", "temporal_referential",
+    # temporal (assignable subset). NOTE: time_accuracy_us is NOT here yet — it is a
+    # source-provided uncertainty (like spatial accuracy) but has no L1->L2 path to
+    # timespan_integration yet (a mapping would silently drop), so it is withheld until
+    # that plumbing lands rather than offered as a dead target.
+    "utc_offset_hours", "temporal_source", "temporal_referential",
     "temporal_role_lower", "temporal_role_upper",
     "temporal_part_lower", "temporal_part_upper",
     # spatial

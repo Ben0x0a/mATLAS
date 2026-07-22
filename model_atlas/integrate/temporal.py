@@ -139,8 +139,8 @@ class _Bound:
     """One decoded bound: the canonical instant, the APPLIED offset, its accuracy.
 
     ``offset`` follows the three-state contract (float / None / UTC_OFFSET_UNKNOWN);
-    ``accuracy_us`` is the representation quantum this bound's decode can vouch for
-    (None = the method does not claim one).
+    ``accuracy_us`` is a SOURCE-provided timing uncertainty (µs) when the method was given
+    one, else None — it is never invented from the clock's display resolution.
     """
 
     unix_us: int | None = None
@@ -377,10 +377,13 @@ class _EpochRule:
 
     ``scale_num_us``/``scale_den`` express "µs per source unit" as a ratio so
     FILETIME's 100 ns ticks divide exactly; ``offset_us`` re-anchors the epoch;
-    ``quantum_us`` is the representation resolution the decode can vouch for;
     ``assumed_clock`` marks a referential that encodes a WALL CLOCK with no zone
     (Excel serials) — decoded by assuming UTC, sentinel-flagged, unlike the true
     absolute epochs.
+
+    No accuracy is derived from the epoch: ``time_accuracy_us`` is a SOURCE-provided
+    uncertainty (like the spatial corner's accuracy), not the clock's display resolution,
+    so an epoch decode leaves it unset.
     """
 
     rule_name: str
@@ -388,29 +391,28 @@ class _EpochRule:
     scale_num_us: int
     scale_den: int
     offset_us: int
-    quantum_us: int
     assumed_clock: bool
     reference: str | None
 
 
 _EPOCH_RULES: tuple[_EpochRule, ...] = (
     _EpochRule("epoch_unix_s", V.TemporalReferential.UNIX_EPOCH_S.value,
-               1_000_000, 1, 0, 1_000_000, False, None),
+               1_000_000, 1, 0, False, None),
     _EpochRule("epoch_unix_ms", V.TemporalReferential.UNIX_EPOCH_MS.value,
-               1_000, 1, 0, 1_000, False, None),
+               1_000, 1, 0, False, None),
     _EpochRule("epoch_unix_us", V.TemporalReferential.UNIX_EPOCH_US.value,
-               1, 1, 0, 1, False, None),
+               1, 1, 0, False, None),
     _EpochRule("epoch_cfabsolute", V.TemporalReferential.APPLE_CFABSOLUTE.value,
-               1_000_000, 1, _CFABSOLUTE_OFFSET_S * 1_000_000, 1_000_000, False,
+               1_000_000, 1, _CFABSOLUTE_OFFSET_S * 1_000_000, False,
                f"offset_s={_CFABSOLUTE_OFFSET_S}"),
     _EpochRule("epoch_webkit", V.TemporalReferential.WEBKIT.value,
-               1, 1, _WIN1601_OFFSET_S * 1_000_000, 1, False,
+               1, 1, _WIN1601_OFFSET_S * 1_000_000, False,
                f"offset_s={_WIN1601_OFFSET_S}"),
     _EpochRule("epoch_filetime", V.TemporalReferential.FILETIME.value,
-               1, 10, _WIN1601_OFFSET_S * 1_000_000, 1, False,
+               1, 10, _WIN1601_OFFSET_S * 1_000_000, False,
                f"offset_s={_WIN1601_OFFSET_S}"),
     _EpochRule("epoch_excel_serial", V.TemporalReferential.EXCEL_SERIAL.value,
-               _US_PER_DAY, 1, _EXCEL_EPOCH_US, 1_000_000, True,
+               _US_PER_DAY, 1, _EXCEL_EPOCH_US, True,
                f"epoch={_EXCEL_EPOCH_ISO}"),
 )
 
@@ -458,7 +460,8 @@ class EpochMethod(_TemporalMethodBase):
                 return _ABSENT_BOUND
             unix_us = int(round(value * rule.scale_num_us / rule.scale_den)) + rule.offset_us
         offset = V.UTC_OFFSET_UNKNOWN if rule.assumed_clock else None
-        return _Bound(unix_us, offset, rule.quantum_us)
+        # No accuracy from the decode: the epoch's resolution is NOT an accuracy claim.
+        return _Bound(unix_us, offset)
 
 
 def epoch_methods() -> tuple[EpochMethod, ...]:
@@ -589,9 +592,10 @@ class DatetimeCombineMethod(_TemporalMethodBase):
     verbatim component rows (``lower_date`` + ``lower_time``); this method combines
     them into one naive clock, then resolves the zone through the same ladder as
     TzLocalise (each bound's ``stated_offset`` — the time component's first, else
-    the date's). A date with no time column is a day-grain bound: decoded at
-    midnight with a one-day accuracy claim. A time with no date cannot be anchored
-    to an instant — that bound stays absent (empty cells), never invented.
+    the date's). A date with no time column is decoded at midnight; its accuracy is
+    NOT invented (day-granularity is representation, not a stated uncertainty) — it stays
+    unset unless the method carries a source-provided one. A time with no date cannot be
+    anchored to an instant — that bound stays absent (empty cells), never invented.
 
     The method string is a composite (the demo's ``+`` convention): the combine
     rule plus the zone rule it delegates to, e.g.
@@ -636,10 +640,11 @@ class DatetimeCombineMethod(_TemporalMethodBase):
             if time_text is not None:
                 naive = dt.datetime.strptime(f"{date_text} {time_text}",
                                              f"{self._date_format} {self._time_format}")
-                accuracy = self.time_accuracy_us
             else:
                 naive = dt.datetime.strptime(date_text, self._date_format)
-                accuracy = _US_PER_DAY   # a bare date vouches for the day, nothing finer
+            # Accuracy is a source-provided uncertainty, never derived from the date's
+            # day-granularity (that is representation resolution, not an accuracy claim).
+            accuracy = self.time_accuracy_us
         except ValueError:
             _LOG.warning(f"date/time pair ({date_text!r}, {time_text!r}) does not match "
                          f"({self._date_format!r}, {self._time_format!r}); bound skipped")
