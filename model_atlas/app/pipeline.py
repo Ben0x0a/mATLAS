@@ -444,6 +444,7 @@ def process(
             for preset, selector in file_matches:
                 if _assemble_match(
                     store, file, preset, selector, label,
+                    run_id=ingest_report.run_id,
                     entity=entity, linked_entity=linked_entity,
                     activity_ordinals=activity_ordinals,
                     warnings=warnings, matched=matched, unmatched=unmatched,
@@ -531,6 +532,7 @@ def _assemble_match(
     selector: InputSelector,
     label: str,
     *,
+    run_id: str,
     entity: str | None,
     linked_entity: str | None,
     activity_ordinals: dict[str, int],
@@ -559,7 +561,7 @@ def _assemble_match(
     source_id = ids.source_id(input_file_path, inner_path, subunit)
     source_rows = _rows(
         store,
-        "SELECT source_id, fingerprint_sha256, record_count FROM source WHERE source_id = ?",
+        "SELECT source_id, run_id, fingerprint_sha256, record_count FROM source WHERE source_id = ?",
         source_id,
     )
     if not source_rows:
@@ -571,6 +573,13 @@ def _assemble_match(
         return False
 
     source = source_rows[0]
+    # APPEND idempotency (T98): this source is already in the case from an EARLIER run (ingest
+    # skipped re-writing it, so the row still carries the prior run_id). Its assertions already
+    # exist — re-assembling would collide — so skip it. Not an error and not a new match: the
+    # skip was already recorded at ingest, so nothing is added to matched/unmatched here.
+    if source["run_id"] != run_id:
+        log.info(f"{label}: {preset.name} — source already in the case; not re-assembled")
+        return False
     records = [
         RawRecord(line_no=row["line_no"], fields=json.loads(row["raw_json"]))
         for row in _rows(

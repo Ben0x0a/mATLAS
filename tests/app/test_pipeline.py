@@ -142,6 +142,35 @@ def test_append_builds_the_same_case_as_the_union_of_runs(tmp_path: Path) -> Non
         con.close()
 
 
+def test_re_appending_the_same_evidence_is_a_recorded_no_op(tmp_path: Path) -> None:
+    # T98: re-appending evidence ALREADY in the case must not crash. The duplicate source is
+    # skipped and recorded (no silent loss), the case is unchanged, and the second run is still
+    # recorded (a documented no-op run, like a no-match run).
+    import sqlite3
+
+    preset = _GOLDEN / "secondary_cached.preset.yaml"
+    header = ("Latitude,Longitude,Accuracy (m),Speed (m/s),"
+              "Timestamp Date/Time - UTC+00:00 (dd.MM.yyyy),Source,Location,Item ID\n")
+    evidence = tmp_path / "a.csv"
+    evidence.write_text(header + "46.5197,6.6323,12.0,3.0,06.12.2025 13:00:00.000,"
+                        "/x/Cache.sqlite,Table: T(Z_PK: 1),1001\n", encoding="utf-8")
+
+    out = tmp_path / "case"
+    process(evidence, preset, out, linked_entity=_LINKED)                      # create
+    result = process(evidence, preset, out, linked_entity=_LINKED)             # re-append SAME
+
+    # The skip is recorded, not silent, and the run added nothing new.
+    assert any("already in the case" in warning for warning in result.warnings)
+    assert result.row_counts["matched"] == 0
+    con = sqlite3.connect(out / "merged.matlas.sqlite")
+    try:
+        assert con.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 2       # both runs recorded
+        assert con.execute("SELECT COUNT(*) FROM source").fetchone()[0] == 1    # no duplicate source
+        assert con.execute("SELECT COUNT(*) FROM assertion").fetchone()[0] == 1 # unchanged (1 row)
+    finally:
+        con.close()
+
+
 def test_no_match_writes_the_case_db_but_no_csv(tmp_path: Path) -> None:
     source = tmp_path / "input"
     source.mkdir()

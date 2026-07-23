@@ -90,6 +90,8 @@ class IngestReport:
     records: int = 0
     skipped_unreadable: int = 0
     flagged_self_ingest: int = 0
+    # sources already present in the case from an EARLIER run — skipped on append (T98).
+    sources_already_in_case: int = 0
     read_failures: int = 0
     # mutable default — a shared [] across instances would be a latent aliasing bug.
     warnings: list[str] = field(default_factory=list)
@@ -329,6 +331,25 @@ def _ingest_subunit(
     report: IngestReport,
 ) -> None:
     """Write one ``source`` row (paths-only id) plus its verbatim ``raw_record`` rows."""
+    # source id from PATHS ONLY (decision 27/§2c): the fingerprint is a plain indexed column,
+    # so byte-identical exhibits at two paths stay two rows sharing fingerprint_sha256.
+    source_id = ids.source_id(input_file_path, inner_path, subunit)
+
+    # APPEND idempotency (T98): a source already in the case from an EARLIER run must not be
+    # re-ingested — its assertions already exist and a second write would collide. Skip it and
+    # RECORD the skip (no silent loss); the assemble loop skips it too (run_id mismatch). A
+    # within-run duplicate (same run_id) is a DIFFERENT matter: the discover dedup should have
+    # prevented it, so it falls through to write_source and raises, surfacing the breach loudly.
+    existing = store.connection.execute(
+        "SELECT run_id FROM source WHERE source_id = ?", (source_id,)).fetchone()
+    if existing is not None and existing[0] != run_id:
+        report.sources_already_in_case += 1
+        message = (f"{file.logical_path} (subunit {subunit!r}) is already in the case from an "
+                   f"earlier run; skipped (nothing to add)")
+        log.info(message)
+        report.warnings.append(message)
+        return
+
     try:
         records = list(reader.iter_records(path, subunit))
     except Exception as exc:  # noqa: BLE001 — malformed evidence must not abort the run
@@ -338,9 +359,6 @@ def _ingest_subunit(
         report.warnings.append(message)
         records = []
 
-    # source id from PATHS ONLY (decision 27/§2c): the fingerprint is a plain indexed column,
-    # so byte-identical exhibits at two paths stay two rows sharing fingerprint_sha256.
-    source_id = ids.source_id(input_file_path, inner_path, subunit)
     store.write_source(
         Source(
             source_id=source_id, run_id=run_id, input_file_path=input_file_path,
