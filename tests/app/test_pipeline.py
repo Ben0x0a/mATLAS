@@ -186,6 +186,28 @@ def test_no_match_writes_the_case_db_but_no_csv(tmp_path: Path) -> None:
     assert not (out / "merged.csv").exists()
 
 
+def test_two_independent_runs_produce_identical_digests(tmp_path: Path) -> None:
+    # Determinism spot-check: the SAME evidence processed twice into SEPARATE cases yields
+    # byte-identical content_hash/claim_digest sets and an identical CSV projection — nothing
+    # run-, time-, or order-dependent leaks into an id, a digest, or the output.
+    import sqlite3
+
+    def digests(db: Path) -> set:
+        con = sqlite3.connect(db)
+        try:
+            return set(con.execute("SELECT content_hash, claim_digest FROM assertion").fetchall())
+        finally:
+            con.close()
+
+    source = _fixture_folder(tmp_path)
+    first = process(source, _GOLDEN, tmp_path / "o1", linked_entity=_LINKED)
+    second = process(source, _GOLDEN, tmp_path / "o2", linked_entity=_LINKED)
+
+    d1 = digests(first.output_case_db)
+    assert d1 and d1 == digests(second.output_case_db)             # identical evidence identity
+    assert first.output_csv.read_bytes() == second.output_csv.read_bytes()  # identical projection
+
+
 def test_output_path_that_is_a_file_is_refused(tmp_path: Path) -> None:
     stray = tmp_path / "out"
     stray.write_text("occupied", encoding="utf-8")
