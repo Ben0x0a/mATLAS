@@ -1,14 +1,16 @@
-"""Forensic crash-report handler: on any unhandled exception, write one structured JSON
-artefact capturing the traceback, every stack frame's variables (size-limited and redacted),
-and full execution metadata — enough to debug a run without reproducing it.
+"""Forensic crash-report handler: on any unhandled exception, write a structured report
+capturing the traceback, every stack frame's variables (size-limited and redacted), and
+full execution metadata — enough to debug a run without reproducing it. Two artefacts are
+written side by side: a ``.json`` (machine) and a ``.md`` (human).
 
 Defines:    _summarise (the value size-limiter), _collect_frames (per-frame locals),
-            _metadata (environment), write_crash_report, and install_excepthook.
+            _metadata (safe environment), _render_markdown (the human report),
+            write_crash_report, and install_excepthook.
 Used by:    launcher.cli and launcher.gui (install the hook at start-up); model_atlas is
             the tool the artefact attributes itself to.
-Depends on: model_atlas.config (DiagnosticsSettings) and the STANDARD LIBRARY ONLY. pandas
-            and numpy are detected structurally (by type name), never imported, so this
-            module stays import-light and works on Python 3.11 -> 3.14.
+Depends on: model_atlas.app.config (DiagnosticsSettings) and the STANDARD LIBRARY ONLY.
+            pandas and numpy are detected structurally (by type name), never imported, so
+            this module stays import-light and works on Python 3.11 -> 3.14.
 
 Design:
 - A global ``sys.excepthook`` (and ``threading.excepthook``) receives ``(type, exc, tb)``.
@@ -19,6 +21,13 @@ Design:
   it records shape/columns/head, hashes long strings, caps items and recursion depth, and
   keeps a per-frame byte budget. Variable names matching the configured redaction tokens are
   replaced by a type + sha256 (correlatable, but not the plaintext secret).
+- The report is split into two sections so an operator can share the first without review:
+  ``safe`` (structural/environmental data that cannot carry run-time case data — exception
+  TYPE, frame file/line/function/code, Python/OS/package/git/settings metadata) and
+  ``sensitive`` (anything derived from run-time values or operator input — the exception
+  message/args/notes, the traceback text, per-frame locals, argv, environ). Name-matched
+  secrets stay hashed in BOTH sections, so the split is organisational only: it never puts
+  a plaintext secret on disk that redaction would otherwise have hidden.
 - The handler is fully guarded: any failure inside it degrades to a log line and returns
   ``None`` — it never masks the original exception, which still prints its normal traceback.
 """
@@ -43,8 +52,9 @@ from model_atlas.app.config import DiagnosticsSettings, get_settings
 
 log = logging.getLogger(__name__)
 
-# Bumped when the report structure changes, so a downstream reader can branch on it.
-REPORT_SCHEMA = "matlas.crash-report/1"
+# Bumped when the report structure changes, so a downstream reader can branch on it. /2
+# introduced the safe/sensitive split and the side-by-side .md artefact.
+REPORT_SCHEMA = "matlas.crash-report/2"
 
 # Packages whose installed version is worth recording for a repro (best-effort; a missing
 # one is simply omitted). model_atlas' own version is recorded separately from __version__.
@@ -71,8 +81,11 @@ def _is_redacted(name: str | None, cfg: DiagnosticsSettings) -> bool:
 # _summarise. Both roots are stable, so they are resolved once at import.
 
 try:
-    # diagnostics.py lives at <repo>/model_atlas/diagnostics.py, so parent.parent is the root.
-    _PROJECT_ROOT: Path | None = Path(__file__).resolve().parent.parent
+    # diagnostics.py lives at <repo>/model_atlas/app/diagnostics.py, so parents[2] climbs
+    # app -> model_atlas -> the repo root. Anchoring at the repo root (not the package) is
+    # what makes a project file read as "model_atlas/ingest/assemble.py", "launcher/cli.py"
+    # etc. — the useful, readable relative path.
+    _PROJECT_ROOT: Path | None = Path(__file__).resolve().parents[2]
 except Exception:  # noqa: BLE001 - root discovery is best-effort; None disables project-relative.
     _PROJECT_ROOT = None
 
@@ -387,6 +400,23 @@ def _collect_frames(tb: Any, cfg: DiagnosticsSettings) -> list[dict[str, Any]]:
     return frames
 
 
+def _safe_frame(frame: dict[str, Any]) -> dict[str, Any]:
+    """The shareable half of one collected frame: WHERE the code was (file/line/function) and
+    the source line itself (our own code) — never the locals, which hold run-time values."""
+    return {key: frame[key] for key in ("file", "lineno", "function", "code")}
+
+
+def _sensitive_frame(frame: dict[str, Any]) -> dict[str, Any]:
+    """The review-before-sharing half of one collected frame: its locals, keyed back to the
+    frame by function + line so a reader can line it up with the safe stack."""
+    entry: dict[str, Any] = {
+        "function": frame["function"], "lineno": frame["lineno"], "locals": frame["locals"],
+    }
+    if frame.get("locals_truncated"):
+        entry["locals_truncated"] = True
+    return entry
+
+
 def _package_versions() -> dict[str, str | None]:
     versions: dict[str, str | None] = {}
     for name in _RECORDED_PACKAGES:
@@ -414,7 +444,11 @@ def _git_commit() -> str | None:
     return None
 
 
-def _metadata(cfg: DiagnosticsSettings, context: dict[str, Any] | None) -> dict[str, Any]:
+def _metadata(cfg: DiagnosticsSettings) -> dict[str, Any]:
+    """The SAFE execution metadata: environment facts that cannot contain run-time case data
+    (versions, OS, git, anonymised settings/paths). argv and os.environ are NOT here — they
+    can carry operator input (a case subject on the command line, secrets in the environment)
+    and so belong in the sensitive section."""
     now = dt.datetime.now(dt.timezone.utc)
     md: dict[str, Any] = {
         "tool": "mATLAS",
@@ -424,7 +458,6 @@ def _metadata(cfg: DiagnosticsSettings, context: dict[str, Any] | None) -> dict[
         "python_version": sys.version,
         "python_implementation": platform.python_implementation(),
         "executable": _relativise_path(sys.executable, cfg, basename_fallback=False),
-        "argv": [_relativise_path(arg, cfg, basename_fallback=False) for arg in sys.argv],
         "pid": os.getpid(),
         "cwd": _relativise_path(str(Path.cwd()), cfg, basename_fallback=False),
         "platform": {
@@ -445,15 +478,10 @@ def _metadata(cfg: DiagnosticsSettings, context: dict[str, Any] | None) -> dict[
         }
     except Exception as exc:  # noqa: BLE001 - a broken config is itself a likely crash cause.
         md["settings_error"] = f"{type(exc).__name__}: {exc}"
-    if cfg.capture_env:
-        # Every value passes through redaction by its NAME, so a matched secret is hashed.
-        md["environ"] = {k: _summarise(k, v, cfg, 1) for k, v in os.environ.items()}
-    if context:
-        md["context"] = context
     return md
 
 
-# --- report assembly + hook -------------------------------------------------
+# --- config + report path ---------------------------------------------------
 
 def _diag_settings() -> DiagnosticsSettings:
     """Resolved diagnostics config, falling back to defaults if the config itself is broken
@@ -479,6 +507,84 @@ def _report_path(cfg: DiagnosticsSettings) -> Path:
     return path
 
 
+# --- human Markdown rendering -----------------------------------------------
+
+def _md_value(value: Any) -> str:
+    """One local's value rendered inline for the Markdown report. A redacted value shows its
+    type + a short sha256 (never the plaintext); anything else is compact JSON, truncated."""
+    if isinstance(value, dict) and value.get("redacted") is True:
+        digest = value.get("sha256") or "?"
+        return f"_redacted_ (`{value.get('type', '?')}`, sha256 `{digest[:12]}…`)"
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001 - a non-serialisable summary still has a str form.
+        text = str(value)
+    if len(text) > 200:
+        text = text[:200] + "…"
+    return f"`{text}`"
+
+
+def _render_markdown(report: dict[str, Any]) -> str:
+    """Render the report as a human Markdown document with the safe part first and the
+    sensitive part clearly fenced, so an operator can read it and cut the sensitive section
+    before sharing. Pure/defensive: it only reads ``report`` and is called inside the
+    handler's guard, so a rendering slip never masks the original crash."""
+    safe = report.get("safe", {})
+    sensitive = report.get("sensitive", {})
+    md = safe.get("metadata", {})
+    lines: list[str] = [
+        "# mATLAS crash report",
+        "",
+        f"_Schema {report.get('schema', '?')} — generated {md.get('generated_at_utc', '?')}_",
+        "",
+        "## Safe (shareable)",
+        "",
+        f"**Exception:** `{safe.get('exception_type', '?')}`",
+        "",
+        "### Environment",
+    ]
+    for label, key in (
+        ("mATLAS", "tool_version"), ("Python", "python_version"),
+        ("Implementation", "python_implementation"), ("git commit", "git_commit"),
+    ):
+        if md.get(key):
+            lines.append(f"- **{label}:** {md[key]}")
+    system = (md.get("platform") or {}).get("system")
+    if system:
+        release = (md.get("platform") or {}).get("release", "")
+        lines.append(f"- **Platform:** {system} {release}".rstrip())
+    lines += ["", "### Stack (crash site last)"]
+    for i, frame in enumerate(safe.get("frames", []), start=1):
+        code = frame.get("code") or ""
+        lines.append(
+            f"{i}. `{frame.get('file')}:{frame.get('lineno')}` in "
+            f"`{frame.get('function')}` — `{code}`")
+
+    lines += [
+        "",
+        "## Sensitive (review before sharing)",
+        "",
+        "> Holds run-time values (evidence data, identifiers, argv, environment). Review and "
+        "remove this section before sharing the report.",
+        "",
+        f"**Message:** {sensitive.get('exception_message', '')}",
+        "",
+        "### Frame locals",
+    ]
+    for frame in sensitive.get("frames", []):
+        lines.append(f"#### `{frame.get('function')}` (line {frame.get('lineno')})")
+        frame_locals = frame.get("locals") or {}
+        if not frame_locals:
+            lines.append("- _(no locals)_")
+        for name, value in frame_locals.items():
+            lines.append(f"- `{name}`: {_md_value(value)}")
+        if frame.get("locals_truncated"):
+            lines.append("- _(further locals dropped — per-frame byte budget)_")
+    return "\n".join(lines) + "\n"
+
+
+# --- report assembly + hook -------------------------------------------------
+
 def write_crash_report(
     exc_type: type[BaseException],
     exc: BaseException,
@@ -486,37 +592,59 @@ def write_crash_report(
     *,
     context: dict[str, Any] | None = None,
 ) -> Path | None:
-    """Write one JSON crash report and return its path (or None if disabled/failed).
+    """Write the crash report as a machine ``.json`` plus a human ``.md`` beside it, and
+    return the JSON path (or None if disabled/failed).
 
-    Guaranteed non-throwing: any internal failure is logged and swallowed so the original
-    exception is never masked."""
+    The report is split into ``safe`` (shareable) and ``sensitive`` (review before sharing);
+    see the module docstring. Guaranteed non-throwing: any internal failure is logged and
+    swallowed so the original exception is never masked."""
     try:
         cfg = _diag_settings()
         if not cfg.enabled:
             return None
-        report = {
-            "schema": REPORT_SCHEMA,
-            "tool": "mATLAS",
-            "exception": {
-                "type": _typename(exc),
-                "message": _anonymise_paths(str(exc), cfg),
-                "args": [_summarise(None, arg, cfg, 1) for arg in getattr(exc, "args", ())],
-                # __notes__ carries the build_assertions breadcrumb (source/table/line/field/value).
-                "notes": [_anonymise_paths(str(n), cfg)
-                          for n in (getattr(exc, "__notes__", []) or [])] or None,
-            },
-            "traceback": _anonymise_paths("".join(traceback.format_exception(exc_type, exc, tb)), cfg),
-            "frames": _collect_frames(tb, cfg),
-            "metadata": _metadata(cfg, context),
+        frames = _collect_frames(tb, cfg)
+        safe: dict[str, Any] = {
+            # The exception TYPE is safe (a class name); its message/args are run-time data.
+            "exception_type": _typename(exc),
+            "frames": [_safe_frame(frame) for frame in frames],
+            "metadata": _metadata(cfg),
+            "context": context or {},
         }
-        path = _report_path(cfg)
+        sensitive: dict[str, Any] = {
+            "exception_message": _anonymise_paths(str(exc), cfg),
+            "exception_args": [_summarise(None, arg, cfg, 1) for arg in getattr(exc, "args", ())],
+            # __notes__ carries the build_assertions breadcrumb (source/table/line/field/value).
+            "notes": [_anonymise_paths(str(n), cfg)
+                      for n in (getattr(exc, "__notes__", []) or [])] or None,
+            "traceback": _anonymise_paths(
+                "".join(traceback.format_exception(exc_type, exc, tb)), cfg),
+            # argv can carry operator input (a case subject, an evidence path) — sensitive.
+            "argv": [_relativise_path(arg, cfg, basename_fallback=False) for arg in sys.argv],
+            "frames": [_sensitive_frame(frame) for frame in frames],
+        }
+        if cfg.capture_env:
+            # Every value passes through redaction by its NAME, so a matched secret is hashed.
+            sensitive["environ"] = {k: _summarise(k, v, cfg, 1) for k, v in os.environ.items()}
+        report = {
+            "schema": REPORT_SCHEMA, "tool": "mATLAS", "safe": safe, "sensitive": sensitive,
+        }
+
+        json_path = _report_path(cfg)
         # utf-8-sig so Windows tooling detects the encoding (house encoding rule).
-        path.write_text(
+        json_path.write_text(
             json.dumps(report, indent=2, ensure_ascii=False, default=str),
             encoding="utf-8-sig",
         )
-        log.error(f"Crash report written to {path}")
-        return path
+        log.error(f"Crash report (machine) written to {json_path}")
+        # The human Markdown is a convenience alongside the authoritative JSON: render it under
+        # its OWN guard so a rendering slip loses neither the JSON nor the original exception.
+        try:
+            md_path = json_path.with_suffix(".md")
+            md_path.write_text(_render_markdown(report), encoding="utf-8-sig")
+            log.error(f"Crash report (human) written to {md_path}")
+        except Exception:  # noqa: BLE001 - the .md is best-effort; the JSON is the artefact.
+            log.exception("Failed to write Markdown crash report")
+        return json_path
     except Exception:  # noqa: BLE001 - the handler must never raise over the original error.
         log.exception("Failed to write crash report")
         return None

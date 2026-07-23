@@ -24,3 +24,34 @@ max_container_depth = 1     # archive-nesting levels to open (folder=0, input ar
 
 [output]
 source_column_prefix = "orig_"     # prefix for verbatim source-column passthrough
+
+[diagnostics]
+# On any UNHANDLED exception, mATLAS writes a forensic crash report as TWO files:
+#   <crash_dir>/matlas_error_<UTC-ISO>_p<pid>.json   (machine)
+#   <crash_dir>/matlas_error_<UTC-ISO>_p<pid>.md     (human)
+# containing the traceback, every stack frame's variables (size-limited + redacted), and full
+# execution metadata (OS, Python, versions, settings). The report is split into a "safe"
+# (shareable) and a "sensitive" (review-before-sharing) section. The normal stderr traceback
+# still prints.
+enabled  = true
+crash_dir = "crash_reports"        # relative => resolved against the directory you run from
+
+# Variable NAMES whose value is redacted (case-insensitive substring match). A matched value is
+# replaced by its type + a sha256 (correlatable, never the plaintext). Tune for your data: bare
+# "key" is intentionally NOT a default as it would over-redact forensic columns (primary_key, ...).
+redact = ["password", "passwd", "pwd", "passphrase",
+          "secret", "token", "credential", "api_key", "apikey", "private_key"]
+
+# Anonymise filesystem paths so a report never leaks the examiner's username or directory
+# structure. Path VALUES (e.g. the input acquisition) keep only their type + size (a stat, never
+# a hash — so a 512 GB zip costs nothing; the name and directory are dropped); paths under the
+# project directory become relative to it (model_atlas/...), other resources fall back to ~/….
+redact_paths = true
+
+# Size limits: capture the maximum useful state WITHOUT ever flushing a whole DataFrame/collection.
+max_string_len  = 512              # str/repr preview length; the remainder is hashed, not stored
+max_items       = 20               # collection items summarised per container
+max_head        = 3                # DataFrame/Series head rows captured (never the whole frame)
+max_depth       = 3                # recursion depth before a value degrades to a shallow repr
+max_frame_bytes = 65536            # per-frame locals byte budget; further locals are dropped past it
+capture_env     = false            # include os.environ (redacted) — off by default (holds secrets)

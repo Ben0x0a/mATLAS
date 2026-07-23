@@ -1,7 +1,8 @@
-"""Tests for the forensic crash-report handler (model_atlas.diagnostics).
+"""Tests for the forensic crash-report handler (model_atlas.app.diagnostics).
 
 Covers the value summariser's size-limiting + redaction, and end-to-end report writing:
-a real exception raised through a small call stack yields a JSON artefact carrying the
+a real exception raised through a small call stack yields a JSON + Markdown artefact pair,
+split into a safe (shareable) and a sensitive (review-before-sharing) section, carrying the
 frame locals, metadata and traceback — without ever dumping a whole DataFrame.
 """
 from __future__ import annotations
@@ -14,7 +15,7 @@ import pytest
 
 from model_atlas.app import config as config_module
 from model_atlas.app.config import DiagnosticsSettings, Settings
-from model_atlas.app.diagnostics import _summarise, write_crash_report
+from model_atlas.app.diagnostics import _relativise_path, _summarise, write_crash_report
 
 _CFG = DiagnosticsSettings()
 
@@ -128,23 +129,59 @@ def test_write_crash_report_captures_frames_and_metadata(tmp_path: Path) -> None
     assert path is not None and path.exists()
     assert ":" not in path.name                      # Windows-safe filename (no colon)
     report = json.loads(path.read_text(encoding="utf-8-sig"))
+    safe, sensitive = report["safe"], report["sensitive"]
 
-    assert report["exception"]["type"] == "ValueError"
-    assert "deliberate failure" in report["traceback"]
+    # The exception TYPE is safe; its message + traceback are run-time data (sensitive).
+    assert safe["exception_type"] == "ValueError"
+    assert "deliberate failure" in sensitive["traceback"]
 
-    # The raising frame's locals are captured: an ordinary local verbatim, the secret redacted,
-    # and the DataFrame argument summarised (not dumped).
-    raising = next(f for f in report["frames"] if f["function"] == "_raise_through_a_stack")
+    # The raising frame's locals are captured in the SENSITIVE section: an ordinary local
+    # verbatim, the secret redacted, and the DataFrame argument summarised (not dumped).
+    raising = next(f for f in sensitive["frames"] if f["function"] == "_raise_through_a_stack")
     locals_ = raising["locals"]
     assert locals_["marker_local"] == "CANARY-123"
     assert locals_["secret_token"]["redacted"] is True
     assert "s3cr3t-value" not in json.dumps(report)
     assert locals_["payload"]["shape"] == [1, 2]
 
-    md = report["metadata"]
+    # The safe stack carries only WHERE the code was, never the locals values.
+    safe_raising = next(f for f in safe["frames"] if f["function"] == "_raise_through_a_stack")
+    assert set(safe_raising) == {"file", "lineno", "function", "code"}
+    assert "CANARY-123" not in json.dumps(safe)
+
+    md = safe["metadata"]
     assert md["tool"] == "mATLAS"
-    assert md["context"] == {"entrypoint": "test"}
+    assert safe["context"] == {"entrypoint": "test"}
     assert "python_version" in md and "platform" in md
+
+
+def test_project_paths_anonymise_relative_to_the_repo_root() -> None:
+    # Defect 1: the anchor is the REPO ROOT, so a project file reads as "model_atlas/…", not
+    # "app/…" or "ingest/…". diagnostics.py itself is <repo>/model_atlas/app/diagnostics.py.
+    from model_atlas.app import diagnostics
+
+    repo_root = Path(diagnostics.__file__).resolve().parents[2]
+    project_file = str(repo_root / "model_atlas" / "app" / "pipeline.py")
+    assert _relativise_path(project_file, _CFG, basename_fallback=True) == "model_atlas/app/pipeline.py"
+
+
+def test_markdown_report_is_written_and_leaks_no_secret(tmp_path: Path) -> None:
+    _use_diagnostics(DiagnosticsSettings(crash_dir=str(tmp_path / "crash")))
+    try:
+        _raise_through_a_stack(pd.DataFrame({"lat": [1.0]}))
+    except ValueError as exc:
+        json_path = write_crash_report(type(exc), exc, exc.__traceback__)
+
+    # The human Markdown sits beside the JSON, same stem.
+    md_path = json_path.with_suffix(".md")
+    assert md_path.exists()
+    text = md_path.read_text(encoding="utf-8-sig")
+    assert text.startswith("# mATLAS crash report")
+    assert "## Safe (shareable)" in text and "## Sensitive (review before sharing)" in text
+    assert "`ValueError`" in text
+    # The secret plaintext appears in NEITHER artefact (redaction survives rendering).
+    assert "s3cr3t-value" not in text
+    assert "s3cr3t-value" not in json_path.read_text(encoding="utf-8-sig")
 
 
 def test_disabled_writes_nothing(tmp_path: Path) -> None:
