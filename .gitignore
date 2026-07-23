@@ -35,6 +35,8 @@ ENV/
 *.log
 .DS_Store
 tasks/
+# Internal history / decision narrative (keeps the archival code index out of the shipped docs)
+docs/history/
 
 # Test and coverage
 .pytest_cache/
