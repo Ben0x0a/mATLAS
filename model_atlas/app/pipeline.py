@@ -61,13 +61,13 @@ from model_atlas.core.determinism import canonical_path, container_inner_path
 from model_atlas.core.store import RunStore
 from model_atlas.export import traceability_path_for, warnings_path_for, write_json
 from model_atlas.export.csv_flat import ExportContext
-from model_atlas.export.registry import get_exporter, run_exporters
+from model_atlas.export.registry import get_exporter, load_builtin_exporters, run_exporters
 from model_atlas.ingest.assemble import assemble_source
 from model_atlas.ingest.containers import SourceFile
 from model_atlas.ingest.discover import FileFound, walk
 from model_atlas.ingest.format_detect import detect_path_format, detect_source_format
 from model_atlas.ingest.readers.base import RawRecord
-from model_atlas.ingest.writer import ingest_input, opened_input_path
+from model_atlas.ingest.writer import ingest_input, is_matlas_run_db, opened_input_path
 from model_atlas.integrate.entity import normalise_entities
 from model_atlas.integrate.spatial import integrate_spatial
 from model_atlas.integrate.temporal import (
@@ -84,6 +84,11 @@ log = logging.getLogger(__name__)
 # The registry name of the primary flat-CSV brick; written when the caller selects no
 # exports (the historic default). Consumed by: process / _run_exports below, gui.app.
 PRIMARY_CSV_EXPORT_NAME = "csv"
+
+# The sqlite/case-DB export brick name. The case database is written intrinsically (persist
+# on create / commit on append), so this is filtered OUT of the selectable exports — a brick
+# re-persisting to the same path would be redundant (create) or unsafe (append, in place).
+SQLITE_EXPORT_NAME = "sqlite_db"
 
 # A progress reporter is called at the START of each pipeline phase with a short human
 # phase name (no percentage). The library stays UI-agnostic: the GUI passes a callback
@@ -193,6 +198,15 @@ def _rows(store: RunStore, sql: str, *args: object) -> list[dict]:
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
+def _read_case_id(store: RunStore) -> str:
+    """The case id of an opened case DB (one case per DB, decision 28). A new run APPENDS
+    under this id rather than minting a fresh case."""
+    row = store.connection.execute("SELECT case_id FROM case_metadata LIMIT 1").fetchone()
+    if row is None:
+        raise ValueError("case database has no case_metadata row; not a valid case DB")
+    return row[0]
+
+
 # --- the store-backed matcher touch points -----------------------------------
 
 def _store_peek_fn(store: RunStore) -> Callable[[SourceFile, InputSelector], "set[str] | None"]:
@@ -278,6 +292,7 @@ def process(
     *,
     linked_entity: str,
     base_name: str = "merged",
+    case: str | None = None,
     traceability_format: str = "readable",
     merge: bool = True,
     entity: str | None = None,
@@ -349,17 +364,32 @@ def process(
     matched: list[str] = []
     unmatched: list[str] = []
 
-    with RunStore() as store:
+    # The case database is the durable artefact — one per output name. If it already exists,
+    # this run APPENDS to that case (a new run under the same case_metadata); otherwise it
+    # CREATES a new case. Append is deterministic: no run/case id feeds any evidence digest,
+    # so the same evidence yields byte-identical ids/digests whichever run adds it.
+    case_db_path = output / f"{base_name}.matlas.sqlite"
+    is_append = case_db_path.is_file() and is_matlas_run_db(case_db_path)
+    if is_append:
+        store = RunStore.open_persisted(case_db_path)
+        existing_case_id = _read_case_id(store)
+        log.info(f"Appending a run to the existing case {case_db_path.name}")
+    else:
+        store = RunStore()
+        existing_case_id = None
+
+    try:
         # --- L0: one walk that READS everything (preset-free, decision 27) ----
         _emit(progress, "Discovering & ingesting sources")
         ingest_report = ingest_input(
             input_path, store,
-            # The schema roots a run in a case (decision 28); process()'s stable
-            # signature carries no case identity yet, so the input's name stands in.
-            case_number=input_path.name or str(input_path),
+            # On CREATE the case_number is the --case label (falling back to the run name);
+            # on APPEND the case identity is read from the DB and this arg is unused.
+            case_number=case or base_name,
             presets=preset_rows,
             tool_version=__version__,
             max_container_depth=max_container_depth,
+            existing_case_id=existing_case_id,
         )
         warnings.extend(ingest_report.warnings)
         log.info(f"Ingested {ingest_report.sources} source(s), "
@@ -418,8 +448,10 @@ def process(
         integrate_spatial(store, source_units=_source_units(specs))
         normalise_entities(store)
         # Untangle runs AFTER normalise_entities: its grouping key is the normalised
-        # identifier, which the normaliser has just written onto the entity rows.
-        analyse(store)
+        # identifier, which the normaliser has just written onto the entity rows. On append
+        # it re-ranks the WHOLE case (clear_existing), since a new row can join an existing
+        # time group — the analysis is derived, so regenerating it is not an evidence edit.
+        analyse(store, clear_existing=is_append)
 
         assertion_count = _rows(store, "SELECT COUNT(*) AS n FROM assertion")[0]["n"]
         ranked_count = _rows(
@@ -431,15 +463,27 @@ def process(
             "ranked": ranked_count,
         }
 
-        # --- exports + sidecars ----------------------------------------------
+        # --- write the case DB (always) + additional exports + sidecars ------
+        # The case database is the durable artefact and is ALWAYS written: a fresh copy on
+        # create (VACUUM INTO), the in-place appended rows committed on append. Every other
+        # export is a throwaway projection of the WHOLE case.
+        output.mkdir(parents=True, exist_ok=True)
+        if is_append:
+            store.connection.commit()
+        else:
+            store.persist(case_db_path)
+
         output_csvs: list[Path] = []
         output_extras: list[Path] = []
         output_traceability: Path | None = None
         output_warnings_path: Path | None = None
         if assertion_count:
-            output.mkdir(parents=True, exist_ok=True)
-            export_names = list(exports) if exports is not None else [PRIMARY_CSV_EXPORT_NAME]
+            # sqlite is intrinsic (the case DB above), so it is never a selectable export
+            # re-persisting to the same path.
+            requested = list(exports) if exports is not None else [PRIMARY_CSV_EXPORT_NAME]
+            export_names = [name for name in requested if name != SQLITE_EXPORT_NAME]
             _emit(progress, "Writing exports")
+            load_builtin_exporters()   # self-contained: register every brick before running
             context = ExportContext(
                 output_dir=output, base_name=base_name, merge=merge,
                 include_source_columns=include_source_columns,
@@ -457,7 +501,9 @@ def process(
                     traceability_format=traceability_format,
                 )
         else:
-            log.info("No assertions produced; no outputs written.")
+            log.info("No assertions produced; the case database records the run.")
+    finally:
+        store.close()
 
     log.info("Processing finished.")
     if merge:

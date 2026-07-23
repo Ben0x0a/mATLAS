@@ -242,19 +242,27 @@ def _rank(df: pd.DataFrame, *, resolution_us: int = DEFAULT_RESOLUTION_US) -> pd
 # --- the L3 entry point ------------------------------------------------------
 
 def analyse(store: RunStore, *, version: str = UNTANGLE_VERSION,
-            resolution_us: int = DEFAULT_RESOLUTION_US) -> int:
+            resolution_us: int = DEFAULT_RESOLUTION_US,
+            clear_existing: bool = False) -> int:
     """Rank the store's assertions and write one ``analysis`` row per assertion.
 
     HOW: reassemble the old flat frame from the relational store (one row per
     assertion, ingest order), run the unchanged ranking, then write
     ``(assertion_id, untangle/<version>, record_type, record_rank)`` rows through
     the L3 writer. Returns the number of rows written (== the assertion count).
-    WHY no delete/update path: decision 19 — a re-run with a changed ranker ADDS a
-    new method generation beside the old one; re-running the SAME version hits
-    ``UNIQUE(assertion_id, method)`` and raises, because silently overwriting a
-    recorded verdict would be exactly the loss the model forbids.
+    Normally a re-run with a changed ranker ADDS a new method generation beside the
+    old one (decision 19); re-running the SAME version hits ``UNIQUE(assertion_id,
+    method)`` and raises, so a recorded verdict is never silently overwritten.
+
+    ``clear_existing`` is the ONE sanctioned exception: on APPEND (a new run added to
+    an existing case) the ranking must reflect the WHOLE case — a new row can join an
+    existing time group — so this method's prior verdicts are deleted and RE-generated.
+    That is a deliberate regeneration of DERIVED analysis (not evidence), distinct from
+    the accidental overwrite the guard protects against.
     """
     method = f"{METHOD_NAME}/{version}"
+    if clear_existing:
+        store.connection.execute("DELETE FROM analysis WHERE method = ?", (method,))
     frame = _rank(_load_frame(store.connection), resolution_us=resolution_us)
     written = 0
     ranked = 0

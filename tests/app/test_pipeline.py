@@ -102,7 +102,51 @@ def test_split_mode_writes_one_csv_per_preset(tmp_path: Path) -> None:
     assert result.output_csvs[0].is_file()
 
 
-def test_no_match_returns_empty_result_without_outputs(tmp_path: Path) -> None:
+def test_append_builds_the_same_case_as_the_union_of_runs(tmp_path: Path) -> None:
+    # Append determinism: creating a case from evidence A then APPENDING evidence B yields
+    # exactly the digest set of A-alone plus B-alone — the same rows, same identity, whichever
+    # run adds them (no run/case id feeds a digest).
+    import sqlite3
+
+    preset = _GOLDEN / "secondary_cached.preset.yaml"
+    header = ("Latitude,Longitude,Accuracy (m),Speed (m/s),"
+              "Timestamp Date/Time - UTC+00:00 (dd.MM.yyyy),Source,Location,Item ID\n")
+    file_a = tmp_path / "a.csv"
+    file_a.write_text(header + "46.5197,6.6323,12.0,3.0,06.12.2025 13:00:00.000,"
+                      "/x/Cache.sqlite,Table: T(Z_PK: 1),1001\n", encoding="utf-8")
+    file_b = tmp_path / "b.csv"
+    file_b.write_text(header + "47.1000,7.2000,5.0,1.0,07.12.2025 09:00:00.000,"
+                      "/x/Cache.sqlite,Table: T(Z_PK: 9),1009\n", encoding="utf-8")
+
+    def digests(db: Path) -> set:
+        con = sqlite3.connect(db)
+        try:
+            return set(con.execute("SELECT content_hash, claim_digest FROM assertion").fetchall())
+        finally:
+            con.close()
+
+    process(file_a, preset, tmp_path / "oa", linked_entity=_LINKED)          # A alone
+    process(file_b, preset, tmp_path / "ob", linked_entity=_LINKED)          # B alone
+    d_a = digests(tmp_path / "oa" / "merged.matlas.sqlite")
+    d_b = digests(tmp_path / "ob" / "merged.matlas.sqlite")
+
+    out = tmp_path / "case"
+    process(file_a, preset, out, linked_entity=_LINKED)                      # create case
+    process(file_b, preset, out, linked_entity=_LINKED)                      # APPEND to it
+    d_full = digests(out / "merged.matlas.sqlite")
+
+    assert d_a and d_b and d_a != d_b
+    assert d_full == d_a | d_b       # append adds exactly B's rows; A's identity is unchanged
+    # and it is genuinely one case with two runs
+    con = sqlite3.connect(out / "merged.matlas.sqlite")
+    try:
+        assert con.execute("SELECT COUNT(*) FROM case_metadata").fetchone()[0] == 1
+        assert con.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 2
+    finally:
+        con.close()
+
+
+def test_no_match_writes_the_case_db_but_no_csv(tmp_path: Path) -> None:
     source = tmp_path / "input"
     source.mkdir()
     (source / "unrelated.csv").write_text("a,b\n1,2\n", encoding="utf-8")
@@ -110,7 +154,10 @@ def test_no_match_returns_empty_result_without_outputs(tmp_path: Path) -> None:
     result = process(source, _GOLDEN, out, linked_entity=_LINKED)
     assert result.output_csv is None and result.output_csvs == []
     assert result.row_counts["rows"] == 0
-    assert not out.exists()                      # nothing produced -> nothing written
+    # The case database always records the run (a documented no-match result); the CSV and
+    # other projections are written only when there are assertions.
+    assert (out / "merged.matlas.sqlite").is_file()
+    assert not (out / "merged.csv").exists()
 
 
 def test_output_path_that_is_a_file_is_refused(tmp_path: Path) -> None:
