@@ -12,7 +12,7 @@ from model_atlas.app.diagnostics import install_excepthook
 from model_atlas.app.logging_setup import configure_logging
 from model_atlas.app.pipeline import process
 from model_atlas.export.registry import available_exporters, load_builtin_exporters
-from launcher.profiles import build_profile_preset_folder, load_profile
+from model_atlas.app.profiles import build_profile_preset_folder, load_profile
 
 log = logging.getLogger("model_atlas.cli")
 

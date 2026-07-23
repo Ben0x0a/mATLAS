@@ -6,7 +6,7 @@ Defines:    MainController, the sole controller for the single-window GUI. It bu
 Used by:    launcher.gui (the GUI entry point constructs and shows MainController.window).
 Depends on: gui.worker (TaskRunner / ProgressBridge / install_gui_log_handler),
             gui.header_assets (window icon + header images), gui.accessibility,
-            gui.completion, gui.theme, gui.widgets.drag_drop_line_edit, launcher.profiles,
+            gui.completion, gui.theme, gui.widgets.drag_drop_line_edit, model_atlas.app.profiles,
             and the model_atlas package app.pipeline/app.config/export/presets APIs.
 """
 from __future__ import annotations
@@ -51,7 +51,7 @@ from gui.spatiotemporal_controller import SpatiotemporalController
 from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
 from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler
-from launcher.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
+from model_atlas.app.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
 from model_atlas.app.config import get_settings
 from model_atlas.export.registry import available_exporters, load_builtin_exporters
 from model_atlas.ingest.writer import is_matlas_run_db

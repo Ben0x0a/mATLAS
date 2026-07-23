@@ -1,8 +1,14 @@
 """CLI/GUI profile files for selected preset lists.
 
-Profiles intentionally live in launcher infrastructure, not ``model_atlas``:
-they are a convenience for frontends to pass a curated preset set into the
-existing package API.
+Defines:    load/save/build helpers for ``.mATLAS-profile`` files (a curated preset set a
+            frontend passes into the package API) plus ``PROFILE_SUFFIX``.
+Used by:    launcher.cli and gui.app (both frontends).
+Depends on: the standard library only.
+
+Lives in ``model_atlas.app`` — the orchestration layer both frontends already depend on
+downward — rather than in ``launcher``: profile handling is shared FRONTEND logic used by
+the CLI AND the GUI, so keeping it under one frontend made the GUI reach sideways into the
+launcher (a gui⇄launcher import cycle). Homing it here lets both import it downward.
 """
 from __future__ import annotations
 
