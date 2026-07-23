@@ -4,8 +4,8 @@ Defines: ``CustomSQLError`` (raised on a rejected query), ``validate_custom_sql`
 (parser-free syntactic gate), and ``harden_connection`` (applies the
 table-qualified column naming + a read-only SQLite authorizer to a connection).
 
-Used by: ``model_atlas.sqlite.extractor`` for two-pass extraction
-of a custom query defined in a source preset.
+Used by: ``model_atlas.ingest.readers.sqlite_reader`` for the custom-SQL
+selector path of a query defined in a source preset.
 
 Uses: stdlib ``re`` and ``sqlite3``.
 

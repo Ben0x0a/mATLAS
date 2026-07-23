@@ -13,15 +13,13 @@ Depends on: ``model_atlas.core.determinism`` (``sqlite_enumeration_sql``, ``numb
 
 Ported from ``sources/readers/sqlite_reader.py``: the WAL/journal two-pass
 merge algorithm (``merge_with_source``) is reused UNCHANGED. What differs is the row
-FETCH: the old reader (via ``model_atlas.sqlite.extractor.extract_table``) ran a bare
-``SELECT * FROM table`` with no explicit order, relying on SQLite's incidental scan order.
-R9 rule 1 requires a PINNED order (``rowid``, or primary-key order for a ``WITHOUT ROWID``
-table), so this reader builds its own two-pass fetch using ``sqlite_enumeration_sql`` for
-the ``SELECT`` text instead of calling ``extract_table``/``extract_query`` — deliberately
-NOT reusing those two helpers, since neither can be given a rule-1-correct query. The
-staging-copy step they perform (main db + optional WAL/SHM/journal siblings, copied into a
-throwaway temp dir so SQLite never opens the original) is duplicated here for the same
-reason, mirroring their private ``_prepared_copy`` shape rather than importing it.
+FETCH: the old engine's reader ran a bare ``SELECT * FROM table`` with no explicit order,
+relying on SQLite's incidental scan order. R9 rule 1 requires a PINNED order (``rowid``, or
+primary-key order for a ``WITHOUT ROWID`` table), so this reader builds its own two-pass
+fetch using ``sqlite_enumeration_sql`` for the ``SELECT`` text — a rule-1-correct query the
+old bare select could not give. The staging-copy step (main db + optional WAL/SHM/journal
+siblings, copied into a throwaway temp dir so SQLite never opens the original) is done here
+directly for the same reason.
 
 Carries the T90 security fix: ``peek_fields`` quotes the selector-supplied table name via
 ``quote_identifier`` — never an f-string into SQL — so a table name containing ``"`` makes

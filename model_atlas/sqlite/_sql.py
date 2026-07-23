@@ -1,7 +1,7 @@
 """Shared SQLite helpers for the source-agnostic SQLite adapter.
 
 Defines a single, strict identifier-quoting routine used by
-``model_atlas.sqlite.extractor`` so every table-name interpolation
+``model_atlas.ingest.readers.sqlite_reader`` so every table-name interpolation
 goes through the same validation path.
 """
 from __future__ import annotations
