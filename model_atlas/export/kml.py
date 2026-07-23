@@ -38,7 +38,7 @@ import pandas as pd
 
 from model_atlas.core.projection import project
 from model_atlas.core.store import RunStore
-from model_atlas.export._shared import UNIX_EPOCH, as_float, clean, is_blank, partitions
+from model_atlas.export._shared import UNIX_EPOCH, as_float, clean, is_blank
 from model_atlas.export.csv_flat import ExportContext
 from model_atlas.export.registry import register_exporter
 
@@ -67,10 +67,7 @@ class KmlExporter:
         frame = project(
             store.connection, ranking_method=ctx.ranking_method, include_source_columns=False)
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
-        return [
-            self._write(part, ctx.output_dir / f"{stem}.points.kml")
-            for stem, part in partitions(frame, ctx)
-        ]
+        return [self._write(frame, ctx.output_dir / f"{ctx.base_name}.points.kml")]
 
     def _write(self, frame: pd.DataFrame, path: Path) -> Path:
         kml = Element("kml", {"xmlns": "http://www.opengis.net/kml/2.2"})

@@ -20,7 +20,8 @@ Covers the T50 Verify bullets:
     normalised, exactly as the old golden test does);
   * the column set/order equals docs/csv_migration.md (CANONICAL_COLUMNS) + the
     per-run orig_<col> tail;
-  * split mode partitions by preset_id with identical per-partition columns;
+  * one file per format: multiple presets land in the single CSV, the preset_id column
+    separating their rows;
   * a folder run and a zip run of the same evidence agree on content_uid (and
     claim_digest).
 """
@@ -53,7 +54,7 @@ _LINKED_ENTITY = "subject"
 def _export_merged(store: RunStore, out_dir: Path) -> Path:
     """Export the merged flat CSV and return the single file written."""
     written = CsvFlatExporter().export(
-        store, ExportContext(output_dir=out_dir, base_name="merged", merge=True))
+        store, ExportContext(output_dir=out_dir, base_name="merged"))
     assert written == [out_dir / "merged.csv"]
     return written[0]
 
@@ -137,37 +138,28 @@ def test_mandatory_r6_columns_present_and_distinguishing() -> None:
     assert first["temporal_method"].startswith("tz_localize/")
 
 
-# --- split mode: partition by preset, identical per-partition columns ---------
+# --- one file per format: every preset's rows in the single CSV ---------------
 
-def test_split_mode_partitions_by_preset(tmp_path: Path) -> None:
+def test_multiple_presets_land_in_one_file(tmp_path: Path) -> None:
     specs = [
         load_preset_specs(_GOLDEN_SRC / f"{case}_cached.preset.yaml")[0]
         for case in _CASES
     ]
     with RunStore() as store:
         # One evidence file, BOTH presets applied (decision 27): two assertion sets sharing
-        # the raw_records — the case split mode exists to separate.
+        # the raw_records. One file per format now — both sets go in the single CSV.
         run_relational_pipeline(
             store, _GOLDEN_SRC / "cached.csv", specs, linked_entity=_LINKED_ENTITY)
-        merged = _export_merged(store, tmp_path / "merged")
-        split = CsvFlatExporter().export(
-            store, ExportContext(output_dir=tmp_path / "split", merge=False))
+        written = CsvFlatExporter().export(
+            store, ExportContext(output_dir=tmp_path, base_name="case"))
 
-    # One file per preset, named after its key.
-    assert {path.name for path in split} == {
-        "golden.secondary.cached.csv", "golden.primary.cached.csv"}
-
-    merged_header = _header(merged.read_bytes())
-    for path in split:
-        part_header = _header(path.read_bytes())
-        # Every partition carries the identical column set/order of the merged file — split
-        # slices the ONE projection, it is not a second writer path.
-        assert part_header == merged_header
-        # A partition holds exactly its preset's rows (2 records -> 2 assertions each).
-        body = path.read_bytes().decode("utf-8-sig").splitlines()[1:]
-        assert len(body) == 2
-        preset_key = path.stem
-        assert all(f'"{preset_key}"' in line for line in body)
+    assert written == [tmp_path / "case.csv"]
+    body = written[0].read_bytes().decode("utf-8-sig").splitlines()[1:]
+    # Both presets' rows (2 records -> 2 assertions each) share the one file...
+    assert len(body) == 4
+    # ...and the preset_id column separates them, so a caller can still split by preset.
+    for preset_key in ("golden.secondary.cached", "golden.primary.cached"):
+        assert sum(f'"{preset_key}"' in line for line in body) == 2
 
 
 # --- folder == zip -> equal content_uid / claim_digest -----------------------

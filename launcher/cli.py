@@ -91,17 +91,27 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help=(
-            "Output folder (both modes). Merge mode (default): the merged CSV is written "
-            "inside as <name>.csv. Split mode (--no-merge): one CSV per matched preset."
+            "Output folder. The case database is written inside as <name>.matlas.sqlite "
+            "(created, or APPENDED to if it already exists); every other export is one "
+            "file per format beside it (<output>/<name>.<ext>)."
         ),
     )
     process_parser.add_argument(
         "--name",
         default="merged",
         help=(
-            "Stem for run-level artefacts in merge mode: the merged CSV becomes "
-            "<output>/<name>.csv and its sidecars share the stem. Default 'merged'. "
-            "Ignored in split mode (each file is named after its preset)."
+            "Stem for the case database and every output file: the case DB becomes "
+            "<output>/<name>.matlas.sqlite and each export/sidecar shares the stem. "
+            "Default 'merged'."
+        ),
+    )
+    process_parser.add_argument(
+        "--case",
+        default=None,
+        help=(
+            "Optional human case label (e.g. 'Operation Falcon'). Stored on the case when "
+            "it is CREATED; falls back to --name. On APPEND the label is read from the "
+            "existing case database and this value is ignored."
         ),
     )
     process_parser.add_argument(
@@ -118,15 +128,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("readable", "prov"),
         default="readable",
         help="Traceability sidecar format: human-readable (default) or W3C PROV-JSON.",
-    )
-    process_parser.add_argument(
-        "--merge",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Merge all matched sources into one CSV (default). "
-            "Use --no-merge to write one CSV per matched preset into the output folder."
-        ),
     )
     process_parser.add_argument(
         "--source-columns",
@@ -165,8 +166,8 @@ def _cmd_process(args: argparse.Namespace) -> int:
     # branches can never drift (a past bug silently dropped --root-prefix-depth under --profile).
     kwargs = dict(
         base_name=args.name,
+        case=args.case,
         traceability_format=args.traceability_format,
-        merge=args.merge,
         entity=args.entity,
         linked_entity=args.linked_entity,
         include_source_columns=args.include_source_columns,
@@ -187,18 +188,17 @@ def _cmd_process(args: argparse.Namespace) -> int:
     for warning in result.warnings[:20]:
         log.warning(f"{warning}")
     log.info(f"Transform warnings: {len(result.warnings)}")
+    # The case database is always written (the run itself, created or appended).
+    log.info(f"Case database: {result.output_case_db}")
     if result.output_csv is not None:
         log.info(f"CSV: {result.output_csv}")
         log.info(f"Traceability: {result.output_traceability}")
         log.info(f"Warnings report: {result.output_warnings}")
-    elif result.output_csvs:
-        for csv in result.output_csvs:
-            log.info(f"CSV: {csv}")
     elif result.output_extras:
         # The csv export was deselected but other exports were written — not an empty run.
         log.info(f"No CSV selected; wrote {len(result.output_extras)} export(s).")
     else:
-        log.warning("No rows produced: no discovered source matched a preset.")
+        log.warning("No rows matched a preset; the case database records the run.")
     for extra in result.output_extras:
         log.info(f"Export: {extra}")
     return 0

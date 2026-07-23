@@ -40,7 +40,7 @@ def test_duplicate_name_registration_raises() -> None:
 def test_run_exporters_writes_every_selected_format_and_skips_unknown(tmp_path: Path) -> None:
     with RunStore() as store:
         build_manual_store(store)
-        ctx = ExportContext(output_dir=tmp_path, base_name="merged", merge=True)
+        ctx = ExportContext(output_dir=tmp_path, base_name="merged")
         written = run_exporters(["kml", "geojson", "not_a_real_format"], store, ctx)
 
     assert {path.suffix for path in written} == {".kml", ".geojson"}

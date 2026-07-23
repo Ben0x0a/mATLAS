@@ -25,7 +25,6 @@ from pathlib import Path
 
 from model_atlas.core.projection import project
 from model_atlas.core.store import RunStore
-from model_atlas.export._shared import partitions
 from model_atlas.export.csv_flat import ExportContext
 from model_atlas.export.registry import register_exporter
 
@@ -39,12 +38,9 @@ class XlsxExporter:
         frame = project(
             store.connection, ranking_method=ctx.ranking_method, include_source_columns=False)
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
-        written: list[Path] = []
-        for stem, part in partitions(frame, ctx):
-            path = ctx.output_dir / f"{stem}.assertions.xlsx"
-            part.to_excel(path, index=False)   # openpyxl engine (already a dependency)
-            written.append(path)
-        return written
+        path = ctx.output_dir / f"{ctx.base_name}.assertions.xlsx"
+        frame.to_excel(path, index=False)   # openpyxl engine (already a dependency)
+        return [path]
 
 
 register_exporter(

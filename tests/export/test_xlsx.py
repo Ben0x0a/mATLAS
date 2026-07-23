@@ -29,7 +29,7 @@ def test_xlsx_round_trips_small_store(tmp_path: Path) -> None:
     with RunStore() as store:
         _build_store(store)
         written = XlsxExporter().export(
-            store, ExportContext(output_dir=tmp_path, base_name="merged", merge=True))
+            store, ExportContext(output_dir=tmp_path, base_name="merged"))
         flat = project(store.connection, include_source_columns=False)
 
     assert written == [tmp_path / "merged.assertions.xlsx"]
@@ -46,7 +46,8 @@ def test_xlsx_round_trips_small_store(tmp_path: Path) -> None:
     assert sorted(reopened["longitude_wgs84"].tolist()) == sorted(flat["longitude_wgs84"].tolist())
 
 
-def test_xlsx_split_mode_partitions_by_preset(tmp_path: Path) -> None:
+def test_xlsx_writes_one_file_for_all_presets(tmp_path: Path) -> None:
+    # One file per format: two presets applied to one source land in a single workbook.
     specs = [
         load_preset_specs(GOLDEN_SRC / f"{case}_cached.preset.yaml")[0]
         for case in ("secondary", "primary")
@@ -55,9 +56,7 @@ def test_xlsx_split_mode_partitions_by_preset(tmp_path: Path) -> None:
         run_relational_pipeline(
             store, GOLDEN_SRC / "cached.csv", specs, linked_entity="subject")
         written = XlsxExporter().export(
-            store, ExportContext(output_dir=tmp_path, merge=False))
+            store, ExportContext(output_dir=tmp_path, base_name="case"))
 
-    assert {path.name for path in written} == {
-        "golden.secondary.cached.assertions.xlsx", "golden.primary.cached.assertions.xlsx"}
-    for path in written:
-        assert len(pd.read_excel(path)) == 2
+    assert [path.name for path in written] == ["case.assertions.xlsx"]
+    assert len(pd.read_excel(written[0])) == 4    # both presets' rows (2 each) in the one file

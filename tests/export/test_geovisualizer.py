@@ -45,7 +45,7 @@ def test_geovisualizer_round_trips_small_store(tmp_path: Path) -> None:
     with RunStore() as store:
         _build_golden_store(store)
         written = GeovisualizerExporter().export(
-            store, ExportContext(output_dir=tmp_path, base_name="merged", merge=True))
+            store, ExportContext(output_dir=tmp_path, base_name="merged"))
         flat = project(store.connection, include_source_columns=False)
 
     assert written == [tmp_path / "merged.geovisualizer.csv"]
@@ -67,7 +67,7 @@ def test_geovisualizer_expands_interval_into_two_rows(tmp_path: Path) -> None:
     with RunStore() as store:
         build_manual_store(store)
         written = GeovisualizerExporter().export(
-            store, ExportContext(output_dir=tmp_path, base_name="merged", merge=True))
+            store, ExportContext(output_dir=tmp_path, base_name="merged"))
         flat = project(store.connection, include_source_columns=False)
 
     out = _read_geovis_csv(written[0])

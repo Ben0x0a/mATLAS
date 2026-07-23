@@ -23,7 +23,7 @@ def test_sqlite_db_filename_and_persistence(tmp_path: Path) -> None:
     with RunStore() as store:
         build_manual_store(store)
         written = SqliteDbExporter().export(
-            store, ExportContext(output_dir=tmp_path, base_name="my_run", merge=True))
+            store, ExportContext(output_dir=tmp_path, base_name="my_run"))
 
     assert written == [tmp_path / "my_run.matlas.sqlite"]
     assert written[0].exists()
@@ -33,7 +33,7 @@ def test_sqlite_db_reopens_with_version_stamps_and_clean_fk_check(tmp_path: Path
     with RunStore() as store:
         build_manual_store(store)
         written = SqliteDbExporter().export(
-            store, ExportContext(output_dir=tmp_path, base_name="run1", merge=True))
+            store, ExportContext(output_dir=tmp_path, base_name="run1"))
 
     connection = sqlite3.connect(written[0])
     try:
@@ -65,11 +65,10 @@ def test_sqlite_db_reopens_with_version_stamps_and_clean_fk_check(tmp_path: Path
         connection.close()
 
 
-def test_sqlite_db_ignores_merge_flag(tmp_path: Path) -> None:
-    """The relational DB is not partitioned per preset like the flat CSV; ``merge`` is
-    not consulted — one file, always, for the whole run."""
+def test_sqlite_db_writes_one_file_for_the_whole_run(tmp_path: Path) -> None:
+    """One file per format: the whole run's data lives in the single persisted database."""
     with RunStore() as store:
         build_manual_store(store)
         written = SqliteDbExporter().export(
-            store, ExportContext(output_dir=tmp_path, base_name="run1", merge=False))
+            store, ExportContext(output_dir=tmp_path, base_name="run1"))
     assert written == [tmp_path / "run1.matlas.sqlite"]

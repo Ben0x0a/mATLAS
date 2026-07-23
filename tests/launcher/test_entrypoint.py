@@ -56,7 +56,8 @@ def test_profile_run_forwards_root_prefix_depth(monkeypatch, tmp_path):
         captured.update(kwargs)
         return SimpleNamespace(
             row_counts={}, matched=[], unmatched=[], warnings=[],
-            output_csv=None, output_csvs=[], output_traceability=None,
+            output_case_db=Path(_output) / "merged.matlas.sqlite",
+            output_csv=None, output_traceability=None,
             output_warnings=None, output_extras=[],
         )
 

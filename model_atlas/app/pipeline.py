@@ -38,9 +38,10 @@ Design decisions
   corresponding source row, so it is reported loudly as unsupported rather than
   silently dropped (the pre-T60 engine ran the query at extract time; running SQL over
   the verbatim raw_record layer is future work).
-* **case_number.** The relational schema roots every run in a case (decision 28) but
-  ``process()``'s stable signature carries no case identity, so the input folder/file
-  name stands in until the operator-facing case field lands.
+* **case_number.** The relational schema roots every run in a case (decision 28). On a
+  CREATE run the ``case`` label (falling back to ``base_name``) is stored as the
+  case_number; on an APPEND run the case identity is READ from the existing DB, never
+  re-derived, so a case keeps its identity across every run added to it.
 """
 from __future__ import annotations
 
@@ -109,13 +110,17 @@ def _emit(progress: "ProgressFn | None", phase: str) -> None:
 
 @dataclass(frozen=True)
 class ProcessResult:
-    """The stable result shape ``gui.app`` / ``launcher.cli`` consume — field-for-field
-    identical to the pre-T60 engine's ``ProcessResult``."""
+    """The stable result shape ``gui.app`` / ``launcher.cli`` consume.
 
-    output_csv: Path | None                                 # set when merge=True
-    output_traceability: Path | None = None                 # set when merge=True
-    output_warnings: Path | None = None                     # set when merge=True
-    output_csvs: list[Path] = field(default_factory=list)   # set when merge=False
+    ``output_case_db`` is the durable case database — always written (created or appended
+    to), so it is the one output that is never None. ``output_csv`` and the other
+    projections are written only when the run produced assertions; each is a SINGLE file
+    (one file per format — the merge/split modes were removed with the case model)."""
+
+    output_case_db: Path                                    # the case DB — always written
+    output_csv: Path | None = None                          # the flat CSV (if the csv brick ran)
+    output_traceability: Path | None = None
+    output_warnings: Path | None = None
     # mutable defaults — a shared object across instances would be a latent aliasing bug.
     row_counts: dict[str, int] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
@@ -294,7 +299,6 @@ def process(
     base_name: str = "merged",
     case: str | None = None,
     traceability_format: str = "readable",
-    merge: bool = True,
     entity: str | None = None,
     include_source_columns: bool = True,
     root_prefix_depth: int | None = None,
@@ -308,15 +312,19 @@ def process(
     Args:
         input_path:           Source file, folder or archive (CSV, Excel, SQLite, XML).
         presets_path:         Preset YAML file or folder (scanned recursively).
-        output:               Output FOLDER (both modes). Merge mode writes one merged CSV
-                              at <output>/<base_name>.csv; split mode one CSV per preset.
+        output:               Output FOLDER. The case DB is written at
+                              <output>/<base_name>.matlas.sqlite (created, or appended to
+                              if it already exists); every other export is one file per
+                              format beside it (<output>/<base_name>.<ext>).
         linked_entity:        Required. The entity linked to every assertion (e.g. the
                               case subject); OVERRIDES any preset-mapped linked_entity. A
                               plain literal applies to every row; a call-form reference
                               such as ``field(Evidence number)`` resolves per source row.
-        base_name:            Stem for run-level artefacts in merge mode. Default "merged".
+        base_name:            Stem for the case DB and every output file. Default "merged".
+        case:                 Optional human case label; stored as case_metadata.case_number
+                              on CREATE (falls back to base_name). On APPEND it is unused —
+                              the case identity is read from the existing DB.
         traceability_format:  "readable" (default) or "prov" (W3C PROV-JSON).
-        merge:                True -> one merged CSV; False -> one CSV per preset.
         entity:               Optional; OVERRIDES any preset-mapped entity.
         include_source_columns: True (default) -> the ``orig_<col>`` verbatim tail is
                               projected after the canonical columns.
@@ -485,7 +493,7 @@ def process(
             _emit(progress, "Writing exports")
             load_builtin_exporters()   # self-contained: register every brick before running
             context = ExportContext(
-                output_dir=output, base_name=base_name, merge=merge,
+                output_dir=output, base_name=base_name,
                 include_source_columns=include_source_columns,
             )
             output_csvs, output_extras = _run_exports(store, export_names, context)
@@ -493,7 +501,7 @@ def process(
                 # Sidecar file names anchor on the nominal primary-CSV path so they
                 # exist (and are findable) even when the csv brick was deselected.
                 anchor_csv = output / f"{base_name}.csv"
-                content_csv = output_csvs[0] if merge and output_csvs else None
+                content_csv = output_csvs[0] if output_csvs else None
                 output_traceability, output_warnings_path = _write_sidecars(
                     anchor_csv, content_csv, started_at=started_at, input_path=input_path,
                     presets_path=Path(presets_path), row_counts=row_counts,
@@ -506,17 +514,11 @@ def process(
         store.close()
 
     log.info("Processing finished.")
-    if merge:
-        return ProcessResult(
-            output_csv=output_csvs[0] if output_csvs else None,
-            output_traceability=output_traceability,
-            output_warnings=output_warnings_path,
-            row_counts=row_counts, warnings=warnings,
-            matched=matched, unmatched=unmatched, output_extras=output_extras,
-        )
     return ProcessResult(
-        output_csv=None, output_csvs=output_csvs,
-        output_traceability=output_traceability, output_warnings=output_warnings_path,
+        output_case_db=case_db_path,
+        output_csv=output_csvs[0] if output_csvs else None,
+        output_traceability=output_traceability,
+        output_warnings=output_warnings_path,
         row_counts=row_counts, warnings=warnings,
         matched=matched, unmatched=unmatched, output_extras=output_extras,
     )
@@ -635,10 +637,10 @@ def _run_exports(
 ) -> tuple[list[Path], list[Path]]:
     """Run the selected export bricks, splitting the results into (csv paths, extras).
 
-    The primary ``csv`` brick is invoked directly so its files can populate
-    ``output_csv``/``output_csvs``; every other selected brick runs through the
-    registry (unknown names warn, a failing brick is logged and skipped — one bad
-    exporter never aborts the run)."""
+    The primary ``csv`` brick is invoked directly so its file can populate
+    ``ProcessResult.output_csv``; every other selected brick runs through the registry
+    (unknown names warn, a failing brick is logged and skipped — one bad exporter never
+    aborts the run)."""
     log.info(f"Writing export(s): {', '.join(export_names)}")
     output_csvs: list[Path] = []
     if PRIMARY_CSV_EXPORT_NAME in export_names:

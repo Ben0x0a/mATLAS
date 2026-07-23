@@ -2,13 +2,10 @@
 
 Defines:    ``is_blank`` / ``clean`` / ``as_float`` (blank/NaN/NA-safe value
             coercion — the same defensive helpers ``exporters.builtin`` used for the
-            old exporters), ``UNIX_EPOCH`` (the cross-platform epoch anchor for
-            timedelta-based timestamp maths) and ``partitions`` (the merge/split
-            frame-partitioning helper every format-level brick in this package
-            shares).
+            old exporters) and ``UNIX_EPOCH`` (the cross-platform epoch anchor for
+            timedelta-based timestamp maths).
 Used by:    model_atlas.export.kml / .geojson / .xlsx / .geovisualizer.
-Depends on: model_atlas.export.csv_flat (``ExportContext``, ``PRESET_ID_COLNAME`` —
-            read-only imports, csv_flat itself is never modified), pandas.
+Depends on: pandas and the standard library only.
 
 Why these helpers were re-declared rather than imported (T51)
 -------------------------------------------------------------------
@@ -25,8 +22,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
-
-from model_atlas.export.csv_flat import PRESET_ID_COLNAME, ExportContext
 
 # Cross-platform epoch anchor (mirrors integrate.timeparse / the old
 # exporters.builtin): timedelta arithmetic is valid across the whole datetime range,
@@ -65,18 +60,3 @@ def as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def partitions(frame: pd.DataFrame, ctx: ExportContext) -> list[tuple[str, pd.DataFrame]]:
-    """[(file stem, frame subset), ...] — one entry per output file.
-
-    HOW: in merge mode, one entry (``ctx.base_name``, the whole frame); in split mode,
-    one entry per ``preset_id`` value (keyed by the preset's own key, in
-    first-appearance/ingest order). WHY reused here rather than reimplemented per
-    format: this is the SAME partitioning ``CsvFlatExporter._write_split`` applies, so
-    every format in this package slices identically and a reviewer never has to
-    compare two partitioning rules.
-    """
-    if ctx.merge:
-        return [(ctx.base_name, frame)]
-    return [(str(preset_id), part) for preset_id, part in frame.groupby(PRESET_ID_COLNAME, sort=False)]

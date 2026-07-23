@@ -199,7 +199,6 @@ class MainController(QObject):
         self.save_profile_button: QPushButton = child(QPushButton, "saveProfileButton")
         self.reload_presets_button: QPushButton = child(QPushButton, "reloadPresetsButton")
         self.auto_preset_check: QCheckBox = child(QCheckBox, "autoPresetCheck")
-        self.merge_outputs_check: QCheckBox = child(QCheckBox, "mergeOutputsCheck")
         self.dump_full_ufdr_check: QCheckBox = child(QCheckBox, "dumpFullUfdrCheck")
         self.include_source_columns_check: QCheckBox = child(QCheckBox, "includeSourceColumnsCheck")
 
@@ -260,7 +259,7 @@ class MainController(QObject):
             action.setCheckable(True)
             action.setToolTip(spec.description)
             # The primary CSV is now an exporter like any other; check it by default so an
-            # untouched run still writes the merged/per-preset CSV (unchecking it opts out).
+            # untouched run still writes the flat CSV (unchecking it opts out).
             action.setChecked(spec.name == "csv")
             action.toggled.connect(lambda _checked: self._sync_export_button_text())
             self._export_actions[spec.name] = action
@@ -330,7 +329,6 @@ class MainController(QObject):
         self.reload_presets_button.clicked.connect(self._load_presets_async)
         self.auto_preset_check.toggled.connect(lambda _checked: self._sync_single_preset_notice())
         self.log_level_combo.currentTextChanged.connect(self._apply_log_level)
-        self.merge_outputs_check.toggled.connect(lambda _checked: self._sync_output_mode(clear_output=True))
         self.dump_full_ufdr_check.toggled.connect(lambda _checked: self._sync_ufdr_mode())
 
     def _stabilize_form_labels(self) -> None:
@@ -430,8 +428,8 @@ class MainController(QObject):
             self._load_presets_async()
 
     def _browse_output(self) -> None:
-        # --output is a folder in both modes: the merged CSV is written inside it as merged.csv,
-        # or one CSV per preset in split mode. Always pick a directory.
+        # --output is a folder: the case database is written inside it as <name>.matlas.sqlite,
+        # with every other export beside it (one file per format). Always pick a directory.
         path = QFileDialog.getExistingDirectory(
             self.window,
             "Choose output folder",
@@ -443,13 +441,11 @@ class MainController(QObject):
     def _sync_output_mode(self, *, clear_output: bool = False) -> None:
         if clear_output:
             self.output_edit.clear()
-        # The output is a folder in both modes; only the placeholder hints at what lands inside.
+        # The output is a folder; the case database is written inside it, with every other
+        # export (one file per format) beside it.
         self.output_label.setText("Output folder")
         self.output_button.setText("Folder...")
-        if self.merge_outputs_check.isChecked():
-            self.output_edit.setPlaceholderText("folder (merged.csv is written inside)")
-        else:
-            self.output_edit.setPlaceholderText("folder for per-preset CSV output")
+        self.output_edit.setPlaceholderText("folder (the case database is written inside)")
         accessibility.update_output_accessibility(self)
 
     def _load_presets_async(self) -> None:
@@ -642,7 +638,6 @@ class MainController(QObject):
             self._show_error("Enter a linked entity (required).")
             return
         output_path = Path(output).expanduser()
-        merge_outputs = self.merge_outputs_check.isChecked()
         selected_mode = not self.auto_preset_check.isChecked()
         selected_paths = [Path(path) for path in self._selected_preset_paths()]
         if selected_mode and not selected_paths:
@@ -661,7 +656,6 @@ class MainController(QObject):
         # which differ only in how the presets path is resolved (see _resolve_presets_path).
         kwargs = dict(
             traceability_format=self.traceability_combo.currentText(),
-            merge=merge_outputs,
             entity=entity,
             linked_entity=linked_entity,
             include_source_columns=self.include_source_columns_check.isChecked(),
@@ -703,25 +697,16 @@ class MainController(QObject):
 
     def _on_process_done(self, result: ProcessResult) -> None:
         self._set_running(False)
-        outputs = [result.output_csv] if result.output_csv is not None else list(result.output_csvs)
-        outputs = [path for path in outputs if path is not None]
-        if not outputs:
-            if result.output_extras:
-                # CSV was deselected but other exports were written — not an empty run.
-                self._last_output_folder = result.output_extras[0].parent
-                self.open_output_folder_button.setEnabled(True)
-                summary = f"Completed: no CSV selected; wrote {len(result.output_extras)} export(s)"
-                self._set_status(summary)
-                log.info(summary)
-                for extra in result.output_extras:
-                    log.info(f"Export: {extra}")
-                return
-            self._set_status("Completed: no rows produced")
-            log.warning("No rows produced: no discovered source matched a preset.")
-            return
-        self._last_output_folder = outputs[0].parent
+        # The case database is always written (the run itself), so the output folder always
+        # exists and can be opened.
+        self._last_output_folder = result.output_case_db.parent
         self.open_output_folder_button.setEnabled(True)
+        log.info(f"Case database: {result.output_case_db}")
         counts = result.row_counts
+        if counts.get("rows", 0) == 0:
+            self._set_status("Completed: no rows matched a preset; the case database records the run")
+            log.warning("No rows matched a preset; the case database records the run.")
+            return
         summary = (
             f"Completed: sources={counts.get('sources', 0)} "
             f"matched={counts.get('matched', 0)} rows={counts.get('rows', 0)} "
@@ -729,8 +714,8 @@ class MainController(QObject):
         )
         self._set_status(summary)
         log.info(summary)
-        for csv in outputs:
-            log.info(f"CSV: {csv}")
+        if result.output_csv is not None:
+            log.info(f"CSV: {result.output_csv}")
         for extra in result.output_extras:
             log.info(f"Export: {extra}")
         if result.output_traceability is not None:
@@ -805,7 +790,6 @@ class MainController(QObject):
         self.log_level_combo.setCurrentText("INFO")
         for action in self._export_actions.values():
             action.setChecked(False)
-        self.merge_outputs_check.setChecked(True)
         self._sync_output_mode()
         self.auto_preset_check.setChecked(True)
         self._sync_single_preset_notice()

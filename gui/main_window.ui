@@ -234,23 +234,6 @@
           <number>18</number>
          </property>
          <item>
-         <widget class="QCheckBox" name="mergeOutputsCheck">
-           <property name="text">
-            <string/>
-           </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="mergeOutputLabel">
-           <property name="text">
-            <string>Merge output</string>
-           </property>
-          </widget>
-         </item>
-         <item>
           <widget class="QCheckBox" name="dumpFullUfdrCheck">
            <property name="text">
             <string/>

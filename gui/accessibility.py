@@ -77,8 +77,6 @@ def configure_accessibility(controller: Any) -> None:
         ("entityLabel", controller.entity_edit),
         ("linkedEntityLabel", controller.linked_entity_edit),
         ("presetsPathLabel", controller.presets_path_edit),
-        ("outputModeLabel", controller.merge_outputs_check),
-        ("mergeOutputLabel", controller.merge_outputs_check),
         ("dumpFullUfdrLabel", controller.dump_full_ufdr_check),
         ("outputLabel", controller.output_edit),
         ("optionsLabel", controller.traceability_combo),
@@ -122,10 +120,6 @@ def configure_accessibility(controller: Any) -> None:
     controller.presets_folder_button.setAccessibleName("Browse for preset folder")
     controller.presets_file_button.setAccessibleName("Browse for preset YAML file")
 
-    controller.merge_outputs_check.setAccessibleName("Merge output")
-    controller.merge_outputs_check.setAccessibleDescription(
-        "When checked, write one merged CSV. When unchecked, write one CSV per preset."
-    )
     controller.dump_full_ufdr_check.setAccessibleName("Dump full UFDR")
     controller.dump_full_ufdr_check.setAccessibleDescription(
         "When checked, switch to the standalone UFDR parser, which dumps every Cellebrite "
@@ -185,14 +179,13 @@ def configure_accessibility(controller: Any) -> None:
 
 
 def update_output_accessibility(controller: Any) -> None:
-    # The output is a folder in both modes; only what lands inside differs.
+    # The output is a folder; the case database is written inside it, with any other export
+    # (one file per format) beside it.
     controller.output_button.setAccessibleName("Choose output folder")
     controller.output_button.setAccessibleDescription("Choose the output folder.")
     controller.output_edit.setAccessibleName("Output folder path")
-    if controller.merge_outputs_check.isChecked():
-        controller.output_edit.setAccessibleDescription("Folder that receives the merged CSV (merged.csv).")
-    else:
-        controller.output_edit.setAccessibleDescription("Folder that receives one CSV per matched preset.")
+    controller.output_edit.setAccessibleDescription(
+        "Folder that receives the case database and every export (one file per format).")
 
 
 def _label(controller: Any, name: str) -> QLabel | None:
@@ -224,7 +217,6 @@ def _configure_tab_order(controller: Any) -> None:
         controller.presets_path_edit,
         controller.presets_folder_button,
         controller.presets_file_button,
-        controller.merge_outputs_check,
         controller.output_edit,
         controller.output_button,
         controller.traceability_combo,

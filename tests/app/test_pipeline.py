@@ -2,9 +2,10 @@
 
 Drives ``process()`` over the golden source fixture (tests/fixtures/golden: cached.csv
 + its two presets) as a FOLDER and as a ZIP, asserting the T60 cut-over contract: the
-stable ``ProcessResult`` shape, the flat-CSV projection on disk, the sidecars, split
-mode, and folder==zip evidence parity (equal content_uid / claim_digest sets — the
-paths differ, the evidence digests must not).
+stable ``ProcessResult`` shape, the mandatory case database, the flat-CSV projection on
+disk (one file per format), the sidecars, create-then-append determinism, and folder==zip
+evidence parity (equal content_uid / claim_digest sets — the paths differ, the evidence
+digests must not).
 Used by:    pytest.
 Depends on: model_atlas.app.pipeline, the golden fixture folder.
 """
@@ -58,10 +59,13 @@ def test_source_tier_follows_the_matched_preset(tmp_path: Path) -> None:
     assert rows and all(row["source_tier"] == "secondary" for row in rows)
 
 
-def test_merge_run_writes_csv_and_sidecars(tmp_path: Path) -> None:
+def test_run_writes_case_db_csv_and_sidecars(tmp_path: Path) -> None:
     result = process(_fixture_folder(tmp_path), _GOLDEN, tmp_path / "out",
                      linked_entity=_LINKED)
     assert isinstance(result, ProcessResult)
+    # The case database is the mandatory default output, always written.
+    assert result.output_case_db == tmp_path / "out" / "merged.matlas.sqlite"
+    assert result.output_case_db.is_file()
     assert result.output_csv == tmp_path / "out" / "merged.csv"
     assert result.output_csv.is_file()
     assert result.output_traceability is not None and result.output_traceability.is_file()
@@ -92,14 +96,6 @@ def test_folder_and_zip_runs_agree_on_evidence_digests(tmp_path: Path) -> None:
     assert len(folder_rows) == len(zip_rows) == 2
     # Folder==zip parity: paths differ, the evidence digests must be identical sets.
     assert _digest_pairs(folder_rows) == _digest_pairs(zip_rows)
-
-
-def test_split_mode_writes_one_csv_per_preset(tmp_path: Path) -> None:
-    result = process(_fixture_folder(tmp_path), _GOLDEN, tmp_path / "out",
-                     linked_entity=_LINKED, merge=False)
-    assert result.output_csv is None
-    assert len(result.output_csvs) == 1          # one preset won the csv unit
-    assert result.output_csvs[0].is_file()
 
 
 def test_append_builds_the_same_case_as_the_union_of_runs(tmp_path: Path) -> None:
@@ -152,7 +148,8 @@ def test_no_match_writes_the_case_db_but_no_csv(tmp_path: Path) -> None:
     (source / "unrelated.csv").write_text("a,b\n1,2\n", encoding="utf-8")
     out = tmp_path / "out"
     result = process(source, _GOLDEN, out, linked_entity=_LINKED)
-    assert result.output_csv is None and result.output_csvs == []
+    assert result.output_csv is None
+    assert result.output_case_db == out / "merged.matlas.sqlite"
     assert result.row_counts["rows"] == 0
     # The case database always records the run (a documented no-match result); the CSV and
     # other projections are written only when there are assertions.

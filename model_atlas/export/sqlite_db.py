@@ -38,9 +38,8 @@ from model_atlas.export.registry import register_exporter
 class SqliteDbExporter:
     """Persists a clean, standalone copy of the run database (``format = "sqlite_db"``).
 
-    Always writes ONE file for the whole run — the relational database is not
-    partitioned per preset the way the flat CSV is, so ``ctx.merge`` is not consulted;
-    every preset's data lives in the one persisted database regardless of export mode.
+    Always writes ONE file for the whole run — like every exporter now (one file per
+    format), every preset's data lives in the single persisted database.
     """
 
     format = "sqlite_db"

@@ -5,9 +5,8 @@ Defines:    the ``Exporter`` protocol (refactor_plan.md §3 — ``export(store, 
             ``CsvFlatExporter`` — the shipped flat-CSV brick. It projects the run store
             through ``core.projection`` (one row per assertion, the authoritative
             ``docs/csv_migration.md`` column order plus the per-run ``orig_<col>`` tail)
-            and writes it as a ``utf-8-sig`` semicolon CSV. In split mode it partitions
-            that ONE projection by ``preset_id`` — one file per preset, no second writer
-            path.
+            and writes it as a single ``utf-8-sig`` semicolon CSV (one file per format —
+            the ``preset_id`` column separates presets for a caller who wants that).
 Used by:    the app-layer pipeline (once T60 wires exporters after analysis) and
             tests/export/test_csv_flat.py.
 Depends on: ``model_atlas.core.projection`` (``project`` / ``CANONICAL_COLUMNS`` — the
@@ -47,24 +46,19 @@ from model_atlas.export import CSV_DELIMITER
 
 log = logging.getLogger(__name__)
 
-# The projection column that identifies a claim's preset (its KEY — migration row 61);
-# split mode partitions on it. Named as an identifier constant per the house rule.
-PRESET_ID_COLNAME = "preset_id"
-
 
 @dataclass(frozen=True)
 class ExportContext:
     """Everything an export needs beyond the store: where to write and how.
 
-    ``base_name`` is the merged file's stem (split mode ignores it — each partition is
-    named after its preset). ``merge`` False switches to per-preset partitioning.
-    ``ranking_method`` pins which ``analysis`` method the projection reads (None = the
-    current/maximum method); ``include_source_columns`` toggles the ``orig_<col>`` tail.
+    ``base_name`` is the output file's stem (one file per format — the ``preset_id``
+    column separates presets in the single file). ``ranking_method`` pins which
+    ``analysis`` method the projection reads (None = the current/maximum method);
+    ``include_source_columns`` toggles the ``orig_<col>`` tail.
     """
 
     output_dir: Path
     base_name: str = "merged"
-    merge: bool = True
     ranking_method: str | None = None
     include_source_columns: bool = True
 
@@ -89,14 +83,12 @@ class CsvFlatExporter:
     format = "csv_flat"
 
     def export(self, store: RunStore, ctx: ExportContext) -> list[Path]:
-        """Project the run store and write the flat CSV(s), returning the files written.
+        """Project the run store and write the flat CSV, returning the file written.
 
         HOW: build the flat frame ONCE via ``core.projection.project`` (the authoritative
-        column order + the per-run ``orig_<col>`` tail + restored numeric dtypes). In
-        merge mode write it whole to ``<output_dir>/<base_name>.csv``; in split mode
-        partition that same frame by ``preset_id`` and write one file per preset. Split is
-        deliberately NOT a second writer path — it slices the one projection, so every
-        partition carries the identical column set the merged file has.
+        column order + the per-run ``orig_<col>`` tail + restored numeric dtypes) and
+        write it whole to ``<output_dir>/<base_name>.csv``. One file per format: the
+        ``preset_id`` column already separates presets for a caller who needs it.
         """
         frame = project(
             store.connection,
@@ -104,24 +96,7 @@ class CsvFlatExporter:
             ranking_method=ctx.ranking_method,
         )
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
-        if ctx.merge:
-            return [self._write(frame, ctx.output_dir / f"{ctx.base_name}.csv")]
-        return self._write_split(frame, ctx.output_dir)
-
-    def _write_split(self, frame: pd.DataFrame, output_dir: Path) -> list[Path]:
-        """Write one CSV per ``preset_id`` value, in first-appearance order.
-
-        WHY ``sort=False``: the projection is already in ingest order (ORDER BY a.rowid),
-        so grouping without re-sorting keeps each preset's rows in that deterministic
-        order and names the files in the order the presets first appear — reproducible
-        across runs, never alphabetised behind the operator's back.
-        """
-        written: list[Path] = []
-        for preset_id, partition in frame.groupby(PRESET_ID_COLNAME, sort=False):
-            # The preset KEY is an identifier (e.g. "golden.secondary.cached"); it is the
-            # natural, stable stem for its partition file.
-            written.append(self._write(partition, output_dir / f"{preset_id}.csv"))
-        return written
+        return [self._write(frame, ctx.output_dir / f"{ctx.base_name}.csv")]
 
     def _write(self, frame: pd.DataFrame, path: Path) -> Path:
         """Write one frame as a utf-8-sig, ';'-delimited, QUOTE_NONNUMERIC CSV.

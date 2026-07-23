@@ -50,7 +50,7 @@ import pandas as pd
 from model_atlas.core.projection import project
 from model_atlas.core.store import RunStore
 from model_atlas.export import CSV_DELIMITER
-from model_atlas.export._shared import UNIX_EPOCH, as_float, clean, is_blank, partitions
+from model_atlas.export._shared import UNIX_EPOCH, as_float, clean, is_blank
 from model_atlas.export.csv_flat import ExportContext
 from model_atlas.export.registry import register_exporter
 
@@ -219,10 +219,7 @@ class GeovisualizerExporter:
         frame = project(
             store.connection, ranking_method=ctx.ranking_method, include_source_columns=False)
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
-        return [
-            self._write(part, ctx.output_dir / f"{stem}.geovisualizer.csv")
-            for stem, part in partitions(frame, ctx)
-        ]
+        return [self._write(frame, ctx.output_dir / f"{ctx.base_name}.geovisualizer.csv")]
 
     def _write(self, frame: pd.DataFrame, path: Path) -> Path:
         rows: list[dict] = []
