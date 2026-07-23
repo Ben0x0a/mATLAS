@@ -15,7 +15,12 @@ import pytest
 
 from model_atlas.app import config as config_module
 from model_atlas.app.config import DiagnosticsSettings, Settings
-from model_atlas.app.diagnostics import _relativise_path, _summarise, write_crash_report
+from model_atlas.app.diagnostics import (
+    _relativise_path,
+    _render_markdown,
+    _summarise,
+    write_crash_report,
+)
 
 _CFG = DiagnosticsSettings()
 
@@ -192,3 +197,72 @@ def test_disabled_writes_nothing(tmp_path: Path) -> None:
         path = write_crash_report(type(exc), exc, exc.__traceback__)
     assert path is None
     assert not (tmp_path / "crash").exists()
+
+
+# --- summariser type-dispatch branches (must never dump/leak, never crash) ----
+
+class _Thing:
+    def __init__(self) -> None:
+        self.visible = "shown"
+        self.password = "s3cr3t-attr"
+
+
+def test_mapping_is_summarised_with_nested_key_redaction() -> None:
+    summary = _summarise("payload", {"note": "hello", "password": "s3cr3t-map"}, _CFG, 3)
+    assert summary["type"] == "dict" and summary["len"] == 2
+    assert summary["items"]["note"] == "hello"
+    assert summary["items"]["password"]["redacted"] is True   # redacted by the KEY name
+    assert "s3cr3t-map" not in json.dumps(summary)
+
+
+def test_sequence_is_capped_at_max_items() -> None:
+    summary = _summarise("nums", list(range(50)), _CFG, 3)
+    assert summary["type"] == "list" and summary["len"] == 50
+    assert len(summary["items"]) == _CFG.max_items
+    assert summary["truncated"] is True
+
+
+def test_object_attrs_are_summarised_and_redacted() -> None:
+    summary = _summarise("obj", _Thing(), _CFG, 3)
+    assert summary["attrs"]["visible"] == "shown"
+    assert summary["attrs"]["password"]["redacted"] is True   # redacted by the ATTR name
+    assert "s3cr3t-attr" not in json.dumps(summary)
+
+
+def test_deep_nesting_degrades_to_a_shallow_repr() -> None:
+    # depth counts down; at depth 0 a container degrades instead of recursing forever.
+    summary = _summarise("deep", {"a": {"b": {"c": 1}}}, _CFG, 1)
+    assert summary["items"]["a"]["depth_exceeded"] is True
+
+
+def test_series_is_summarised_head_only() -> None:
+    summary = _summarise("s", pd.Series([1.0, 2.0, 3.0, 4.0]), _CFG, 3)
+    assert "Series" in summary["type"]
+    assert summary["len"] == 4 and isinstance(summary["head"], list)
+
+
+# --- the human Markdown renderer branches -----------------------------------
+
+def test_markdown_renders_redacted_value_and_empty_frame() -> None:
+    report = {
+        "schema": "matlas.crash-report/2",
+        "safe": {
+            "exception_type": "ValueError",
+            "frames": [{"file": "model_atlas/x.py", "lineno": 3, "function": "f", "code": "boom()"}],
+            "metadata": {"tool_version": "0.1.0", "python_version": "3.14"},
+        },
+        "sensitive": {
+            "exception_message": "bad",
+            "frames": [
+                {"function": "f", "lineno": 3,
+                 "locals": {"secret_token": {"redacted": True, "type": "str",
+                                             "sha256": "abcdef1234567890"}}},
+                {"function": "g", "lineno": 9, "locals": {}},
+            ],
+        },
+    }
+    md = _render_markdown(report)
+    assert "`ValueError`" in md
+    assert "model_atlas/x.py:3" in md
+    assert "_redacted_" in md and "abcdef123456" in md   # short sha, never the plaintext
+    assert "_(no locals)_" in md                          # the empty-locals frame
