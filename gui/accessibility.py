@@ -77,6 +77,7 @@ def configure_accessibility(controller: Any) -> None:
         ("entityLabel", controller.entity_edit),
         ("linkedEntityLabel", controller.linked_entity_edit),
         ("presetsPathLabel", controller.presets_path_edit),
+        ("caseNameLabel", controller.case_name_edit),
         ("dumpFullUfdrLabel", controller.dump_full_ufdr_check),
         ("outputLabel", controller.output_edit),
         ("optionsLabel", controller.traceability_combo),
@@ -114,6 +115,11 @@ def configure_accessibility(controller: Any) -> None:
         "Accepts a literal, or a preset-style reference such as field(Evidence number) "
         "to take the value from that source field per row."
     )
+
+    controller.case_name_edit.setAccessibleName("Case name")
+    controller.case_name_edit.setAccessibleDescription(
+        "Name of the case: the case database is written as <name>.matlas.sqlite in the output "
+        "folder. Running against an existing case database appends to it. Defaults to 'merged'.")
 
     controller.presets_path_edit.setAccessibleName("Preset root path")
     controller.presets_path_edit.setAccessibleDescription("Preset folder or YAML preset file used for matching.")
@@ -217,6 +223,7 @@ def _configure_tab_order(controller: Any) -> None:
         controller.presets_path_edit,
         controller.presets_folder_button,
         controller.presets_file_button,
+        controller.case_name_edit,
         controller.output_edit,
         controller.output_button,
         controller.traceability_combo,

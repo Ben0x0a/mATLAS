@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui import accessibility, header_assets
+from gui.case_state import format_case_summary, read_case_counts
 from gui.completion import param_completions
 from gui.db_edit_controller import DbEditController
 from gui.spatiotemporal_controller import SpatiotemporalController
@@ -63,6 +64,10 @@ log = logging.getLogger("model_atlas.gui")
 # parser. Consumed by _sync_ufdr_mode (gui.app).
 APP_TITLE_DEFAULT = "mATLAS Transformer"
 APP_TITLE_UFDR = "UFDR Parser"
+
+# The window title's stem; the active case name is appended after a run so the window
+# always shows which case is open. Consumed by _update_window_title (gui.app).
+WINDOW_TITLE_BASE = "Model ATLAS Transformer"
 
 
 def _should_show_single_preset_notice(
@@ -114,6 +119,9 @@ class MainController(QObject):
         self._runner = TaskRunner(self)
         self._presets: list[PresetItem] = []
         self._last_output_folder: Path | None = None
+        # The case the GUI is working in: set to the case DB after a run, then bound to the
+        # Database-Edit and Spatiotemporal tabs so every tab operates on the same case.
+        self._active_case_db: Path | None = None
         self._status_text = "Idle"
         self._log_handler: logging.Handler | None = None
         self._current_phase = ""
@@ -169,6 +177,7 @@ class MainController(QObject):
         self.source_edit: QLineEdit = child(QLineEdit, "sourceEdit")
         self.presets_path_edit: QLineEdit = child(QLineEdit, "presetsPathEdit")
         self.output_edit: QLineEdit = child(QLineEdit, "outputEdit")
+        self.case_name_edit: QLineEdit = child(QLineEdit, "caseNameEdit")
         self.entity_edit: QLineEdit = child(QLineEdit, "entityEdit")
         self.linked_entity_edit: QLineEdit = child(QLineEdit, "linkedEntityEdit")
         self.preset_search_edit: QLineEdit = child(QLineEdit, "presetSearchEdit")
@@ -212,7 +221,7 @@ class MainController(QObject):
         self.log_edit.setAcceptRichText(True)
         self.log_edit.document().setMaximumBlockCount(5000)
         self.window.resize(1000, 860)
-        self.window.setWindowTitle("Model ATLAS Transformer")
+        self.window.setWindowTitle(WINDOW_TITLE_BASE)
         self.window.setWindowIcon(QIcon(str(header_assets.asset_path(header_assets.DESKTOP_ICON_ASSET))))
         self.window.setStyleSheet(build_stylesheet())
         header_assets.configure_header_assets(self.window)
@@ -638,6 +647,10 @@ class MainController(QObject):
             self._show_error("Enter a linked entity (required).")
             return
         output_path = Path(output).expanduser()
+        # The case name is the run's identity: the case DB is <output>/<name>.matlas.sqlite,
+        # so a run targeting an existing case DB APPENDS to it (pipeline.process). Empty falls
+        # back to the pipeline default ("merged"), and no explicit human case label is sent.
+        case_name = self.case_name_edit.text().strip()
         selected_mode = not self.auto_preset_check.isChecked()
         selected_paths = [Path(path) for path in self._selected_preset_paths()]
         if selected_mode and not selected_paths:
@@ -655,6 +668,8 @@ class MainController(QObject):
         # Build the process() keyword arguments once; they are identical across preset modes,
         # which differ only in how the presets path is resolved (see _resolve_presets_path).
         kwargs = dict(
+            base_name=case_name or "merged",
+            case=case_name or None,
             traceability_format=self.traceability_combo.currentText(),
             entity=entity,
             linked_entity=linked_entity,
@@ -702,6 +717,9 @@ class MainController(QObject):
         self._last_output_folder = result.output_case_db.parent
         self.open_output_folder_button.setEnabled(True)
         log.info(f"Case database: {result.output_case_db}")
+        # Make this the active case: title the window, bind the analysis tabs to it, and log
+        # the case's running totals (which grow as more evidence is appended).
+        self._activate_case(result.output_case_db)
         counts = result.row_counts
         if counts.get("rows", 0) == 0:
             self._set_status("Completed: no rows matched a preset; the case database records the run")
@@ -729,6 +747,42 @@ class MainController(QObject):
         self._set_status("Failed")
         log.error(f"Processing failed:\n{tb}")
         self._show_error(last)
+
+    # --- active case (the top-level context across the three tabs) ------------
+
+    def _case_name_of(self, db_path: Path) -> str:
+        """The case's display name: its DB stem without the ``.matlas.sqlite`` suffix."""
+        return db_path.name.removesuffix(".matlas.sqlite")
+
+    def _activate_case(self, db_path: Path) -> None:
+        """Make ``db_path`` the active case: title the window, bind the Database-Edit and
+        Spatiotemporal tabs to it, and log its running totals. Best-effort — a summary read
+        failure is logged and swallowed so a completed run is never reported as failed."""
+        self._active_case_db = db_path
+        self._bind_case_to_panels(db_path)
+        self._update_window_title()
+        try:
+            counts = read_case_counts(db_path)
+        except Exception:  # noqa: BLE001 - the summary is feedback, not run correctness.
+            log.debug("Could not read case summary", exc_info=True)
+            return
+        log.info(format_case_summary(self._case_name_of(db_path), counts))
+
+    def _bind_case_to_panels(self, db_path: Path) -> None:
+        """Point the Database-Edit and Spatiotemporal tabs at the active case DB, so the two
+        analysis tabs operate on the very case the Transform tab just built or appended to."""
+        text = str(db_path)
+        if self._db_edit_controller is not None:
+            self._db_edit_controller.path_edit.setText(text)
+        if self._spatiotemporal_controller is not None:
+            self._spatiotemporal_controller.db_edit.setText(text)
+
+    def _update_window_title(self) -> None:
+        """Show the active case in the window title (or the bare app name when none is open)."""
+        if self._active_case_db is None:
+            self.window.setWindowTitle(WINDOW_TITLE_BASE)
+            return
+        self.window.setWindowTitle(f"{WINDOW_TITLE_BASE} — Case: {self._case_name_of(self._active_case_db)}")
 
     def _set_running(self, running: bool) -> None:
         self.run_button.setEnabled(not running)
@@ -781,6 +835,10 @@ class MainController(QObject):
     def _clear_form(self) -> None:
         self.source_edit.clear()
         self.output_edit.clear()
+        self.case_name_edit.clear()
+        # Clearing the form closes the active case: reset the context and the window title.
+        self._active_case_db = None
+        self._update_window_title()
         self.entity_edit.clear()
         self.linked_entity_edit.clear()
         self.presets_path_edit.setText(str(Path.cwd() / "presets"))

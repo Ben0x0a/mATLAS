@@ -234,6 +234,20 @@
           <number>18</number>
          </property>
          <item>
+          <widget class="QLabel" name="caseNameLabel">
+           <property name="text">
+            <string>Case name</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="caseNameEdit">
+           <property name="placeholderText">
+            <string>case identity (defaults to 'merged')</string>
+           </property>
+          </widget>
+         </item>
+         <item>
           <widget class="QCheckBox" name="dumpFullUfdrCheck">
            <property name="text">
             <string/>
@@ -285,21 +299,21 @@
        <item row="4" column="0">
         <widget class="QLabel" name="outputLabel">
          <property name="text">
-          <string>Output CSV</string>
+          <string>Output folder</string>
          </property>
         </widget>
        </item>
        <item row="4" column="1">
         <widget class="DragDropLineEdit" name="outputEdit">
          <property name="placeholderText">
-          <string>merged.csv</string>
+          <string>folder (the case database is written inside)</string>
          </property>
         </widget>
        </item>
        <item row="4" column="2" colspan="2">
         <widget class="QPushButton" name="outputButton">
          <property name="text">
-          <string>Save as...</string>
+          <string>Folder...</string>
          </property>
         </widget>
        </item>
