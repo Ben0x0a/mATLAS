@@ -201,6 +201,21 @@ _INVALID: dict[str, str] = {
     "expected_fields not a list": _MIN.replace(
         "input_selector: {format: csv, name: f.csv}",
         "input_selector: {format: csv, name: f.csv}\nexpected_fields: Lat"),
+    # extract validation (_parse_extract): must be 'pattern.group', name a known pattern, and
+    # reference a named group that pattern actually defines.
+    "extract not pattern.group": _MIN.replace(
+        "latitude_wgs84: field(Lat)",
+        "latitude_wgs84: {from: field(Lat), extract: nogroup}"),
+    "extract unknown pattern": _MIN.replace(
+        "latitude_wgs84: field(Lat)",
+        "latitude_wgs84: {from: field(Lat), extract: absent.g}"),
+    "extract references missing group": _MIN.replace(
+        "assertions:", "patterns:\n  p: \"(?P<lat>[0-9]+)\"\nassertions:").replace(
+        "latitude_wgs84: field(Lat)",
+        "latitude_wgs84: {from: field(Lat), extract: p.nope}"),
+    # field-mapping dict validation (_parse_field): the dict form must carry a 'from' reference.
+    "field mapping without from": _MIN.replace(
+        "latitude_wgs84: field(Lat)", "latitude_wgs84: {type: float}"),
 }
 
 
