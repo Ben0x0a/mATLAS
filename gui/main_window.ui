@@ -121,6 +121,50 @@
        </attribute>
        <layout class="QVBoxLayout" name="transformTabLayout">
     <item>
+     <layout class="QHBoxLayout" name="caseBarLayout">
+      <item>
+       <widget class="QPushButton" name="newCaseButton">
+        <property name="toolTip">
+         <string>Start a fresh case: clear the case name and detach the open case.</string>
+        </property>
+        <property name="text">
+         <string>New case</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="openCaseButton">
+        <property name="toolTip">
+         <string>Open an existing &lt;name&gt;.matlas.sqlite case; a run then appends to it.</string>
+        </property>
+        <property name="text">
+         <string>Open case...</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="caseSummaryLabel">
+        <property name="text">
+         <string>No case open</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="caseBarSpacer">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+     </layout>
+    </item>
+    <item>
      <widget class="QGroupBox" name="inputGroup">
       <property name="title">
        <string>Inputs</string>

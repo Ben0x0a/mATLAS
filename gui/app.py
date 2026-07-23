@@ -54,6 +54,7 @@ from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler
 from launcher.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
 from model_atlas.app.config import get_settings
 from model_atlas.export.registry import available_exporters, load_builtin_exporters
+from model_atlas.ingest.writer import is_matlas_run_db
 from model_atlas.app.pipeline import ProcessResult, process
 from model_atlas.presets.spec_loader import load_preset_specs
 
@@ -189,6 +190,9 @@ class MainController(QObject):
         self.single_preset_notice_label: QLabel = child(QLabel, "singlePresetNoticeLabel")
         self.output_label: QLabel = child(QLabel, "outputLabel")
         self.app_title_label: QLabel = child(QLabel, "appTitleLabel")
+        self.case_summary_label: QLabel = child(QLabel, "caseSummaryLabel")
+        self.new_case_button: QPushButton = child(QPushButton, "newCaseButton")
+        self.open_case_button: QPushButton = child(QPushButton, "openCaseButton")
 
         self.source_file_button: QPushButton = child(QPushButton, "sourceFileButton")
         self.source_folder_button: QPushButton = child(QPushButton, "sourceFolderButton")
@@ -329,6 +333,8 @@ class MainController(QObject):
         self.available_preset_list.itemDoubleClicked.connect(lambda _item: self._add_selected_presets())
         self.selected_preset_list.itemDoubleClicked.connect(lambda _item: self._remove_selected_presets())
         self.run_button.clicked.connect(self._run_process)
+        self.new_case_button.clicked.connect(self._new_case)
+        self.open_case_button.clicked.connect(self._open_case)
         self.open_output_folder_button.clicked.connect(self._open_output_folder)
         self.open_error_report_button.clicked.connect(self._open_error_reports)
         self.clear_form_button.clicked.connect(self._clear_form)
@@ -756,7 +762,7 @@ class MainController(QObject):
 
     def _activate_case(self, db_path: Path) -> None:
         """Make ``db_path`` the active case: title the window, bind the Database-Edit and
-        Spatiotemporal tabs to it, and log its running totals. Best-effort — a summary read
+        Spatiotemporal tabs to it, and show its running totals. Best-effort — a summary read
         failure is logged and swallowed so a completed run is never reported as failed."""
         self._active_case_db = db_path
         self._bind_case_to_panels(db_path)
@@ -765,8 +771,42 @@ class MainController(QObject):
             counts = read_case_counts(db_path)
         except Exception:  # noqa: BLE001 - the summary is feedback, not run correctness.
             log.debug("Could not read case summary", exc_info=True)
+            self.case_summary_label.setText(f"Case: {self._case_name_of(db_path)}")
             return
-        log.info(format_case_summary(self._case_name_of(db_path), counts))
+        summary = format_case_summary(self._case_name_of(db_path), counts)
+        self.case_summary_label.setText(summary)
+        log.info(summary)
+
+    def _clear_active_case(self) -> None:
+        """Detach the open case: reset the context, the window title and the summary line."""
+        self._active_case_db = None
+        self._update_window_title()
+        self.case_summary_label.setText("No case open")
+
+    def _new_case(self) -> None:
+        """Start a fresh case: clear the case name and detach the open case, keeping the output
+        folder and presets so the operator can build a new case in place."""
+        self.case_name_edit.clear()
+        self._clear_active_case()
+
+    def _open_case(self) -> None:
+        """Open an existing case database: bind it as the active case and fill the case name /
+        output folder so a subsequent run APPENDS to it (pipeline.process create-or-append)."""
+        path, _ = QFileDialog.getOpenFileName(
+            self.window, "Open a case database",
+            self.output_edit.text() or str(Path.cwd()),
+            "mATLAS case database (*.matlas.sqlite);;All files (*)",
+        )
+        if not path:
+            return
+        db_path = Path(path)
+        if not is_matlas_run_db(db_path):
+            self._show_error(f"Not a mATLAS case database: {db_path.name}")
+            return
+        self.output_edit.setText(str(db_path.parent))
+        self.case_name_edit.setText(self._case_name_of(db_path))
+        self._activate_case(db_path)
+        log.info(f"Opened case {db_path}")
 
     def _bind_case_to_panels(self, db_path: Path) -> None:
         """Point the Database-Edit and Spatiotemporal tabs at the active case DB, so the two
@@ -836,9 +876,8 @@ class MainController(QObject):
         self.source_edit.clear()
         self.output_edit.clear()
         self.case_name_edit.clear()
-        # Clearing the form closes the active case: reset the context and the window title.
-        self._active_case_db = None
-        self._update_window_title()
+        # Clearing the form closes the active case: reset the context, title and summary line.
+        self._clear_active_case()
         self.entity_edit.clear()
         self.linked_entity_edit.clear()
         self.presets_path_edit.setText(str(Path.cwd() / "presets"))

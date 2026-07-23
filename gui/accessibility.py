@@ -120,6 +120,14 @@ def configure_accessibility(controller: Any) -> None:
     controller.case_name_edit.setAccessibleDescription(
         "Name of the case: the case database is written as <name>.matlas.sqlite in the output "
         "folder. Running against an existing case database appends to it. Defaults to 'merged'.")
+    controller.new_case_button.setAccessibleName("New case")
+    controller.new_case_button.setAccessibleDescription(
+        "Start a fresh case: clear the case name and detach the open case.")
+    controller.open_case_button.setAccessibleName("Open case")
+    controller.open_case_button.setAccessibleDescription(
+        "Open an existing case database; a subsequent run appends to it.")
+    controller.case_summary_label.setAccessibleName("Case summary")
+    controller.case_summary_label.setAccessibleDescription("Running totals of the open case.")
 
     controller.presets_path_edit.setAccessibleName("Preset root path")
     controller.presets_path_edit.setAccessibleDescription("Preset folder or YAML preset file used for matching.")
@@ -213,8 +221,11 @@ def _configure_shortcuts(controller: Any) -> None:
 def _configure_tab_order(controller: Any) -> None:
     widgets: tuple[QWidget, ...] = (
         # The tab widget comes first so keyboard users reach the section tabs before
-        # entering the Transform form; focus then flows into the form's fields.
+        # entering the Transform form; the case bar (New/Open case) leads the form, then
+        # focus flows into the input fields.
         controller.tab_widget,
+        controller.new_case_button,
+        controller.open_case_button,
         controller.source_edit,
         controller.source_file_button,
         controller.source_folder_button,
