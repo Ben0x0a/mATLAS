@@ -114,6 +114,24 @@ def _write_expression(store: RunStore, tag: str, referential: str,
     return expression_id
 
 
+# --- idempotency / append ----------------------------------------------------
+
+def test_integrate_spatial_is_idempotent_and_integrates_new_only() -> None:
+    # A re-run (or an append adding runs to a case) integrates only NOT-yet-integrated
+    # expressions and never collides on an existing spatial_integration row.
+    with RunStore() as store:
+        _write_expression(store, "a", "epsg:4326",
+                          [("latitude_wgs84", "46.20"), ("longitude_wgs84", "6.14")])
+        assert integrate_spatial(store).integration_count == 1
+        assert integrate_spatial(store).integration_count == 0   # nothing new, no collision
+        _write_expression(store, "b", "epsg:4326",
+                          [("latitude_wgs84", "47.00"), ("longitude_wgs84", "7.00")])
+        assert integrate_spatial(store).integration_count == 1   # only the new one
+        total = store.connection.execute(
+            "SELECT COUNT(*) FROM spatial_integration").fetchone()[0]
+        assert total == 2
+
+
 # --- passthrough + unit conversions -------------------------------------------
 
 def test_passthrough_and_unit_conversions_write_one_stamped_row() -> None:

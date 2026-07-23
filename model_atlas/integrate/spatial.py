@@ -371,7 +371,7 @@ def integrate_spatial(
 
 
 def _load_expressions(connection: sqlite3.Connection) -> list[SpatialExpressionInput]:
-    """Every L1 spatial expression with its part->raw_value mapping, in id order.
+    """Every NOT-yet-integrated L1 spatial expression with its part->raw_value mapping.
 
     HOW: one pass over ``spatial_component`` in (expression, ordinal) order builds the
     mappings; components with a NULL raw_value carry no value and are omitted. A part
@@ -380,19 +380,24 @@ def _load_expressions(connection: sqlite3.Connection) -> list[SpatialExpressionI
     ambiguity rule; candidates arrive when the UNIQUE is dropped). A repeated
     NON-interpretable part (two raw_position fragments…) keeps its FIRST occurrence:
     nothing reads it in v1 and the verbatim rows all survive at L1 regardless.
+    WHY the NOT-integrated filter: makes the pass idempotent — a re-run (or an append that
+    adds new runs to an existing case) integrates only the new expressions and never collides
+    on an existing ``spatial_integration`` row (same rule as the temporal pass).
     """
     expressions = {
         row[0]: SpatialExpressionInput(spatial_expression_id=row[0], referential=row[1])
         for row in connection.execute(
             "SELECT spatial_expression_id, referential FROM spatial_expression "
+            "WHERE spatial_expression_id NOT IN "
+            "(SELECT spatial_expression_id FROM spatial_integration) "
             "ORDER BY spatial_expression_id")
     }
     component_rows = connection.execute(
         "SELECT spatial_expression_id, part, raw_value FROM spatial_component "
         "ORDER BY spatial_expression_id, ordinal")
     for expression_id, part, raw_value in component_rows:
-        if raw_value is None:
-            continue
+        if raw_value is None or expression_id not in expressions:
+            continue   # NULL value, or a component of an already-integrated expression
         part_values = expressions[expression_id].part_values
         if part in part_values:
             if part in _INTERPRETABLE_PARTS:
