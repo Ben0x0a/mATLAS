@@ -168,6 +168,7 @@ def ingest_input(
     max_container_depth: int = 1,
     skip_reparsed_archives: bool = False,
     prior_archive_presets: dict[str, str] | None = None,
+    existing_case_id: str | None = None,
 ) -> IngestReport:
     """Walk ``input_path`` and write its acquisition layer into ``store``.
 
@@ -176,6 +177,13 @@ def ingest_input(
     ``cd_sha256 -> preset signature`` map from earlier runs) drive the opt-in, preset-scoped
     archive skip (decision 38/40). ``exhibit_ref`` (R23) and ``examiner`` are the optional
     chain-of-custody fields. Returns an ``IngestReport`` of the counts produced.
+
+    ``existing_case_id`` switches CREATE vs APPEND: None (default) creates a fresh case rooted
+    in this DB; a value adds a NEW run to that EXISTING case (the caller has opened a persisted
+    case DB and read its case id). A run id is a fresh uuid4 that feeds no child id, so the same
+    evidence appended later produces byte-identical downstream ids/digests — appending is
+    deterministic, and a duplicate source collides on its content-derived id and is rejected
+    exactly as in a fresh run.
     """
     input_path = Path(input_path)
     prior_archive_presets = prior_archive_presets or {}
@@ -188,11 +196,17 @@ def ingest_input(
         )
 
     # --- case + run (decision 28/39): the run row carries the COMPLETE operator settings.
-    case = CaseMetadata(
-        case_id=ids.case_metadata_id(), case_number=case_number, title=title,
-        description=description, created_at=_now_iso(),
-    )
-    store.write_case_metadata(case)
+    # CREATE mints the case root; APPEND reuses the existing case (the caller read its id from
+    # the opened DB) and only adds a run — re-writing case_metadata would collide on its PK.
+    if existing_case_id is None:
+        case = CaseMetadata(
+            case_id=ids.case_metadata_id(), case_number=case_number, title=title,
+            description=description, created_at=_now_iso(),
+        )
+        store.write_case_metadata(case)
+        case_id = case.case_id
+    else:
+        case_id = existing_case_id
 
     current_signature = _preset_signature(presets)
     settings = {
@@ -207,12 +221,12 @@ def ingest_input(
         ],
     }
     run = Run(
-        run_id=ids.run_id(), case_id=case.case_id, input_path=str(input_path),
+        run_id=ids.run_id(), case_id=case_id, input_path=str(input_path),
         started_at=_now_iso(), finished_at=None, tool_version=tool_version,
         settings_json=canonical_json(settings), examiner=examiner,
     )
     store.write_run(run)
-    report = IngestReport(run_id=run.run_id, case_id=case.case_id)
+    report = IngestReport(run_id=run.run_id, case_id=case_id)
 
     # --- preset + run_preset (decision 39): every selected preset, recorded up front.
     for preset in presets:

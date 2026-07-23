@@ -89,6 +89,24 @@ def test_folder_and_zip_share_fingerprint_but_not_source_id(tmp_path: Path) -> N
     assert sorted(r["inner_path"] or "" for r in csv_rows) == ["", "tree.zip!x.csv"]
 
 
+def test_append_adds_a_run_to_the_existing_case(tmp_path: Path) -> None:
+    # T94: existing_case_id switches ingest_input to APPEND — a new run under the SAME case,
+    # never a second case row.
+    f1 = tmp_path / "t1"; f1.mkdir(); (f1 / "a.csv").write_bytes(_csv_bytes())
+    f2 = tmp_path / "t2"; f2.mkdir(); (f2 / "b.csv").write_bytes(b"id,v\n7,z\n")
+    with RunStore() as store:
+        first = ingest_input(f1, store, case_number="Operation Falcon")
+        second = ingest_input(f2, store, case_number="ignored-on-append",
+                              existing_case_id=first.case_id)
+        assert first.case_id == second.case_id      # one case
+        assert first.run_id != second.run_id        # two runs
+        counts = {
+            t: store.connection.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            for t in ("case_metadata", "run", "source")
+        }
+    assert counts == {"case_metadata": 1, "run": 2, "source": 2}
+
+
 def test_records_written_verbatim(tmp_path: Path) -> None:
     (tmp_path / "x.csv").write_bytes(_csv_bytes())
     with RunStore() as store:
