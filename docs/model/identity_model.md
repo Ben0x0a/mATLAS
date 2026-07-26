@@ -1,19 +1,17 @@
 # Identity model — what carries an ID, and why
 
-> **Amendment (2026-07-12, Phase 0).** The RULE this document states — *identity is
-> not equality; a primary key is an occurrence key; a content hash is a finding* —
-> stands unchanged and governs the settled schema. The **exception list and table
-> inventory below are historical**: the schema they describe was superseded by
-> [run_db_schema.md](run_db_schema.md). In the settled model the `entity` table holds
-> *mentions* (occurrence-keyed, never deduplicated — the exception this document
-> granted it is revoked); the only sanctioned content keys are the *identifier nodes*
-> of `resolved_entity` (see [entity_model.md](entity_model.md)); person/organization
-> nodes are occurrence-keyed. The naming conventions and the resilience rules below
+> **Note.** The RULE this document states — *identity is not equality; a primary key is an
+> occurrence key; a content hash is a finding* — governs the settled schema. The **exception
+> list and table inventory below are historical**: the schema they describe was superseded by
+> [schema.md](schema.md). In the settled model the `entity` table holds *mentions*
+> (occurrence-keyed, never deduplicated); the only sanctioned content keys are the *identifier
+> nodes* of the deferred analyst layer (see [entity_model.md](entity_model.md)); person and
+> organisation nodes are occurrence-keyed. The naming conventions and the resilience rules below
 > remain normative.
 
-Amendment to [relational_model.md](relational_model.md). It settles a defect found while
-implementing Phase C: the run database used **content addresses as primary keys**, so two
-byte-identical acquisitions collapsed into one row and the second artefact's path was lost
+It settles a defect found while implementing the run database: it used **content addresses as
+primary keys**, so two byte-identical acquisitions collapsed into one row and the second
+artefact's path was lost
 from the record entirely.
 
 This document states the rule, grounds it in established practice, and defines the schema
@@ -35,7 +33,7 @@ hashes match; it never merges them.
 `row_uid` was a content address that deliberately excluded `input_file_path` and
 `raw_source_path`, which gave it a genuinely valuable property: the same database read from
 a loose folder or from inside a zip produces the same identifier, on any machine, in any
-run. Phase C then made that content address a `PRIMARY KEY`.
+run. The implementation then made that content address a `PRIMARY KEY`.
 
 Those two decisions are incompatible. A content address is *designed* to be equal for equal
 content; a primary key is *required* to be distinct per row. When the same evidence appeared
@@ -58,7 +56,7 @@ the only place in the model where the tool is entitled to assert that two things
 same thing.
 
 Everywhere else, deduplication would be the tool inventing a claim about the world. That
-was already the stated position of the design — `relational_model.md` says *"the model never
+was already the stated position of the design — the model design says *"the model never
 presumes two sources observed 'the same' position"* — the ID scheme simply contradicted it.
 
 ## Why this is the standard answer
@@ -204,7 +202,7 @@ The schema is designed to fail loudly rather than lose data.
   database says so.
 - **`PRAGMA foreign_keys = ON`.** SQLite does not enforce foreign keys by default. An
   orphaned corner row is a corrupt record.
-- **`CHECK` constraints from the controlled vocabularies** in `model_atlas.model.families`,
+- **`CHECK` constraints from the controlled vocabularies** in `model_atlas.core.vocabularies`,
   allowing `NULL` wherever the model allows it today.
 - **Indices** on `assertion.content_hash` and `source.fingerprint_sha256`, so the duplicate
   queries above are cheap on a large run.

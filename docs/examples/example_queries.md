@@ -1,13 +1,12 @@
-# Example run database — requests against the settled model
+# Example run database — worked queries against the model
 
-Status: **demonstration artefact, regenerated 2026-07-14** for task
-[../../tasks/T00.md](../../tasks/T00.md) against the 21-table schema
-([../run_db_schema.md](../run_db_schema.md), decisions 16-41). Built by
-[build_example_db.py](build_example_db.py) — deterministic, so rerunning it
-regenerates [matlas_example.sqlite](matlas_example.sqlite) byte-for-byte apart from the
-`case_metadata`/`run` uuid4 rows and the run-scoped metadata that carries the run id
-(`run_archive`/`run_preset` links, `source.run_id`, `edit_log`). The DDL is hand-written here for demonstration; the real DDL is derived from
-`families.py` in Phase 1. This artefact is **not Phase-1 code**.
+A demonstration artefact showing real queries against the run database (see
+[../model/schema.md](../model/schema.md)). Built by
+[build_example_db.py](build_example_db.py) — deterministic, so rerunning it regenerates
+[matlas_example.sqlite](matlas_example.sqlite) byte-for-byte apart from the
+`case_metadata`/`run` uuid rows and the run-scoped metadata that carries the run id
+(`run_archive`/`run_preset` links, `source.run_id`, `edit_log`). The DDL is hand-written here
+for demonstration; the shipped schema is generated from the code.
 
 **The story**: one night in Geneva. The suspect's phone (exhibit A) holds GPS fixes, a
 home visit, a chat pin "meet me here" (scene coordinates, the app flagged it deleted)
@@ -19,14 +18,13 @@ the station around noon, and an alibi statement claims the suspect's phone was *
 at home during the robbery window (a `never_during_interval` assertion). The
 cache.sqlite was ingested twice (folder + zip) and one CDR record appears in two
 disclosures — both duplications are *findings*, never merges. The projection follows the
-[../csv_migration.md](../csv_migration.md) column contract: `entity` is the **normalized**
-identifier, `raw_identifier` the verbatim source text; `locates` is derived from
-`entity_position_link` (D11); the context columns (`counterpart`/`callee`/`imei`) are
-projected from `activity.context_json` (D18 — bonus columns per D35: only
-`assertion.activity_id`, which regroups the legs of one record, is a useful projection
-of the activity); `t_lower`/`t_upper` are the D32
-offset-tagged local `datetime_iso` (` N/A` = value, zone unknown, kept distinct from
-empty = no instant); `s2_cell_id` is the signed-int64 S2 leaf cell (D31).
+[../reference/csv_contract.md](../reference/csv_contract.md) column contract: `entity` is the
+**normalised** identifier, `raw_identifier` the verbatim source text; `locates` is derived from
+`entity_position_link`; the context columns (`counterpart`/`callee`/`imei`) are projected from
+`activity.context_json` (only `assertion.activity_id`, which regroups the legs of one record, is
+a useful projection of the activity); `t_lower`/`t_upper` are the offset-tagged local
+`datetime_iso` (` N/A` = value, zone unknown, kept distinct from empty = no instant);
+`s2_cell_id` is the signed-int64 S2 leaf cell.
 
 Notable in the results:
 - **Q1**: line = placement. Context parties are columns, not lines; the doubled iOS
@@ -39,7 +37,7 @@ Notable in the results:
 - **Q6**: convergence by the normalized `identifier` (`GROUP BY`, never a stored merge),
   with the verbatim `raw_identifier` surfaced beside it — the same working number written
   three different ways.
-- **Q9**: the D32 per-bound projection — the source's stated offset (L1) beside the
+- **Q9**: the per-bound projection — the source's stated offset (L1) beside the
   applied offset + local `datetime_iso` (L2), and the ` N/A` assumed-UTC sentinel for
   the absolute-epoch and unix sources.
 
@@ -133,7 +131,7 @@ Notable in the results:
 
 (8 rows)
 
-### Q6 - Convergence by normalized identifier: every mention of +41791234567, with its VERBATIM raw_identifier surfaced (D17/D21 — same working id, different source text)
+### Q6 - Convergence by normalized identifier: every mention of +41791234567, with its VERBATIM raw_identifier surfaced (same working id, different source text)
 
 | identifier | raw_identifier | identifier_type | type | entity_role | source_label |
 |---|---|---|---|---|---|
@@ -163,7 +161,7 @@ Notable in the results:
 
 (1 rows)
 
-### Q9 - The two per-bound temporal projections (D32): stated offset (L1) vs applied offset + local datetime_iso (L2), plus the ` N/A` assumed-UTC sentinel
+### Q9 - The two per-bound temporal projections: stated offset (L1) vs applied offset + local datetime_iso (L2), plus the ` N/A` assumed-UTC sentinel
 
 | source_label | part | temporal_role | stated_offset | applied_lower | applied_upper | lower_datetime_iso | upper_datetime_iso |
 |---|---|---|---|---|---|---|---|

@@ -3,13 +3,11 @@
 
 WHAT THIS FILE IS
 -----------------
-A hand-written **demonstration artefact** — *not Phase-1 code*. It builds
-``docs/examples/matlas_example.sqlite`` directly from the settled schema
-([../run_db_schema.md](../run_db_schema.md), decisions 16-41) so the model can be
-exercised with realistic data *before* ``model/`` derives the real DDL
-from ``families.py``. The DDL, the digest recipes and the ingest order are transcribed
-by hand here; when the core lands, this script is superseded by the pipeline and kept
-only as a readable reference.
+A hand-written **demonstration artefact**. It builds
+``docs/examples/matlas_example.sqlite`` directly from the schema
+([../model/schema.md](../model/schema.md)) so the model can be exercised with realistic
+data. The DDL, the digest recipes and the ingest order are transcribed by hand here as a
+readable reference; the shipped schema is generated from the code.
 
 USED BY
 -------
@@ -19,18 +17,18 @@ USED BY
 
 DEPENDS ON
 ----------
-- the settled schema doc (transcribed below) and ``s2sphere`` (D31 — the S2 leaf cell
-  per spatial_integration; pure-Python, added to the project deps for T31).
+- the settled schema doc (transcribed below) and ``s2sphere`` (the S2 leaf cell
+  per spatial_integration; pure-Python,).
 
 DETERMINISM (the whole point)
 -----------------------------
 Every id is ``uuid5`` over natural-key parts joined with the unit separator ``\\x1f``
 (D-"id scheme"; a ``|`` in a path could otherwise forge equal keys). The *only*
-non-deterministic roots are ``case`` and ``run`` (uuid4 — the run scope, D10/D28);
+non-deterministic roots are ``case`` and ``run`` (uuid4 — the run scope);
 no EVIDENCE id derives from them, so running the builder twice yields byte-identical
 DBs apart from those two rows and the run-scoped metadata that carries the run id
 (``run_archive``/``run_preset`` links, ``source.run_id``, ``edit_log``). Floats are captured as **source text** (never re-parsed) so the
-canonical-JSON rule (schema §Determinism rule 5, no float re-formatting) holds and the
+canonical-JSON rule (the canonical-JSON rule, no float re-formatting) holds and the
 digests stay stable.
 
 Run:  python3 build_example_db.py            # (re)build the DB
@@ -55,7 +53,7 @@ DB = Path(__file__).parent / "matlas_example.sqlite"
 NS = uuid.UUID("9c4e7b1a-2d63-5f48-8a17-3b5c6d0e9f21")
 SEP = "\x1f"  # unit separator — a delimiter that cannot occur inside a path or a value
 
-# S2 leaf level (D31): CellId.from_lat_lng always returns a level-30 leaf cell.
+# S2 leaf level: CellId.from_lat_lng always returns a level-30 leaf cell.
 S2_LEAF_LEVEL = 30
 
 
@@ -76,7 +74,7 @@ def s2_signed_leaf(lat: float, lon: float) -> int:
 
     HOW: s2sphere returns an *unsigned* 64-bit cell id; SQLite INTEGER is signed, so we
     reinterpret the top-bit-set values as negative (v - 2**64 when v >= 2**63). WHY:
-    storing the same 64 bits SQLite will compare and range-scan on (D31 relies on
+    storing the same 64 bits SQLite will compare and range-scan on (which relies on
     ``WHERE s2_cell_id BETWEEN ? AND ?``); a naive unsigned store would overflow.
     """
     cell = s2sphere.CellId.from_lat_lng(s2sphere.LatLng.from_degrees(lat, lon))
@@ -89,7 +87,7 @@ def s2_signed_leaf(lat: float, lon: float) -> int:
 # --------------------------------------------------------------------------- #
 
 def canonical_json(obj: object) -> str:
-    """Canonical JSON per schema §Determinism rule 5: sorted keys, no insignificant
+    """Canonical JSON per the canonical-JSON rule: sorted keys, no insignificant
     whitespace. Float source-text is preserved by keeping numbers as strings upstream,
     so json.dumps never re-formats a value it was given."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -160,14 +158,14 @@ def us_from_iso(iso_with_offset: str) -> int:
 
 
 def local_projection(unix_us: int | None, offset_hours: float | str | None):
-    """D32 convenience projection for ONE bound: (datetime_iso, date, time_us).
+    """Convenience projection for ONE bound: (datetime_iso, date, time_us).
 
     HOW: from canonical UTC µs + the applied offset we render the local wall clock.
     - no instant (unix_us is None)        -> ("", None, None)   (empty everywhere)
     - offset known (a float)              -> "…+01:00" ISO + local date + time-of-day µs
     - offset UNKNOWN (the "N/A" sentinel) -> assumed-UTC clock with a LOUD trailing " N/A"
     WHY: the ` N/A` suffix keeps "value, zone unknown" visibly distinct from "no value"
-    (empty) — the two must never be confused (D32).
+    (empty) — the two must never be confused.
     """
     if unix_us is None:
         return "", None, None
@@ -189,7 +187,7 @@ def local_projection(unix_us: int | None, offset_hours: float | str | None):
 
 
 # --------------------------------------------------------------------------- #
-# DDL — the 19 tables + matlas_meta, transcribed from run_db_schema.md        #
+# DDL — the 19 tables + matlas_meta, transcribed from the schema (docs/model/schema.md)        #
 # --------------------------------------------------------------------------- #
 
 DDL = """
@@ -314,7 +312,7 @@ CREATE TABLE edit_log (edit_id TEXT PRIMARY KEY,
     table_name TEXT, row_id TEXT, column TEXT, old_value TEXT, new_value TEXT,
     edit_kind TEXT, edited_by TEXT, edited_at TEXT);
 
--- Findings are VIEWS, never merges (schema §Silent-loss inventory).
+-- Findings are VIEWS, never merges (the silent-loss guards).
 CREATE VIEW duplicate_sources AS
     SELECT fingerprint_sha256, COUNT(*) AS copies,
            GROUP_CONCAT(input_file_path, ' | ') AS files
@@ -347,7 +345,7 @@ class Builder:
     ingest write order: run -> source -> raw_record -> activity(+link) -> entity +
     expressions + components -> assertion -> integrations -> analysis. No
     ``INSERT OR IGNORE`` anywhere: a UNIQUE violation here would be a derivation bug and
-    must raise (schema §Ingestion write order).
+    must raise (the ingestion write order).
     """
 
     def __init__(self, cx: sqlite3.Connection, case_id: str, run_id: str):
@@ -358,7 +356,7 @@ class Builder:
 
     # ---- Layer 0 ---------------------------------------------------------
     def preset(self, key: str, name: str, version: str) -> str:
-        # Content-keyed (D27): a preset's definition IS its identity. D40 adds a
+        # Content-keyed: a preset's definition IS its identity. The definition digest adds a
         # definition_digest beside the version to catch un-bumped edits; the real
         # pipeline hashes the canonical preset YAML — the demo hashes a stub.
         pid = u5("preset", key, version)
@@ -368,7 +366,7 @@ class Builder:
                            sort_keys=True).encode()).hexdigest()
             self.cx.execute("INSERT INTO preset VALUES (?,?,?,?,?)",
                             (pid, key, name, version, dd))
-            # D39: the run records every preset selected for it.
+            # the run records every preset selected for it.
             self.cx.execute("INSERT INTO run_preset VALUES (?,?,?)",
                             (u5("run_preset", self.run_id, pid), self.run_id, pid))
             self._presets[(key, version)] = pid
@@ -376,7 +374,7 @@ class Builder:
 
     def source(self, path, inner, data_source, fmt, subunit, fp, exhibit=None,
                tier="primary", siblings=None):
-        # id from PATHS, never the fingerprint (§2c fix): two byte-identical exhibits
+        # id from PATHS, never the fingerprint: two byte-identical exhibits
         # stay two sources whose matching hash is a finding, not a merge.
         sid = u5("source", path, inner, subunit)
         self.cx.execute("INSERT INTO source VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -385,7 +383,7 @@ class Builder:
         return sid
 
     def archive(self, path, cd_sha256, skipped=0):
-        # D38: id from the path only (2c - a content hash is never a key); the
+        # id from the path only (a content hash is never a key); the
         # run link is a row in run_archive (one run, many archives; one archive,
         # many runs), so every encounter - including an opt-in skip - is recorded.
         aid = u5("archive", path)
@@ -407,7 +405,7 @@ class Builder:
         aid = u5("activity", rrid, ordinal)
         self.cx.execute("INSERT INTO activity VALUES (?,?,?)",
             (aid, kind, None if context is None else canonical_json(context)))
-        # exactly one link per activity at ingest — its own record (D26/R7 invariant).
+        # exactly one link per activity at ingest — its own record.
         self.cx.execute("INSERT INTO activity_record VALUES (?,?,?)",
             (u5("actrec", aid, rrid), aid, rrid))
         return aid, context
@@ -417,7 +415,7 @@ class Builder:
         eid = u5("entity", rrid, ordinal, identifier, id_type, etype)
         concerns_uid = None
         if concerns is not None:
-            # D22: case-folded/stemmed digest so "A. Moreau"/"moreau a." group together,
+            # case-folded/stemmed digest so "A. Moreau"/"moreau a." group together,
             # derived, never a key, excluded from the evidence digests.
             folded = " ".join(sorted(concerns.lower().replace(".", " ").split()))
             concerns_uid = sha256_hex(folded)[:16]
@@ -449,7 +447,7 @@ class Builder:
                  metrics.get("vertical_speed_accuracy_kmh"),
                  metrics.get("heading_deg"), metrics.get("heading_accuracy_deg"),
                  metrics.get("beam_azimuth_deg"), metrics.get("beam_width_deg")))
-            # D31: one S2 leaf cell per point, indexed (non-unique s2_cell_id).
+            # one S2 leaf cell per point, indexed (non-unique s2_cell_id).
             self.cx.execute("INSERT INTO spatial_index VALUES (?,?,?,?)",
                 (u5("s2", si), si, s2_signed_leaf(lat, lon), S2_LEAF_LEVEL))
         # ordinal ordering matters for the L1 projection, so hand it back ready-sorted.
@@ -493,7 +491,7 @@ class Builder:
         l1 = l1_projection(entity=entity_l1, spatial=spatial_l1, temporal=temporal_l1,
                            links=links, deleted=deleted, multiplicity=multiplicity,
                            activity=activity_l1)
-        # claim_digest (R5) = the L1 projection ALONE — preset/file-independent, so two
+        # claim_digest = the L1 projection ALONE — preset/file-independent, so two
         # presets extracting the same claim converge and surface as possible-same-evidence.
         claim_digest = sha256_hex(l1)
         fp, line_no = self.cx.execute(
@@ -501,7 +499,7 @@ class Builder:
             "JOIN source s ON s.source_id=r.source_id WHERE r.raw_record_id=?",
             (rrid,)).fetchone()
         # content_hash = fingerprint ⟂ preset key ⟂ line_no ⟂ output_ordinal ⟂ L1 —
-        # the digest scoped to THIS preset's reading of THIS file (D27); no paths, so
+        # the digest scoped to THIS preset's reading of THIS file; no paths, so
         # folder==zip parity holds.
         content_hash = sha256_hex(SEP.join(
             [_txt(fp), preset_key, str(line_no), str(ordinal), l1]))
@@ -541,7 +539,7 @@ def build() -> sqlite3.Connection:
     cx = sqlite3.connect(DB)
     cx.executescript(DDL)
 
-    # case + run: the only uuid4 rows (D28/D10); everything downstream is uuid5.
+    # case + run: the only uuid4 rows; everything downstream is uuid5.
     case_id = str(uuid.uuid4())
     run_id = str(uuid.uuid4())
     cx.execute("INSERT INTO case_metadata VALUES (?,?,?,?,?)",
@@ -555,7 +553,7 @@ def build() -> sqlite3.Connection:
 
     b = Builder(cx, case_id, run_id)
 
-    # Presets (D27 — companion table; one per reading applied in this run).
+    # Presets (companion table; one per reading applied in this run).
     p_cache = b.preset("ios_cache", "iOS location cache", "1.0")
     p_visit = b.preset("ios_visits", "iOS visits", "1.0")
     p_cdr = b.preset("cdr_generic", "Generic CDR", "1.0")
@@ -615,7 +613,7 @@ def build() -> sqlite3.Connection:
          ("longitude_wgs84", None, "ZLON", "6.129000")],
         "passthrough_wgs84/1.0+unit_convert/1.0", HOME[0], HOME[1],
         horizontal_accuracy_m=40.0)
-    # Each bound carries its OWN role (D25): lower=check_in, upper=check_out. An epoch is
+    # Each bound carries its OWN role: lower=check_in, upper=check_out. An epoch is
     # absolute UTC — the source states no zone, so stated_offset is None ('(none)').
     tx = b.temporal(rr, 0, "interval", "apple_cfabsolute", "internal_clock",
         [("lower", "check_in", None, "ZENTRYDATE", "763689600"),
@@ -630,7 +628,7 @@ def build() -> sqlite3.Connection:
             preset_id, preset_key, azimuth=120, beam_width=65):
         rr = b.record(sid, line, {"a_party": a_msisdn, "b_party": b_msisdn,
             "imei": imei, "start": start_iso[:-3], "duration": str(dur), "cell": cell})
-        # D18: the callee + the caller's own IMEI are activity context, NOT parties —
+        # the callee + the caller's own IMEI are activity context, NOT parties —
         # they live in context_json (inside the L1 projection), no assertion_mention.
         act = b.activity(rr, "call",
             {"callee": b_msisdn.replace(" ", ""), "caller_imei": imei})
@@ -692,7 +690,7 @@ def build() -> sqlite3.Connection:
         "2026-03-14 02:20:31+01", 187, "228-01-2042-77341", CELL_A, p_cdr, "cdr_generic")
 
     # ---- ANPR: three reads of the suspect's plate ------------------------
-    # The camera IS the spatial expression (D18): its id is the cell_ref/asset_ref
+    # The camera IS the spatial expression: its id is the cell_ref/asset_ref
     # component — no detector mention row exists any more.
     sid = b.source("/case/anpr_export.csv", None, None, "csv", None,
                    "fp-anpr-44dd", "REQ-90")
@@ -732,9 +730,9 @@ def build() -> sqlite3.Connection:
         "subject", "at", "recorded_at", "continuous_during_interval", label="CCTV")
 
     # ---- robbery in the police register ----------------------------------
-    # D36: the event IS the entity (identifier == concerns, identifier_type=case_ref);
+    # the event IS the entity (identifier == concerns, identifier_type=case_ref);
     # the victim and the offence stay verbatim in raw_json -> orig_. No activity row:
-    # a single placement has nothing to group (D35 - activity is a grouping bonus).
+    # a single placement has nothing to group (activity is a grouping bonus).
     sid = b.source("/case/police_register.csv", None, None, "csv", None,
                    "fp-pol-66ff", "REQ-92", tier="secondary")
     rr = b.record(sid, 1, {"case": "GE-2026-04412", "offense": "robbery",
@@ -759,7 +757,7 @@ def build() -> sqlite3.Connection:
                    "fp-wit-7700", "REQ-93", tier="secondary")
     rr = b.record(sid, 1, {"witness": "Marie Dupont",
         "statement": "J'ai vu l'homme pres de la gare vers midi le 14 mars"})
-    # concerns = the reporter (Marie Dupont), fixed at parsing (D17 absorbs linked_entity).
+    # concerns = the reporter (Marie Dupont), fixed at parsing (concerns absorbs the linked entity).
     ent = b.entity(rr, 0, None, "l'homme", "none", "person",
                    concerns="Marie Dupont", concerns_origin="preset_mapped")
     sx = b.spatial(rr, 0, "place_name", "manual",
@@ -791,7 +789,7 @@ def build() -> sqlite3.Connection:
         [("lower", "start", None, "ts", "1773450680")],   # epoch: no stated zone
         "epoch_unix_s/1.0", 1773450680_000_000, 1773450680_000_000,
         off_lower="N/A", off_upper="N/A")
-    # deleted = the APP's own flag (R11) — a different fact from raw_record.recovery_state.
+    # deleted = the APP's own flag — a different fact from raw_record.recovery_state.
     b.assertion(rr, p_im, "im_generic", 0, ent, sx, tx, act,
         "sender", "references", "event_at", "instant",
         deleted="deleted", label="chat pin")
@@ -819,7 +817,7 @@ def build() -> sqlite3.Connection:
 
     # ---- an explicit alibi: NEVER_DURING_INTERVAL (negated presence) -----
     # WHY: gives presence queries something to EXCLUDE — the suspect's phone was NOT at
-    # home during the robbery window (a negated claim; the graph layer is deferred, D16).
+    # home during the robbery window (a negated claim; the graph layer is deferred).
     sid = b.source("/case/alibi_statement.csv", None, None, "csv", None,
                    "fp-alibi-bb44", "REQ-94", tier="secondary")
     rr = b.record(sid, 1, {"subject": "+41791234567", "place": "Home",
@@ -838,9 +836,9 @@ def build() -> sqlite3.Connection:
         "subject", "claimed_at", "never_during_interval", "continuous_during_interval",
         label="alibi")
 
-    # ---- one edit_log row (D34/D41): an analyst corrected a geocode in place --
+    # ---- one edit_log row: an analyst corrected a geocode in place --
     # Integration rows MAY update in place; the change is audited, evidence untouched.
-    # D41: the ordinal makes the journal totally ordered, so replaying inverses in
+    # the ordinal makes the journal totally ordered, so replaying inverses in
     # reverse ordinal order rewinds the DB to any earlier state.
     cx.execute("INSERT INTO edit_log VALUES (?,?,?,?,?,?,?,?,?,?)",
         (str(uuid.uuid4()), 1, "spatial_integration", "(demo)", "latitude_wgs84",
@@ -854,9 +852,9 @@ def build() -> sqlite3.Connection:
 # Demonstration queries — the Q1..Q10 story, new projection columns           #
 # --------------------------------------------------------------------------- #
 
-# The flat projection (csv_migration.md contract): one line per assertion. locates is
-# DERIVED from entity_position_link (D11), never stored. Context columns come from
-# activity.context_json (D18). datetime_iso columns are D32 local offset-tagged strings.
+# The flat projection (the flat CSV column contract): one line per assertion. locates is
+# DERIVED from entity_position_link, never stored. Context columns come from
+# activity.context_json. datetime_iso columns are local offset-tagged strings.
 FLAT = """
 SELECT substr(a.assertion_id,1,8) AS row_uid,
   e.identifier AS entity, e.raw_identifier, e.identifier_type, e.type AS entity_type,
@@ -917,7 +915,7 @@ ORDER BY row_uid"""),
   "copies, files FROM possible_same_evidence ORDER BY finding, digest"),
 
  ("Q6 - Convergence by normalized identifier: every mention of +41791234567, with its "
-  "VERBATIM raw_identifier surfaced (D17/D21 — same working id, different source text)",
+  "VERBATIM raw_identifier surfaced (same working id, different source text)",
   """SELECT e.identifier, e.raw_identifier, e.identifier_type, e.type,
      a.entity_role, a.source_label
 FROM assertion a JOIN entity e ON e.entity_id=a.entity_id
@@ -953,7 +951,7 @@ JOIN source s ON s.source_id=r.source_id
 WHERE sc.raw_value='228-01-2042-77341'
   AND s.input_file_path LIKE '%operatorA_cdr.csv'"""),
 
- ("Q9 - The two per-bound temporal projections (D32): stated offset (L1) vs applied "
+ ("Q9 - The two per-bound temporal projections: stated offset (L1) vs applied "
   "offset + local datetime_iso (L2), plus the ` N/A` assumed-UTC sentinel",
   """SELECT a.source_label, tc.part, tc.temporal_role, tc.stated_offset,
      ti.utc_offset_hours_lower AS applied_lower, ti.utc_offset_hours_upper AS applied_upper,

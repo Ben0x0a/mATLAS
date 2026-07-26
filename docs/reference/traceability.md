@@ -16,9 +16,9 @@ sidecar — it does not abort the run.
 
 ## The run database is the full record
 
-Since the relational core (see [relational_model.md](relational_model.md)), the complete,
-queryable record of a run is the **run database** — the in-memory SQLite store projected to
-the flat CSV via the `assertion_flat` view. Selecting the `sqlite` export persists it to
+The complete, queryable record of a run is the **run database** (see
+[../model/schema.md](../model/schema.md)) — the SQLite store projected to the flat CSV via the
+`assertion_flat` view. Selecting the `sqlite` export persists it to
 `<base>.matlas.sqlite`: every relational table (`run`, `source`, `record`, `entity`,
 `position`, `timespan`, `assertion`) plus the `assertion_flat` view, so an examiner can query
 what the flat CSV cannot answer. Row-level provenance lives there, once per source/record,

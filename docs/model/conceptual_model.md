@@ -1,13 +1,10 @@
 # Conceptual model — what mATLAS records
 
-Status: **settled at the conceptual level (2026-07-11)**, before implementation. This
-document describes the world-model; it deliberately contains no tables, no SQL, no ids.
-The implementation mapping (SQLite schema, id scheme) lives in
-[run_db_schema.md](run_db_schema.md) and must justify itself
-against this document. The identity discipline it must follow is
-[identity_model.md](identity_model.md). The entity corner is elaborated in
-[entity_model.md](entity_model.md); the 2026-07-11 review record is
-[model_review_findings.md](model_review_findings.md).
+This document describes the world-model; it deliberately contains no tables, no SQL, no ids.
+The implementation mapping (SQLite schema, id scheme) lives in [schema.md](schema.md) and
+follows this document. The identity discipline it obeys is
+[identity_model.md](identity_model.md); the entity corner is elaborated in
+[entity_model.md](entity_model.md).
 
 ## The model in one sentence
 
@@ -47,7 +44,7 @@ A **claim** is extracted from exactly one record. It carries:
   itself), `infrastructure` (antenna, ANPR camera, merchant terminal — the subject was
   *near* it), or `referenced` (a shared map pin — nobody was necessarily there).
   `locates` is *derived* from the entity–position link, never stored, so the two can
-  never contradict (run_db_schema.md, decision 11).
+  never contradict (schema.md).
 - **A time, as expressed.** A **temporal expression**: the raw value(s), the stated
   calendar/offset (or the fact that none was stated), the granularity, and whether it
   is an instant, an interval, or an open bound.
@@ -58,7 +55,7 @@ A **claim** is extracted from exactly one record. It carries:
   the qualifier is not a separate column — the epistemic and confidence weight is
   carried inside the link vocabularies themselves (`CLAIMED_AT`, `REPORTED_FOR`,
   `NEVER_DURING_INTERVAL`, …), completed as new source types require
-  (run_db_schema.md decisions 6 and 13).*
+  (see schema.md).*
 
 ### Layer 2 — Interpretation (derived, attached, re-runnable)
 
@@ -110,7 +107,7 @@ table has that property*: even entity deduplication is an explicit interpretatio
 
 ## The flattening rule (relational → CSV)
 
-**A line is a placement** (run_db_schema.md decisions 14 and 18): a party earns its
+**A line is a placement** (see schema.md): a party earns its
 own line only when the record gives it its own placement; every other party the
 record names attaches to an existing line as a *context mention* and appears as a
 column, never a row.
@@ -125,14 +122,14 @@ column, never a row.
   promises no automatic pairing;
 - an ANPR read / witness statement / police register entry → one line (the detector
   and the reporter are context; a register's event reference IS the entity itself —
-  type `event`, identifier == concerns, decision 36);
+  type `event`, identifier == concerns);
 - a claim with no placement at all (a login) → a line without coordinates, never
   dropped.
 
 Each line carries its role, its facets, its counterpart(s), its activity, and its
 record reference, so the fan-out no longer destroys the event structure — and the
 line count equals the placement count, which is the grain an examiner exploits.
-The activity is a grouping bonus only (decision 35): anything exploitable
+The activity is a grouping bonus only): anything exploitable
 spatio-temporally lives in the entity, the links and the roles, never only in the
 activity — a leg's counterpart is the other assertion sharing its `activity_id`.
 
@@ -157,7 +154,7 @@ activity — a leg's counterpart is the other assertion sharing its `activity_id
 2. **WGS84 latitude/longitude** is the chosen geometry form for all spatial kinds.
 3. **UTC microseconds** is the chosen temporal position form.
 4. Closed vocabularies (expression kinds, roles, locates, epistemic qualifiers) are
-   enumerated at implementation in `families.py`, which stays the single declaration.
+   enumerated at implementation in `core/vocabularies.py`, which stays the single declaration.
 5. **Negative claims** are representable (`negated`) but no v1 source produces them.
 6. **Event grouping** is defined now, populated when a multi-leg source (CDR) ships.
 7. **Identity resolution** ships with one cheap deterministic method (identifier-kind
