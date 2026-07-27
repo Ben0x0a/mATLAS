@@ -797,7 +797,13 @@ class TimespanIntegration:
     # UTC_OFFSET_UNKNOWN (a naive timestamp materialised by ASSUMING UTC).
     utc_offset_hours_lower: float | str | None = None
     utc_offset_hours_upper: float | str | None = None
-    time_accuracy_us: int | None = None      # whole microseconds -> INTEGER column
+    # Per-bound timing uncertainty (whole µs -> INTEGER columns), split like the offsets
+    # above: each bound is an independent reading with its own precision (a start known to
+    # the second, an end only to the day). A source-stated value (preset-mapped) wins; the
+    # integration Method's own accuracy claim is the fallback. None when neither is present
+    # — never invented from a clock's display resolution.
+    lower_accuracy_us: int | None = None
+    upper_accuracy_us: int | None = None
 
 
 @dataclass(frozen=True)
@@ -858,7 +864,8 @@ _FLOAT_COLUMNS: frozenset[str] = frozenset({
     "horizontal_speed_accuracy_kmh", "vertical_speed_accuracy_kmh",
     "heading_deg", "heading_accuracy_deg", "beam_azimuth_deg", "beam_width_deg",
 })
-_INT_COLUMNS: frozenset[str] = frozenset({"time_accuracy_us", "record_rank"})
+_INT_COLUMNS: frozenset[str] = frozenset({
+    "lower_accuracy_us", "upper_accuracy_us", "record_rank"})
 
 
 def column_cast(column: str) -> type | None:

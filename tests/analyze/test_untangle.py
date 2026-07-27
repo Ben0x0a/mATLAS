@@ -114,7 +114,9 @@ def _write_spec(store: RunStore, *, source_id: str, preset_id: str, preset_key: 
             lower_unix_utc_us=spec.get("time_lower_unix_utc_us"),
             upper_unix_utc_us=spec.get("time_upper_unix_utc_us"),
             utc_offset_hours_lower=spec.get("utc_offset_hours"),
-            time_accuracy_us=spec.get("time_accuracy_us")))
+            # the spec's single accuracy feeds the lower bound; untangle COALESCEs the two
+            # per-bound columns back into the one completeness bit the old column carried.
+            lower_accuracy_us=spec.get("time_accuracy_us")))
 
     sx_id = None
     if "latitude_wgs84" in spec:

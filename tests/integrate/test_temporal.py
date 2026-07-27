@@ -268,9 +268,9 @@ def test_unix_scale_decodes_and_leaves_accuracy_unset(store) -> None:
     ms_row, us_row = _row(store, ms), _row(store, us)
     assert ms_row["lower_unix_utc_us"] == 1_773_450_680_123_000
     assert us_row["lower_unix_utc_us"] == 1_773_450_680_123_456
-    # Accuracy is NOT the clock's resolution: an epoch decode invents none (source-provided).
-    assert ms_row["time_accuracy_us"] is None
-    assert us_row["time_accuracy_us"] is None
+    # Accuracy is NOT the clock's resolution: an epoch decode invents none (source-stated).
+    assert ms_row["lower_accuracy_us"] is None and ms_row["upper_accuracy_us"] is None
+    assert us_row["lower_accuracy_us"] is None and us_row["upper_accuracy_us"] is None
     # A pass-through is a method too: the µs rule still stamps itself.
     assert us_row["method"] == "epoch_unix_us/1.0"
 
@@ -311,7 +311,50 @@ def test_datetime_combine_date_only_decodes_at_midnight_without_inventing_accura
     assert row["lower_unix_utc_us"] == _us(2026, 3, 13, 23, 0, 0)   # local midnight
     # A bare date decodes at midnight but claims NO accuracy (day-granularity is
     # representation, not a stated uncertainty).
-    assert row["time_accuracy_us"] is None
+    assert row["lower_accuracy_us"] is None and row["upper_accuracy_us"] is None
+
+
+# --- source-stated per-bound accuracy (T97 plumbing) ---------------------------
+
+def test_source_stated_accuracy_reaches_each_bound_column_verbatim(store) -> None:
+    # A preset that maps a per-bound accuracy lands it as a `<side>_accuracy` component;
+    # integrate reads it VERBATIM into the matching L2 column, independently per bound.
+    bundle = _bundle(store, "acc", "interval", "unix_epoch_s", [
+        ("lower", None, "1773450680"),
+        ("upper", None, "1773454280"),
+        ("lower_accuracy", None, "1000000"),        # source states ±1 s on the start
+        ("upper_accuracy", None, "86400000000"),    # ±1 day on the end
+    ])
+    integrate_expression(store, bundle, epoch_methods())
+    row = _row(store, bundle)
+    assert row["lower_accuracy_us"] == 1_000_000
+    assert row["upper_accuracy_us"] == 86_400_000_000
+
+
+def test_instant_accuracy_carries_onto_the_degenerate_upper_bound(store) -> None:
+    # An instant is one reading: its lower accuracy carries onto the collapsed upper bound.
+    bundle = _bundle(store, "acc-inst", "instant", "unix_epoch_s", [
+        ("lower", None, "1773450680"),
+        ("lower_accuracy", None, "500000"),
+    ])
+    integrate_expression(store, bundle, epoch_methods())
+    row = _row(store, bundle)
+    assert row["lower_accuracy_us"] == 500_000
+    assert row["upper_accuracy_us"] == 500_000
+
+
+def test_source_stated_accuracy_overrides_the_method_level_claim(store) -> None:
+    # A Method may carry its OWN accuracy claim (a fuzzy-time reader); a source-stated
+    # per-bound value is stronger evidence and wins.
+    bundle = _bundle(store, "acc-ovr", "instant", "local_string", [
+        ("lower", None, "2026-03-14T12:00:00+01:00"),
+        ("lower_accuracy", None, "250000"),
+    ])
+    method = AssumeUtcMethod()
+    method.time_accuracy_us = 3_600_000_000          # the method's fallback (±1 h)
+    integrate_expression(store, bundle, [method])
+    row = _row(store, bundle)
+    assert row["lower_accuracy_us"] == 250_000       # the source-stated value wins
 
 
 # --- D32 cells + identity + dispatch --------------------------------------------

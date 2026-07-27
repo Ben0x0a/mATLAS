@@ -39,7 +39,7 @@ _EXPECTED_CANONICAL = (
     "time_lower_raw", "time_lower_source_field", "time_lower_unix_utc_us",
     "time_upper_raw", "time_upper_source_field", "time_upper_unix_utc_us",
     "utc_offset_hours_lower", "utc_offset_hours_upper",   # F2: the old single column, split
-    "time_accuracy_us", "temporal_source",
+    "lower_accuracy_us", "upper_accuracy_us", "temporal_source",
     "latitude_wgs84", "latitude_source_field",
     "longitude_wgs84", "longitude_source_field",
     "altitude_m",
@@ -137,10 +137,11 @@ def test_positionless_assertion_kept_with_empty_coordinates(frame: pd.DataFrame)
 def test_numeric_columns_are_numeric_dtypes(frame: pd.DataFrame) -> None:
     assert pd.api.types.is_float_dtype(frame["latitude_wgs84"])
     assert pd.api.types.is_float_dtype(frame["beam_azimuth_deg"])
-    # The numeric-union TEXT column re-coerces where all values parse as numbers…
-    assert pd.api.types.is_numeric_dtype(frame["time_accuracy_us"])
-    # …and the INTEGER columns are nullable Int64 (exact — no float64 detour).
+    # The INTEGER columns are nullable Int64 (exact — no float64 detour); the per-bound
+    # accuracies are clean whole-µs integers, not the numeric-union TEXT the offsets are.
     assert str(frame["time_lower_unix_utc_us"].dtype) == "Int64"
+    assert str(frame["lower_accuracy_us"].dtype) == "Int64"
+    assert str(frame["upper_accuracy_us"].dtype) == "Int64"
     assert str(frame["s2_cell_id"].dtype) == "Int64"
     assert pd.api.types.is_numeric_dtype(frame["record_rank"])
     # The applied offsets carry the "N/A" assumed-UTC sentinel in the demo, so they must

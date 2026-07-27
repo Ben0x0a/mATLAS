@@ -300,7 +300,8 @@ CREATE TABLE timespan_integration (timespan_integration_id TEXT PRIMARY KEY,
     lower_unix_utc_us INTEGER, upper_unix_utc_us INTEGER,
     lower_datetime_iso TEXT, upper_datetime_iso TEXT,
     lower_date INTEGER, upper_date INTEGER, lower_time INTEGER, upper_time INTEGER,
-    utc_offset_hours_lower TEXT, utc_offset_hours_upper TEXT, time_accuracy_us INTEGER);
+    utc_offset_hours_lower TEXT, utc_offset_hours_upper TEXT,
+    lower_accuracy_us INTEGER, upper_accuracy_us INTEGER);
 
 -- Layer 3 ------------------------------------------------------------------
 CREATE TABLE analysis (analysis_id TEXT PRIMARY KEY,
@@ -456,7 +457,7 @@ class Builder:
 
     def temporal(self, rrid, ordinal, kind, referential, temporal_source, components,
                  method, lower_us, upper_us, off_lower=None, off_upper=None,
-                 time_accuracy_us=None):
+                 lower_accuracy_us=None, upper_accuracy_us=None):
         """components: list of (part, temporal_role, stated_offset, source_field, raw)."""
         tx = u5("tx", rrid, ordinal)
         self.cx.execute("INSERT INTO temporal_expression VALUES (?,?,?,?)",
@@ -470,10 +471,11 @@ class Builder:
         lo_iso, lo_date, lo_time = local_projection(lower_us, off_lower)
         up_iso, up_date, up_time = local_projection(upper_us, off_upper)
         self.cx.execute("INSERT INTO timespan_integration VALUES "
-                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (u5("ti", tx, method), tx, method, lower_us, upper_us,
              lo_iso, up_iso, lo_date, up_date, lo_time, up_time,
-             _off_text(off_lower), _off_text(off_upper), time_accuracy_us))
+             _off_text(off_lower), _off_text(off_upper),
+             lower_accuracy_us, upper_accuracy_us))
         return tx, {"kind": kind, "referential": referential, "components": comp_dicts}
 
     def assertion(self, rrid, preset_id, preset_key, ordinal, entity_pair,
@@ -768,7 +770,9 @@ def build() -> sqlite3.Connection:
          ("upper", "end", "+01:00", "statement", "vers midi le 14 mars")],
         "fuzzy_time/1.0", us_from_iso("2026-03-14 11:00:00+01"),
         us_from_iso("2026-03-14 13:00:00+01"), off_lower=1.0, off_upper=1.0,
-        time_accuracy_us=3600_000_000)
+        # the fuzzy_time reader assigns ±1 h to EACH bound of "vers midi" — a METHOD-level
+        # accuracy claim (no L1 component), so it lands per bound only at L2.
+        lower_accuracy_us=3600_000_000, upper_accuracy_us=3600_000_000)
     b.assertion(rr, p_audit, "audition", 0, ent, sx, tx, None,
         "reporter", "claimed_at", "reported_for", "continuous_during_interval",
         label="audition")

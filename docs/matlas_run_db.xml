@@ -238,7 +238,8 @@
   <row name="upper_time" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
   <row name="utc_offset_hours_lower" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>the APPLIED offset: float, 'N/A' assumed-UTC sentinel, or NULL</comment></row>
   <row name="utc_offset_hours_upper" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>applied to the upper bound; may differ across DST</comment></row>
-  <row name="time_accuracy_us" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
+  <row name="lower_accuracy_us" null="1" autoincrement="0"><datatype>INTEGER</datatype><comment>per-bound timing uncertainty (µs): source-stated or the Method's claim</comment></row>
+  <row name="upper_accuracy_us" null="1" autoincrement="0"><datatype>INTEGER</datatype><comment>applied to the upper bound; independent of the lower</comment></row>
   <row name="method" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>tz rule / epoch decode / assumed-UTC, with version</comment></row>
   <key type="PRIMARY" name=""><part>id</part></key>
   <key type="UNIQUE" name="uq_timespan_integration"><part>id_temporal_expression</part></key>

@@ -40,7 +40,8 @@ settled home (the csv_migration.md mapping):
 - ``entity``                    -> ``entity.identifier`` (the flat contract's entity column);
 - ``linked_entity``             -> ``entity.concerns``;
 - ``time_*_raw`` / ``_source_field`` -> the ``lower``/``upper`` temporal components;
-- ``time_*_unix_utc_us`` / ``time_accuracy_us`` -> ``timespan_integration``;
+- ``time_*_unix_utc_us`` -> ``timespan_integration``; ``time_accuracy_us`` -> COALESCE of
+  the two split per-bound ``*_accuracy_us`` columns (the completeness bit the old column had);
 - ``utc_offset_hours``          -> COALESCE of the two split D32 applied offsets
   (the old single column existed once per row; either bound's applied offset marks
   the same "an offset is known" completeness bit the old column carried);
@@ -121,7 +122,10 @@ _ASSERTION_FRAME_SELECT: tuple[tuple[str, str], ...] = (
     # "an offset is known" completeness bit the old single column did.
     ("utc_offset_hours",
      "COALESCE(ti.utc_offset_hours_lower, ti.utc_offset_hours_upper)"),
-    ("time_accuracy_us", "ti.time_accuracy_us"),
+    # The schema splits the timing uncertainty per bound; the ranking only needs the
+    # "an accuracy is stated" completeness bit, so COALESCE the two into the one signal the
+    # old flat model carried (the same shape as the utc_offset COALESCE just above).
+    ("time_accuracy_us", "COALESCE(ti.lower_accuracy_us, ti.upper_accuracy_us)"),
     ("temporal_source", "tx.temporal_source"),
     ("latitude_wgs84", "si.latitude_wgs84"),
     ("longitude_wgs84", "si.longitude_wgs84"),

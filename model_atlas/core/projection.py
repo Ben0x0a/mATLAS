@@ -118,7 +118,8 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("time_upper_unix_utc_us", "ti.upper_unix_utc_us"),
     ("utc_offset_hours_lower", "ti.utc_offset_hours_lower"),
     ("utc_offset_hours_upper", "ti.utc_offset_hours_upper"),
-    ("time_accuracy_us", "ti.time_accuracy_us"),
+    ("lower_accuracy_us", "ti.lower_accuracy_us"),
+    ("upper_accuracy_us", "ti.upper_accuracy_us"),
     ("temporal_source", "tx.temporal_source"),
     ("latitude_wgs84", "si.latitude_wgs84"),
     ("latitude_source_field", _spatial_part("latitude_wgs84", "source_field")),
@@ -194,7 +195,7 @@ CANONICAL_COLUMNS: tuple[str, ...] = tuple(name for name, _ in _CANONICAL_SELECT
 # present, in which case the column stays text (quoted), keeping "value, zone unknown"
 # visibly distinct from a real offset.
 _NUMERIC_TEXT_COLUMNS: tuple[str, ...] = (
-    "utc_offset_hours_lower", "utc_offset_hours_upper", "time_accuracy_us",
+    "utc_offset_hours_lower", "utc_offset_hours_upper",
 )
 
 # INTEGER-typed projection columns that may carry NULLs (a corner-less assertion). Read
@@ -205,6 +206,7 @@ _NUMERIC_TEXT_COLUMNS: tuple[str, ...] = (
 _INTEGER_COLUMNS: tuple[str, ...] = (
     "time_lower_unix_utc_us", "time_upper_unix_utc_us",
     "time_lower_date", "time_upper_date", "time_lower_time", "time_upper_time",
+    "lower_accuracy_us", "upper_accuracy_us",
     "record_rank", "s2_cell_id",
 )
 

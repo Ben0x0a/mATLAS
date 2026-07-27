@@ -81,13 +81,15 @@ CONTEXT_FIELD_PREFIX = "context."
 ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
     # entity
     "entity", "entity_type", "linked_entity", "entity_role", "identifier_type",
-    # temporal (assignable subset). NOTE: time_accuracy_us is NOT here yet — it is a
-    # source-provided uncertainty (like spatial accuracy) but has no L1->L2 path to
-    # timespan_integration yet (a mapping would silently drop), so it is withheld until
-    # that plumbing lands rather than offered as a dead target.
+    # temporal (assignable subset). time_accuracy_us_lower / _upper are the source-stated
+    # per-bound timing uncertainties (µs) — the temporal analogue of the spatial corner's
+    # accuracy, split per bound like temporal_role_lower/_upper: ingest.assemble writes each
+    # as a verbatim `<side>_accuracy` component and integrate.temporal reads it through to
+    # timespan_integration.<side>_accuracy_us, None when unmapped (never invented).
     "utc_offset_hours", "temporal_source", "temporal_referential",
     "temporal_role_lower", "temporal_role_upper",
     "temporal_part_lower", "temporal_part_upper",
+    "time_accuracy_us_lower", "time_accuracy_us_upper",
     # spatial
     "latitude_wgs84", "longitude_wgs84", "altitude_m", "position_type", "raw_position",
     "position_source", "horizontal_accuracy_m", "vertical_accuracy_m",

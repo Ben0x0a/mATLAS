@@ -28,7 +28,8 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | time_upper_source_field | → | temporal_component(part=upper).source_field | |
 | time_upper_unix_utc_us | = | timespan_integration.upper_unix_utc_us | |
 | utc_offset_hours | ⇄ | timespan_integration.utc_offset_hours_lower / _upper | applied offset **per bound**; stated offset lives at L1 (temporal_component.stated_offset) |
-| time_accuracy_us | = | timespan_integration.time_accuracy_us | |
+| lower_accuracy_us | = | timespan_integration.lower_accuracy_us | per-bound timing uncertainty (µs) |
+| upper_accuracy_us | = | timespan_integration.upper_accuracy_us | |
 | temporal_source | = | temporal_expression.temporal_source | clock mechanism |
 | latitude_wgs84 | = | spatial_integration.latitude_wgs84 | |
 | latitude_source_field | → | spatial_component(part=latitude_wgs84).source_field | |

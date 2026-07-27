@@ -220,7 +220,8 @@ CREATE TABLE timespan_integration (
     upper_time INTEGER,
     utc_offset_hours_lower TEXT,
     utc_offset_hours_upper TEXT,
-    time_accuracy_us INTEGER
+    lower_accuracy_us INTEGER,
+    upper_accuracy_us INTEGER
 );
 
 CREATE TABLE analysis (

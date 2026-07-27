@@ -181,7 +181,7 @@ repo's existing unit-suffix habit:
 | `_sha256` | a named hash algorithm over file bytes | `fingerprint_sha256` |
 | `_at` | ISO-8601 UTC instant | `started_at` |
 | `_count` | a cardinality | `record_count` |
-| `_us` / `_m` / `_kmh` / `_deg` | the unit the number is in | `time_accuracy_us` |
+| `_us` / `_m` / `_kmh` / `_deg` | the unit the number is in | `lower_accuracy_us` |
 | `_source_field` | which source column a value came from | `latitude_source_field` |
 
 A reader who sees `entity_id` knows it is opaque and joins somewhere. A reader who sees
@@ -219,7 +219,8 @@ retired as an oracle at this point; the parity that remains meaningful is that t
 evidence read from a folder or a zip yields the same `content_uid`, which the folder==zip
 test now asserts directly.
 
-`utc_offset_hours` and `time_accuracy_us` remain `TEXT`: the first legitimately holds a
-float, `NULL`, or the `"N/A"` sentinel (`UTC_OFFSET_UNKNOWN`); the second is an `int | float`
-union. Both are re-coerced to a numeric dtype in the frame builder so CSV rendering is
-unchanged.
+`utc_offset_hours_lower` / `_upper` remain `TEXT`: each legitimately holds a float, `NULL`,
+or the `"N/A"` sentinel (`UTC_OFFSET_UNKNOWN`), and is re-coerced to a numeric dtype in the
+frame builder (unless the sentinel is present) so CSV rendering is unchanged. The per-bound
+`lower_accuracy_us` / `upper_accuracy_us` are plain `INTEGER` (whole µs), read back as
+nullable `Int64`.

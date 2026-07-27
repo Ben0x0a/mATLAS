@@ -134,6 +134,15 @@ TEMPORAL_ROLE_LOWER_NAME = "temporal_role_lower"
 TEMPORAL_ROLE_UPPER_NAME = "temporal_role_upper"
 TEMPORAL_PART_LOWER_NAME = "temporal_part_lower"
 TEMPORAL_PART_UPPER_NAME = "temporal_part_upper"
+# Source-stated per-bound timing uncertainty (µs). Written as an OPTIONAL verbatim
+# component ``lower_accuracy`` / ``upper_accuracy`` (the side + suffix below) — the suffix
+# MUST match ``integrate.temporal._ACCURACY_SUFFIX_NAME``, the read side (string agreement,
+# like the ``_date`` / ``_time`` split parts).
+TIME_ACCURACY_US_LOWER_NAME = "time_accuracy_us_lower"
+TIME_ACCURACY_US_UPPER_NAME = "time_accuracy_us_upper"
+_LOWER_SIDE_NAME = "lower"
+_UPPER_SIDE_NAME = "upper"
+_ACCURACY_PART_SUFFIX = "_accuracy"
 DATA_SOURCE_NAME = "data_source"           # decision 24 — source grain, via the report
 RAW_SOURCE_PATH_NAME = "raw_source_path"   # legacy alias of data_source (decision 24)
 
@@ -605,7 +614,8 @@ def _emit_assertion(
             temporal_source=temporal_source,
         ))
         bound_projections: list[ids.TemporalComponentProjection] = []
-        for ordinal, (part, role, source_field, raw_value) in enumerate(bounds):
+        ordinal = 0
+        for (part, role, source_field, raw_value) in bounds:
             store.write_temporal_component(V.TemporalComponent(
                 temporal_component_id=ids.temporal_component_id(temporal_expression_id, ordinal),
                 temporal_expression_id=temporal_expression_id,
@@ -618,6 +628,31 @@ def _emit_assertion(
             ))
             bound_projections.append(
                 ids.TemporalComponentProjection(part, role, stated_offset, raw_value))
+            ordinal += 1
+        # Source-stated per-bound accuracy: an OPTIONAL verbatim component per side (parallel
+        # to the _date/_time split parts), carrying no offset/role/source_field — the raw µs
+        # text is the evidence, parsed at L2. Only present when the preset mapped it, so an
+        # accuracy-free expression gains no component and its claim_digest is unchanged. An
+        # upper accuracy needs an upper bound to qualify (an instant carries only the lower).
+        for side, field_name in ((_LOWER_SIDE_NAME, TIME_ACCURACY_US_LOWER_NAME),
+                                 (_UPPER_SIDE_NAME, TIME_ACCURACY_US_UPPER_NAME)):
+            accuracy_raw = _text(flat.get(field_name))
+            if accuracy_raw is None or (side == _UPPER_SIDE_NAME and len(bounds) < 2):
+                continue
+            accuracy_part = side + _ACCURACY_PART_SUFFIX
+            store.write_temporal_component(V.TemporalComponent(
+                temporal_component_id=ids.temporal_component_id(temporal_expression_id, ordinal),
+                temporal_expression_id=temporal_expression_id,
+                ordinal=ordinal,
+                part=accuracy_part,
+                temporal_role=None,
+                stated_offset=None,
+                source_field=None,
+                raw_value=accuracy_raw,
+            ))
+            bound_projections.append(
+                ids.TemporalComponentProjection(accuracy_part, None, None, accuracy_raw))
+            ordinal += 1
         temporal_projection = ids.TemporalProjection(kind, referential, tuple(bound_projections))
 
     # --- the assertion (links + digests via core/ids — never a local recipe) ---

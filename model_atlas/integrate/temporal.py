@@ -93,6 +93,7 @@ _LOWER_PART_NAME = "lower"
 _UPPER_PART_NAME = "upper"
 _DATE_SUFFIX_NAME = "_date"     # the D15 split parts: lower_date / upper_date
 _TIME_SUFFIX_NAME = "_time"     # lower_time / upper_time
+_ACCURACY_SUFFIX_NAME = "_accuracy"   # the source-stated per-bound accuracy: lower_accuracy
 _INSTANT_KIND_NAME = V.TemporalKind.INSTANT.value
 
 # The string referentials the zone methods can parse (epoches are numeric, not clocks).
@@ -139,8 +140,9 @@ class _Bound:
     """One decoded bound: the canonical instant, the APPLIED offset, its accuracy.
 
     ``offset`` follows the three-state contract (float / None / UTC_OFFSET_UNKNOWN);
-    ``accuracy_us`` is a SOURCE-provided timing uncertainty (µs) when the method was given
-    one, else None — it is never invented from the clock's display resolution.
+    ``accuracy_us`` is this bound's timing uncertainty (µs) — a source-stated per-bound
+    value when the preset mapped one, else the Method's own claim, else None (see
+    ``_bound_accuracy``). It is never invented from the clock's display resolution.
     """
 
     unix_us: int | None = None
@@ -181,6 +183,30 @@ def _raw_text(component: V.TemporalComponent | None) -> str | None:
         return None
     text = str(component.raw_value).strip()
     return text or None
+
+
+def _stated_accuracy(expression: TemporalExpressionBundle, side: str) -> int | None:
+    """The SOURCE-STATED timing uncertainty (µs) for one bound, or None.
+
+    HOW: the assembler writes a preset-mapped accuracy as an OPTIONAL verbatim component
+    ``f"{side}_accuracy"`` (parallel to the ``_date`` / ``_time`` split parts) — this reads
+    that component's raw text and parses it to whole µs. WHY parse here (L2) and not at
+    ingest: L1 keeps the value VERBATIM; the text->number reading IS the interpretation, so
+    it is a Method concern (a future non-µs source unit becomes a stamped conversion here,
+    not a silent cast at L1). An unparseable value warns and yields None rather than raising
+    — one bad accuracy cell must not sink the whole expression (the bound decoders' rule).
+    """
+    text = _raw_text(_component(expression, side + _ACCURACY_SUFFIX_NAME))
+    if text is None:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        try:
+            return int(round(float(text)))   # a fractional µs count: round to whole µs
+        except ValueError:
+            _LOG.warning(f"unreadable time accuracy {text!r} for the {side} bound; ignored")
+            return None
 
 
 def _offset_tag(offset_hours: float) -> str:
@@ -310,8 +336,17 @@ class _TemporalMethodBase:
     name: str = ""
     version: str = "1.0"
     reference: str | None = None
-    # A method-level accuracy claim (µs); per-bound decode accuracies override it.
+    # This Method's OWN accuracy claim (µs) — the fallback a source-stated per-bound value
+    # (see ``_bound_accuracy``) overrides. Left None unless a Method genuinely interprets an
+    # uncertainty (e.g. a fuzzy-time reader mapping "around noon" to ±1h).
     time_accuracy_us: int | None = None
+
+    def _bound_accuracy(self, expression: TemporalExpressionBundle, side: str) -> int | None:
+        """One bound's timing uncertainty (µs): a SOURCE-STATED per-bound value (preset-
+        mapped, verbatim at L1) wins over this Method's own ``time_accuracy_us`` claim; None
+        when neither is present — never invented from a clock's display resolution."""
+        stated = _stated_accuracy(expression, side)
+        return stated if stated is not None else self.time_accuracy_us
 
     @property
     def method(self) -> str:
@@ -343,11 +378,6 @@ class _TemporalMethodBase:
             upper = lower
         if lower.unix_us is None and upper.unix_us is None:
             return None
-        # The row's accuracy: the coarsest per-bound claim wins (an interval read
-        # from a 1 s clock and a 1 day date is only day-accurate as a whole); the
-        # method-level claim is the fallback.
-        claims = [a for a in (lower.accuracy_us, upper.accuracy_us) if a is not None]
-        accuracy = max(claims) if claims else self.time_accuracy_us
         lower_iso, lower_date, lower_time = _bound_cells(lower.unix_us, lower.offset)
         upper_iso, upper_date, upper_time = _bound_cells(upper.unix_us, upper.offset)
         expression_id = expression.expression.temporal_expression_id
@@ -365,7 +395,10 @@ class _TemporalMethodBase:
             upper_time=upper_time,
             utc_offset_hours_lower=lower.offset,
             utc_offset_hours_upper=upper.offset,
-            time_accuracy_us=accuracy,
+            # Per bound, split like the offsets above; the instant collapse (upper = lower)
+            # above carries the lower reading's accuracy onto the degenerate upper for free.
+            lower_accuracy_us=lower.accuracy_us,
+            upper_accuracy_us=upper.accuracy_us,
         )
 
 
@@ -381,9 +414,9 @@ class _EpochRule:
     (Excel serials) — decoded by assuming UTC, sentinel-flagged, unlike the true
     absolute epochs.
 
-    No accuracy is derived from the epoch: ``time_accuracy_us`` is a SOURCE-provided
-    uncertainty (like the spatial corner's accuracy), not the clock's display resolution,
-    so an epoch decode leaves it unset.
+    No accuracy is derived from the epoch: a bound's timing uncertainty is a SOURCE-stated
+    value (like the spatial corner's accuracy), not the clock's display resolution, so an
+    epoch decode leaves it unset unless the preset mapped a per-bound accuracy column.
     """
 
     rule_name: str
@@ -460,8 +493,9 @@ class EpochMethod(_TemporalMethodBase):
                 return _ABSENT_BOUND
             unix_us = int(round(value * rule.scale_num_us / rule.scale_den)) + rule.offset_us
         offset = V.UTC_OFFSET_UNKNOWN if rule.assumed_clock else None
-        # No accuracy from the decode: the epoch's resolution is NOT an accuracy claim.
-        return _Bound(unix_us, offset)
+        # No accuracy is derived FROM the epoch (its numeric resolution is representation,
+        # not an accuracy claim); a source-stated per-bound value is still honoured.
+        return _Bound(unix_us, offset, self._bound_accuracy(expression, side))
 
 
 def epoch_methods() -> tuple[EpochMethod, ...]:
@@ -551,9 +585,9 @@ class TzLocaliseMethod(_ClockMethodBase):
             # The value carries its own offset — honoured as parsed (old behaviour).
             return _Bound(datetime_to_us(parsed),
                           parsed.utcoffset().total_seconds() / 3600,
-                          self.time_accuracy_us)
+                          self._bound_accuracy(expression, side))
         unix_us, offset = _resolve_naive(parsed, component.stated_offset, self._zone, text)
-        return _Bound(unix_us, offset, self.time_accuracy_us)
+        return _Bound(unix_us, offset, self._bound_accuracy(expression, side))
 
 
 class AssumeUtcMethod(_ClockMethodBase):
@@ -580,9 +614,9 @@ class AssumeUtcMethod(_ClockMethodBase):
         if parsed.tzinfo is not None:
             return _Bound(datetime_to_us(parsed),
                           parsed.utcoffset().total_seconds() / 3600,
-                          self.time_accuracy_us)
+                          self._bound_accuracy(expression, side))
         unix_us, offset = _assume_utc(parsed)
-        return _Bound(unix_us, offset, self.time_accuracy_us)
+        return _Bound(unix_us, offset, self._bound_accuracy(expression, side))
 
 
 class DatetimeCombineMethod(_TemporalMethodBase):
@@ -644,7 +678,7 @@ class DatetimeCombineMethod(_TemporalMethodBase):
                 naive = dt.datetime.strptime(date_text, self._date_format)
             # Accuracy is a source-provided uncertainty, never derived from the date's
             # day-granularity (that is representation resolution, not an accuracy claim).
-            accuracy = self.time_accuracy_us
+            accuracy = self._bound_accuracy(expression, side)
         except ValueError:
             _LOG.warning(f"date/time pair ({date_text!r}, {time_text!r}) does not match "
                          f"({self._date_format!r}, {self._time_format!r}); bound skipped")

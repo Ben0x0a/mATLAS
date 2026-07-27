@@ -87,8 +87,8 @@ def _sql_type(annotation: Any) -> str:
             return "INTEGER"
         if only is int:
             return "INTEGER"
-    # A genuine multi-type union (utc_offset_hours_* is float|str, time_accuracy_us is
-    # int|float) or typing.Any: keep it as free TEXT so no value is rejected.
+    # A genuine multi-type union (utc_offset_hours_* is float|str) or typing.Any: keep it
+    # as free TEXT so no value is rejected.
     return "TEXT"
 
 
