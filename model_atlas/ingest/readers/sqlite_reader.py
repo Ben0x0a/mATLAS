@@ -8,8 +8,18 @@ Depends on: ``model_atlas.core.determinism`` (``sqlite_enumeration_sql``, ``numb
             ``registry``, ``model_atlas.sqlite._sql.quote_identifier`` (the T90 fix),
             ``model_atlas.sqlite.sql_query`` (``validate_custom_sql``/``harden_connection``
             for the custom-SQL path), ``model_atlas.sqlite.dedup.merge_with_source`` (the
-            unchanged two-pass origin-labelling algorithm), and ``pandas`` (the shape
+            unchanged two-pass origin-labelling algorithm), ``model_atlas.sqlite.carve``
+            (T96 freelist + free-space carving of deleted rows), and ``pandas`` (the shape
             ``merge_with_source`` operates on).
+
+Recovery has THREE sources here, all funnelled into one ``recovered`` list numbered after
+the live rows (rule 1's ``numbered_records``): WAL and journal sidecars (the two-pass
+merge), plus — new in T96 — rows CARVED from the main file's own unallocated space
+(freelist pages + leaf-page free space), which is where deleted rows survive once a WAL
+has been checkpointed away. Carving is ON BY DEFAULT (params['carve']=False opts out):
+silently dropping recoverable evidence is the failure mode to avoid. It runs only on the
+table path (a custom SQL join has no single table/schema to carve) and reads the file's
+RAW bytes directly — never the staging copy or SQLite's row API, which only see live rows.
 
 Ported from ``sources/readers/sqlite_reader.py``: the WAL/journal two-pass
 merge algorithm (``merge_with_source``) is reused UNCHANGED. What differs is the row
@@ -49,6 +59,7 @@ from model_atlas.core.vocabularies import RecordState
 from model_atlas.ingest.readers.base import RawRecord
 from model_atlas.ingest.readers.registry import register_reader
 from model_atlas.sqlite._sql import quote_identifier
+from model_atlas.sqlite.carve import CARVE_SOURCE_COLNAME, carve_table
 from model_atlas.sqlite.dedup import SOURCE_COLNAME, SOURCE_ROW_NUMBER_COLNAME, merge_with_source
 from model_atlas.sqlite.sql_query import harden_connection, validate_custom_sql
 
@@ -183,6 +194,19 @@ class SqliteReader:
             # merge_with_source labels every row 'both' / 'db_only_unique' (live) or
             # sidecar_label (recovered) — never any other value.
             (recovered if origin == sidecar_label else live).append(record)
+
+        # T96: an ADDITIONAL recovery pass. Rows carved from the main file's unallocated
+        # space (freelist + leaf free space) are appended AFTER the sidecar-recovered
+        # rows, so numbered_records numbers all recovered rows — sidecar then carved — in
+        # one continuing sequence behind the live rows. Only the table path carves (a
+        # custom SQL join has no single schema); the carver reads `source`'s raw bytes,
+        # never the staging copy. The freelist/freespace provenance is popped here exactly
+        # as the sidecar origin is above (RawRecord carries no provenance slot — both
+        # collapse to RecordState.RECOVERED).
+        if table is not None and params.get("carve", True):
+            for carved in carve_table(source, str(table), columns=columns):
+                carved.pop(CARVE_SOURCE_COLNAME)
+                recovered.append(carved)
 
         for line_no, fields, is_recovered in numbered_records(live, recovered):
             # rule 7: a binary cell becomes the {"$blob": {...}} envelope, applied only now
