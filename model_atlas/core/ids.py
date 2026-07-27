@@ -8,7 +8,7 @@ Defines:    one uuid5 namespace per run-DB table, the generic ``id_for(table, *p
             ``ActivityProjection`` / ``AssertionLinks`` + their ``Component`` parts);
             the normative ``l1_projection`` both digests hash; and the two digests
             ``content_hash`` and ``claim_digest``.
-Used by:    the assembly brick (T23 — it builds the projection inputs and calls
+Used by:    the assembly brick (it builds the projection inputs and calls
             ``l1_projection`` / ``content_hash`` / ``claim_digest`` with no store), the
             store's id derivation, and the demo cross-check tests.
 Depends on: the standard library only (``dataclasses``, ``enum``, ``hashlib``, ``json``,
@@ -39,7 +39,7 @@ from enum import Enum
 # ``source`` keyed on a path and an ``archive`` keyed on the same path derive different
 # ids because "source" / "archive" lead their joins). This mirrors the demo's single
 # ``NS`` + table-tag-first scheme exactly, so the ids reproduce byte-for-byte.
-# WHY this exact UUID: it is the value the T00 demo committed; changing it would break
+# WHY this exact UUID: it is the value the worked-example demo committed; changing it would break
 # cross-run diffability against every DB already built with the demo recipe.
 _NAMESPACE = uuid.UUID("9c4e7b1a-2d63-5f48-8a17-3b5c6d0e9f21")
 
@@ -112,48 +112,48 @@ def id_for(table: str, *parts: object) -> str:
 # natural key; the id-scheme table of run_db_schema.md is the authority for every one.
 # The two uuid4 roots (case, run) and the audit-event uuid4 (edit_log) are the only
 # non-deterministic ids — a fresh random id per occurrence, feeding NO child id, so two
-# runs over the same evidence stay diffable (decisions 10/28/34).
+# runs over the same evidence stay diffable.
 
 
 def case_metadata_id() -> str:
-    """case_metadata: a fresh uuid4 (the DB root — one per DB, decision 28)."""
+    """case_metadata: a fresh uuid4 (the DB root — one per DB)."""
     return str(uuid.uuid4())
 
 
 def run_id() -> str:
-    """run: a fresh uuid4 — the only non-deterministic evidence root; feeds no child id
-    (decision 10), so two runs over the same evidence produce equal downstream ids."""
+    """run: a fresh uuid4 — the only non-deterministic evidence root; feeds no child id,
+    so two runs over the same evidence produce equal downstream ids."""
     return str(uuid.uuid4())
 
 
 def archive_id(path: str) -> str:
-    """archive: uuid5(path) — from the path ONLY (decision 38 / §2c: a content hash is
+    """archive: uuid5(path) — from the path ONLY (§2c: a content hash is
     never a key), so 'same bytes twice' stays a GROUP BY cd_sha256 finding, not a merge."""
     return id_for(ARCHIVE_NAME, path)
 
 
 def run_archive_id(run_id_: str, archive_id_: str) -> str:
     """run_archive: uuid5(run_id ⟂ archive_id) — a run-scoped link, so the diffability
-    rule exempts it (decision 38); UNIQUE(run_id, archive_id)."""
+    rule exempts it; UNIQUE(run_id, archive_id)."""
     return id_for(RUN_ARCHIVE_NAME, run_id_, archive_id_)
 
 
 def run_preset_id(run_id_: str, preset_id_: str) -> str:
-    """run_preset: uuid5(run_id ⟂ preset_id) — run-scoped link (decision 39);
+    """run_preset: uuid5(run_id ⟂ preset_id) — run-scoped link;
     UNIQUE(run_id, preset_id)."""
     return id_for(RUN_PRESET_NAME, run_id_, preset_id_)
 
 
 def source_id(input_file_path: str, inner_path: str | None, subunit: str | None) -> str:
     """source: uuid5(input_file_path ⟂ inner_path ⟂ subunit) — from PATHS, NEVER the
-    fingerprint (§2c fix), and preset-free (decision 27). So two byte-identical exhibits
+    fingerprint (§2c fix), and preset-free. So two byte-identical exhibits
     stay two source rows whose matching fingerprint is a finding, not a collapse."""
     return id_for(SOURCE_NAME, input_file_path, inner_path, subunit)
 
 
 def preset_id(key: str, version: str | None) -> str:
     """preset: uuid5(key ⟂ version) — the ONLY content-keyed table: a preset's
-    definition is its identity (decision 27); UNIQUE(key, version)."""
+    definition is its identity; UNIQUE(key, version)."""
     return id_for(PRESET_NAME, key, version)
 
 
@@ -169,13 +169,13 @@ def activity_id(raw_record_id_: str, activity_ordinal: int) -> str:
 
 def activity_record_id(activity_id_: str, raw_record_id_: str) -> str:
     """activity_record: uuid5(activity_id ⟂ raw_record_id); UNIQUE(activity_id,
-    raw_record_id) — ingest writes exactly one per activity (decision 26)."""
+    raw_record_id) — ingest writes exactly one per activity."""
     return id_for(ACTIVITY_RECORD_NAME, activity_id_, raw_record_id_)
 
 
 def assertion_id(raw_record_id_: str, preset_key: str, output_ordinal: int) -> str:
     """assertion: uuid5(raw_record_id ⟂ preset KEY ⟂ output_ordinal) — the preset KEY
-    (not preset_id) so the natural key is stable across a version bump (decision 27);
+    (not preset_id) so the natural key is stable across a version bump;
     UNIQUE(raw_record_id, preset_id, output_ordinal)."""
     return id_for(ASSERTION_NAME, raw_record_id_, preset_key, output_ordinal)
 
@@ -222,7 +222,7 @@ def timespan_integration_id(temporal_expression_id_: str, method: str) -> str:
 
 
 def spatial_index_id(spatial_integration_id_: str) -> str:
-    """spatial_index: uuid5(spatial_integration_id) — 1:1 with the integration (D31)."""
+    """spatial_index: uuid5(spatial_integration_id) — 1:1 with the integration."""
     return id_for(SPATIAL_INDEX_NAME, spatial_integration_id_)
 
 
@@ -232,7 +232,7 @@ def analysis_id(assertion_id_: str, method: str) -> str:
 
 
 def edit_log_id() -> str:
-    """edit_log: a fresh uuid4 — an audit event has no natural key (decision 34)."""
+    """edit_log: a fresh uuid4 — an audit event has no natural key."""
     return str(uuid.uuid4())
 
 
@@ -266,7 +266,7 @@ def source_order_json(obj: object) -> str:
 
 
 # --- The typed projection input (what the assembler builds; no store) ------
-# Plain frozen dataclasses so T23's assemble brick can construct the exact projection
+# Plain frozen dataclasses so the assemble brick can construct the exact projection
 # input without touching a store or the wider family dataclasses. Fields are ONLY the
 # ones the L1 projection reads — deliberately narrow, so a reader sees at a glance that
 # excluded columns (concerns, raw_identifier, source_field, ids, integrations) cannot
@@ -293,7 +293,7 @@ class TemporalComponentProjection:
     part ⟂ temporal_role ⟂ stated_offset ⟂ raw_value.
 
     ``source_field`` is deliberately ABSENT (normative exclusion). ``stated_offset`` is
-    the source's own per-bound offset text (R13), verbatim.
+    the source's own per-bound offset text, verbatim.
     """
 
     part: str
@@ -358,8 +358,9 @@ class ActivityProjection:
 
     ``context`` is the DECODED preset-mapped context object (a dict or None), NOT a
     pre-serialised string: ``l1_projection`` re-canonicalises it so key order in the
-    source can never move the digest (a party silently vanishing WOULD move it — the R27
-    guard). This mirrors the demo, which hands the raw dict to the projection.
+    source can never move the digest (a party silently vanishing WOULD move it — that is
+    a real change and must move the digest). This mirrors the demo, which hands the raw
+    dict to the projection.
     """
 
     kind: object                       # ActivityKind enum or its str value
@@ -458,7 +459,7 @@ def _sha256_hex(text: str) -> str:
 
 
 def claim_digest(l1: str) -> str:
-    """``assertion.claim_digest`` (R5) = sha256 of the L1 projection ALONE.
+    """``assertion.claim_digest`` = sha256 of the L1 projection ALONE.
 
     No fingerprint, no line_no, no output_ordinal, no preset — so two overlapping
     disclosures (different files sharing the same record content) CONVERGE here and
@@ -479,8 +480,8 @@ def content_hash(
     """``assertion.content_hash`` (CSV ``content_uid``) =
     sha256(fingerprint_sha256 ⟂ preset_key ⟂ line_no ⟂ output_ordinal ⟂ L1 projection).
 
-    The digest SCOPED to this preset's reading of this file (decision 27 put the preset
-    in the prefix). NO paths, so folder==zip parity holds; the fingerprint distinguishes
+    The digest SCOPED to this preset's reading of this file (the preset key is in the
+    prefix). NO paths, so folder==zip parity holds; the fingerprint distinguishes
     two byte-DIFFERENT files carrying the same claim (they share ``claim_digest`` but not
     ``content_hash``). Repeats legally; never a key.
     """

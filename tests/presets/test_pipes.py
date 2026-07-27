@@ -1,6 +1,7 @@
 """Unit tests for the preset pipe language (presets.pipes): registry, runner, builtins.
 
-Moved from tests/transforms/test_transforms.py at the T60 cut-over — the pipe registry
+Moved from tests/transforms/test_transforms.py at the cut-over to the relational
+engine — the pipe registry
 and its built-in transforms folded into ``model_atlas.presets.pipes``; the retired
 epoch/strptime codecs' behaviour is covered by tests/integrate/test_temporal.py.
 Used by:    pytest.

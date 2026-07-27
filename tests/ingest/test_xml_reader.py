@@ -1,8 +1,8 @@
 """Tests for the ingest XmlReader + the Cellebrite dialect it dispatches to.
 
 Ported from tests/sources/test_xml_reader.py and tests/sources/test_xml_cellebrite.py,
-adapted to the plain-Path ``source`` argument (no container/staging brick exists yet —
-T21) and the ``Reader`` protocol's ``subunits``/``iter_records``/``peek_fields`` names.
+adapted to the plain-Path ``source`` argument (no container/staging brick exists yet)
+and the ``Reader`` protocol's ``subunits``/``iter_records``/``peek_fields`` names.
 """
 from __future__ import annotations
 

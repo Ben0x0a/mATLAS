@@ -1,9 +1,8 @@
 """Tests for the GeoVisualizer export brick (model_atlas/export/geovisualizer.py).
 
 Two stores exercise this brick:
-  - the golden ``secondary`` fixture (both assertions instant) for the T51 Verify
-    bullet proper: round-trip a small store, spot-check row-count/coordinates against
-    the flat CSV of the SAME store;
+  - the golden ``secondary`` fixture (both assertions instant): round-trip a small
+    store, spot-check row-count/coordinates against the flat CSV of the SAME store;
   - the hand-authored manual store (tests/export/_pipeline.build_manual_store), whose
     second assertion is a genuine interval with a compound IMEI-bearing identifier —
     the only way to exercise the interval-bound expansion and the IMEI port, since the

@@ -103,7 +103,7 @@ class DiagnosticsSettings:
 @dataclass(frozen=True)
 class ExportSettings:
     # Folder formerly scanned for drop-in exporter .py files; the old plugin contract
-    # retired with the flat engine (T60), the setting is kept for config-file stability.
+    # retired with the flat engine, the setting is kept for config-file stability.
     # Relative => resolved against the directory you run from. Missing folder => builtins only.
     plugins_dir: str = "matlas_exports"
 

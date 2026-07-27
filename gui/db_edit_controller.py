@@ -263,7 +263,9 @@ class DbEditController:
         self._sync_action_state()
 
     def _sync_action_state(self) -> None:
-        """Enable/disable the action buttons; enforce the evidence tooltip (D34)."""
+        """Enable/disable the action buttons; enforce the evidence-protection tooltip
+        (only integration/analysis rows may be edited in place; raw evidence rows are
+        immutable)."""
         has_row = self._current_table is not None and self._current_row_id is not None
         editable = has_row and self._current_table in EDITABLE_TABLES
         self.save_button.setEnabled(bool(editable))

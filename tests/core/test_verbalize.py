@@ -1,7 +1,7 @@
-"""Tests for the D37 assertion verbaliser (``model_atlas.core.verbalize``).
+"""Tests for the assertion verbaliser (``model_atlas.core.verbalize``).
 
-Defines:    the golden-sentence tests against the T00 demo store (the worked
-            examples render to sensible sentences, byte-for-byte), the semantic
+Defines:    the golden-sentence tests against the worked-example demo store (the
+            worked examples render to sensible sentences, byte-for-byte), the semantic
             guards (negation reads as explicit negation, ``references`` never
             reads as presence, instant renders "at" vs interval "from ... to
             ..."), the per-vocabulary distinct-rendering test (no two members of
@@ -9,12 +9,12 @@ Defines:    the golden-sentence tests against the T00 demo store (the worked
             skeleton), and the no-invented-facts tests (a positionless assertion
             says the absence, ``concerns`` omitted when NULL, a typed mention
             falls back to the entity type).
-Used by:    the T16 verification gate (pytest tests/core/test_verbalize.py).
+Used by:    the verification gate (pytest tests/core/test_verbalize.py).
 Depends on: ``model_atlas.core.verbalize`` (under test),
             ``model_atlas.core.flat_view`` (the flat rows the verbaliser
             consumes), ``model_atlas.core.vocabularies`` (the phrase fragments),
-            pandas, and the T00 demo DB ``docs/examples/matlas_example.sqlite``
-            (28 assertions).
+            pandas, and the worked-example demo DB
+            ``docs/examples/matlas_example.sqlite`` (28 assertions).
 
 Note on ``TemporalKind``: its shape is not a projection column, so the verbaliser
 derives instant vs interval from the bounds themselves; the INSTANT/INTERVAL

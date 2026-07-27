@@ -4,6 +4,6 @@ Defines:    the ``core`` package — currently the single ``vocabularies`` modul
             the one place every controlled vocabulary, family dataclass, and
             column-typing helper is declared.
 Used by:    every later derivation (schema DDL/CHECKs, casts, unit conversion,
-            the flat column list, the T16 verbalizer).
+            the flat column list, the verbalizer).
 Depends on: the standard library only.
 """

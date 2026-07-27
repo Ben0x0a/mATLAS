@@ -2,8 +2,8 @@
 
 Defines:    is_missing (None/NaN test), preset_values (the ``preset(<key>)`` value
             holder), resolve_ref (one typed reference call), resolve_template
-            (``format(...)`` templates — decision 42), resolve_param (run-level
-            entity/linked_entity params), resolve_cond (decision-33 conditional
+            (``format(...)`` templates), resolve_param (run-level
+            entity/linked_entity params), resolve_cond (conditional
             chains, with cond_match), coerce_scalar and resolve_field (the full
             resolution tail: ref/conditional -> extract -> pipe -> unit -> cast).
 Used by:    ingest.assemble (the L1 fan-out engine resolves every mapped field
@@ -12,14 +12,14 @@ Depends on: presets.expr (Ref/Cond/Template/NA sentinels), presets.spec
             (FieldSpec/InputSelector/PresetSpec), presets.pipes (run_pipe +
             PipeContext), core.vocabularies (column_cast / unit_factor), pandas.
 
-T60 fold: these are the pure resolver functions of the old
+These are the pure resolver functions of the old
 ``transforms/assemble.py`` (formerly ``_is_missing`` /
 ``_resolve_ref`` / ... — private to that module), moved here under public names.
 WHY the presets package: they are the EVALUATION half of the preset mapping
 language — ``presets.expr`` parses a value into refs/conditionals/templates and
 this module resolves them against a row — so parser and evaluator live together,
-and the ingest engine depends one-way on presets. The T22 conditional
-(decision 33) / template (decision 42) semantics — first-match-wins,
+and the ingest engine depends one-way on presets. The conditional
+/ template semantics — first-match-wins,
 ``NA_SENTINEL`` on no-match, empty-rendered missing placeholders — are carried
 verbatim; every function is a pure function of its arguments.
 
@@ -40,7 +40,7 @@ from model_atlas.presets.spec import FieldSpec, InputSelector, PresetSpec
 
 
 def is_missing(value: Any) -> bool:
-    """True for a missing cell (None or NaN). The decision-33 sentinel is NOT missing —
+    """True for a missing cell (None or NaN). The ``NA_SENTINEL`` value is NOT missing —
     it is a real produced value and flows onward."""
     if value is None:
         return True
@@ -112,7 +112,7 @@ def resolve_template(
     env: Any,
     preset_values_map: dict[str, Any],
 ) -> Any:
-    """Render a ``format(...)`` template (decision 42) for one row. Literal segments are kept
+    """Render a ``format(...)`` template for one row. Literal segments are kept
     verbatim; each placeholder ref is resolved and a missing/NA value renders as EMPTY text,
     so the connecting literals still appear. If EVERY placeholder is missing the whole value
     is ``NA_SENTINEL`` (the same "produced nothing" marker as a conditional with no match) —
@@ -162,7 +162,7 @@ def resolve_cond(
     env: Any,
     preset_values_map: dict[str, Any],
 ) -> tuple[Any, str | None]:
-    """Evaluate a conditional mapping value (decision 33). Branches are tested top-to-bottom
+    """Evaluate a conditional mapping value. Branches are tested top-to-bottom
     and the FIRST match wins; its ``then`` ref is resolved and returned. With no match and no
     ``else`` the result is ``NA_SENTINEL`` — a distinct value, NOT None (None means the field
     was never mapped; NA_SENTINEL means the conditional ran and nothing matched)."""
@@ -206,8 +206,8 @@ def resolve_field(
     ctx: PipeContext,
     preset_values_map: dict[str, Any],
 ) -> tuple[Any, str | None]:
-    # A conditional (decision 33) resolves to its first-matching branch / else / NA_SENTINEL;
-    # a plain ref (including a format(...) template, decision 42) resolves directly. Either may
+    # A conditional resolves to its first-matching branch / else / NA_SENTINEL;
+    # a plain ref (including a format(...) template) resolves directly. Either may
     # yield NA_SENTINEL ("produced nothing" — a conditional with no match, or a template whose
     # every placeholder was missing); the sentinel short-circuits the transform tail below,
     # being a terminal marker, not a value to extract/pipe/unit/cast. A real value (a matched

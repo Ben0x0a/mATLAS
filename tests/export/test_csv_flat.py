@@ -1,6 +1,6 @@
 """Golden + contract tests for the csv_flat Exporter (model_atlas/export/csv_flat.py).
 
-This is the NEW-ENGINE golden path (T50). A test-side pipeline runner drives the whole
+This is the NEW-ENGINE golden path. A test-side pipeline runner drives the whole
 brick chain over the SAME committed fixtures the old golden test uses
 (tests/fixtures/golden/): ingest_input (L0) -> assemble_source (L1) ->
 integrate_spatial + integrate temporal (L2) -> normalise_entities -> untangle.analyse
@@ -15,7 +15,7 @@ content_uid / claim_digest, exercised here directly.
 To intentionally update the new goldens after a reviewed change:
     MATLAS_REGEN_GOLDEN=1 .venv/bin/python -m pytest tests/export/test_csv_flat.py
 
-Covers the T50 Verify bullets:
+Covers the Verify bullets:
   * the exporter output matches the frozen new goldens byte-for-byte (machine path
     normalised, exactly as the old golden test does);
   * the column set/order equals docs/csv_migration.md (CANONICAL_COLUMNS) + the

@@ -1,4 +1,4 @@
-"""Spatial integration Methods (L2) + the S2 leaf index (decision 31).
+"""Spatial integration Methods (L2) + the S2 leaf index.
 
 Defines:    the spatial ``Method``s of docs/refactor_plan.md §3 — ``PassthroughWgs84``
             (adopts WGS84 latitude/longitude verbatim-text-to-float) and ``UnitConvert``
@@ -6,12 +6,12 @@ Defines:    the spatial ``Method``s of docs/refactor_plan.md §3 — ``Passthrou
             ``CANONICAL_UNIT`` / ``unit_factor`` tables) — plus the not-yet-available
             stubs ``GeocodeAddress`` / ``GeocodePlaceName`` / ``CellRegisterLookup``;
             the per-expression composer ``integrate_expression`` (one method-stamped
-            ``spatial_integration`` row per expression — D30) and the store-level driver
+            ``spatial_integration`` row per expression) and the store-level driver
             ``integrate_spatial`` (also writes the ``spatial_index`` S2 leaf row per
-            point — D31); and the S2 storage helpers ``s2_cell_to_stored`` /
+            point); and the S2 storage helpers ``s2_cell_to_stored`` /
             ``s2_cell_from_stored`` / ``s2_leaf_cell_id``.
-Used by:    the app-layer pipeline (T60) and tests/integrate/test_spatial.py. The
-            concomitance query brick (T41) MUST import ``s2_cell_to_stored`` /
+Used by:    the app-layer pipeline and tests/integrate/test_spatial.py. The
+            concomitance query brick MUST import ``s2_cell_to_stored`` /
             ``s2_cell_from_stored`` so build and query agree bit-for-bit — a locally
             re-derived signing recipe would silently misalign every range scan.
 Depends on: ``model_atlas.core`` (``ids`` — every id derivation, ``vocabularies`` —
@@ -25,14 +25,14 @@ L1 keeps every value VERBATIM; every conversion happens here, method-stamped: th
 ``passthrough_wgs84/1.0`` or ``passthrough_wgs84/1.0+unit_convert/1.0`` — a
 pass-through is a method too (*derived value => documented derivation*, no
 exceptions). One expression gets AT MOST one integration row in v1
-(UNIQUE(spatial_expression_id), D30): each applicable Method contributes disjoint
+(UNIQUE(spatial_expression_id)): each applicable Method contributes disjoint
 columns and its ``name/version`` fragment, and the composer joins the fragments with
 ``+`` in method-set order. An expression no Method can interpret (an address not yet
 geocoded, a gridded zone/easting/northing trio) gets NO integration row — and hence
 no ``spatial_index`` row — rather than an empty stamped row claiming a derivation
 that never ran.
 
-R14 (region / place-name substitution): when the geocoding Methods are implemented,
+Region / place-name substitution: when the geocoding Methods are implemented,
 an integration standing in a REGION or PLACE-NAME centroid for the true position must
 NAME that substitution in the method string (``region_centroid/<register>`` /
 ``place_centroid/<register>``) — the stub docstrings below carry the rule so the
@@ -50,7 +50,7 @@ from model_atlas.core import ids
 from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore
 
-# --- the S2 storage helpers (decision 31) -----------------------------------
+# --- the S2 storage helpers --------------------------------------------------
 # ``CellId.from_lat_lng`` always returns a LEAF cell; s2sphere levels run 0..30.
 S2_LEAF_LEVEL = 30
 
@@ -64,8 +64,8 @@ def s2_cell_to_stored(cell_id: int) -> int:
     WHY order still holds for range scans: an S2 cell's ``[range_min, range_max]``
     never crosses a face boundary (the face is the top 3 bits), so both bounds and
     every descendant share the top bit and the signed reinterpretation preserves
-    their relative order — ``WHERE s2_cell_id BETWEEN ? AND ?`` (D31) stays correct.
-    T41 (the concomitance queries) MUST use this same helper when computing range
+    their relative order — ``WHERE s2_cell_id BETWEEN ? AND ?`` stays correct.
+    The concomitance queries MUST use this same helper when computing range
     bounds; a second recipe that differed by one bit would silently miss matches.
     """
     return cell_id - 2**64 if cell_id >= 2**63 else cell_id
@@ -76,7 +76,7 @@ def s2_cell_from_stored(stored: int) -> int:
 
     Exact inverse of ``s2_cell_to_stored`` (negative values get ``2**64`` back), so a
     stored ``s2_cell_id`` read out of SQLite can be handed to ``s2sphere.CellId``
-    (which expects the unsigned id) for level-walking in the query engine (T41).
+    (which expects the unsigned id) for level-walking in the query engine.
     """
     return stored + 2**64 if stored < 0 else stored
 
@@ -142,7 +142,7 @@ class SpatialMethod(Protocol):
     """The spatial shape of the Method contract: (expression) -> partial columns.
 
     ``integrate`` returns the column->value mapping this Method derives (a PARTIAL
-    view of the one D30 row — the composer merges the method set's disjoint
+    view of the one integration row — the composer merges the method set's disjoint
     contributions), or None when it has nothing. ``name``/``version`` (+ any
     reference data an instance carries) form its stored method-string fragment.
     """
@@ -188,7 +188,7 @@ class UnitConvert:
     no declared source unit is read as ALREADY canonical (factor 1.0 via the same
     ``unit_factor`` table — never a silent bypass, so an unknown unit still raises).
     WHY the identity case is stamped too: reading the text "50" as 50.0 km/h is
-    itself the interpretation — the conversion IS the interpretation (D30), and every
+    itself the interpretation — the conversion IS the interpretation, and every
     derived value must name its derivation.
     """
 
@@ -249,7 +249,7 @@ class GeocodeAddress(_NotAvailableMethod):
 class GeocodePlaceName(_NotAvailableMethod):
     """Stub: resolve a place-name / region expression to a CENTROID (later task).
 
-    R14: the produced method string must NAME the substitution — a centroid standing
+    The produced method string must NAME the substitution — a centroid standing
     in for the true position is ``place_centroid/<register>`` or
     ``region_centroid/<register>``, never a bare ``geocode/...`` that hides it.
     """
@@ -271,7 +271,7 @@ class CellRegisterLookup(_NotAvailableMethod):
     _referentials = frozenset({V.SpatialReferential.CELL_REF.value})
 
 
-# --- the composer: one D30 row per expression --------------------------------
+# --- the composer: one integration row per expression -------------------------
 
 def integrate_expression(
     expression: SpatialExpressionInput,
@@ -334,10 +334,10 @@ def integrate_spatial(
     """Integrate every L1 spatial expression in ``store`` and index every point.
 
     HOW: load each ``spatial_expression`` + its components (ordinal order) through the
-    store's read connection, compose the one D30 row with the method set (default:
-    ``PassthroughWgs84`` then ``UnitConvert(source_units)``), write it via the
+    store's read connection, compose the one integration row with the method set
+    (default: ``PassthroughWgs84`` then ``UnitConvert(source_units)``), write it via the
     layer-typed L2 writer, and — whenever the row carries BOTH coordinates — write the
-    one ``spatial_index`` leaf-cell row (D31, level 30, signed storage form).
+    one ``spatial_index`` leaf-cell row (level 30, signed storage form).
     ``source_units`` only parameterises the DEFAULT method set, so passing it beside
     an explicit ``methods`` would be silently ignored — that ambiguity raises instead.
     """
@@ -355,7 +355,7 @@ def integrate_spatial(
             continue
         store.write_spatial_integration(integration)
         report.integration_count += 1
-        # D31: one leaf cell per POINT — an integration without both coordinates
+        # one leaf cell per POINT — an integration without both coordinates
         # (metric-only, or an un-geocoded place) is not a point and gets no index row.
         if (integration.latitude_wgs84 is not None
                 and integration.longitude_wgs84 is not None):
@@ -376,7 +376,7 @@ def _load_expressions(connection: sqlite3.Connection) -> list[SpatialExpressionI
     HOW: one pass over ``spatial_component`` in (expression, ordinal) order builds the
     mappings; components with a NULL raw_value carry no value and are omitted. A part
     the v1 Methods interpret appearing TWICE in one expression raises — one canonical
-    column cannot honestly hold two candidate raws (the D30 single-row shape has no
+    column cannot honestly hold two candidate raws (the single-row shape has no
     ambiguity rule; candidates arrive when the UNIQUE is dropped). A repeated
     NON-interpretable part (two raw_position fragments…) keeps its FIRST occurrence:
     nothing reads it in v1 and the verbatim rows all survive at L1 regardless.

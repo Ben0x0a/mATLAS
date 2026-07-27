@@ -1,5 +1,5 @@
 """GeoVisualizer export brick: the fixed 15-column CSV the GeoVisualizer tool imports
-(T51 — ports ``exporters/builtin.py``'s ``export_geovisualizer``, including
+(ports ``exporters/builtin.py``'s ``export_geovisualizer``, including
 its interval-expansion logic).
 
 Defines:    GeovisualizerExporter (the ``Exporter`` protocol brick,
@@ -12,8 +12,8 @@ Depends on: model_atlas.core.flat_view (the flat query), model_atlas.export.csv_
             model_atlas.export), model_atlas.export._shared (value helpers +
             partitioning), pandas.
 
-Query + serialiser, and the interval expansion (T51 scope)
---------------------------------------------------------------
+Query + serialiser, and the interval expansion
+-------------------------------------------------
 The data access is ONE query — ``core.flat_view.build_flat_view`` — which already carries
 BOTH temporal bounds per row (``time_lower_unix_utc_us`` / ``time_upper_unix_utc_us``,
 sourced from ``timespan_integration.lower_unix_utc_us`` / ``upper_unix_utc_us``): the
@@ -23,10 +23,10 @@ instant (lower == upper, or only one bound present) or TWO for a genuine interva
 (lower != upper, one row per bound) — is Python shaping, ported verbatim from the old
 ``_time_emissions``/``_geovis_description`` pair.
 
-What changed from the old exporter (relational-model column split, finding F2)
-------------------------------------------------------------------------------
+What changed from the old exporter (relational-model column split)
+----------------------------------------------------------------------
 The old flat model carried ONE ``utc_offset_hours`` column shared by both bounds; the
-relational model splits it into ``utc_offset_hours_lower`` / ``_upper`` (F2), so each
+relational model splits it into ``utc_offset_hours_lower`` / ``_upper``, so each
 emitted GeoVisualizer row now localises with, and warns on, ITS OWN bound's offset —
 strictly more correct than the old single-offset check (a row for the upper bound
 could previously report "offset known" while actually using the lower bound's value).
@@ -136,7 +136,7 @@ def _time_emissions(row: dict) -> "list[tuple[Any, Any, Any, str | None]]":
     An instant (lower == upper, or only one bound present) yields ONE tuple with
     bound=None. A genuine interval (lower != upper) yields TWO — (lower, ..., 'start')
     and (upper, ..., 'end') — each carrying ITS OWN bound's source field and offset
-    (F2 — the old model shared one offset for both). A row with no timestamp still
+    (the old model shared one offset for both). A row with no timestamp still
     yields one tuple (empty timestamp) so its position is not lost.
     """
     lower_us, upper_us = row.get("time_lower_unix_utc_us"), row.get("time_upper_unix_utc_us")

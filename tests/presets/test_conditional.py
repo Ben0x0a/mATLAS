@@ -1,4 +1,4 @@
-"""Tests for preset conditional mapping values (decision 33: ``if / elif / else``).
+"""Tests for preset conditional mapping values (``if / elif / else``).
 
 Covers the expr parser (``parse_cond``), the resolver (``presets.resolve.resolve_cond``
 + ``cond_match``) — first-match-wins, elif chains, else fall-through, ``!=``, the

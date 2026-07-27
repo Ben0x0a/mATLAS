@@ -16,10 +16,10 @@ Depends on: ``model_atlas.core`` (``ids`` — the integration id derivation,
             ``UTC_OFFSET_UNKNOWN`` sentinel, ``store`` — the layer-typed writer) and
             ``model_atlas.integrate.timeparse`` for the pure zone/ISO helpers
             (``parse_zone_token`` / ``parse_iso8601`` / ``local_naive_to_utc_us`` /
-            ``zone_standard_offset_hours`` / ``datetime_to_us`` — their T60 home,
+            ``zone_standard_offset_hours`` / ``datetime_to_us`` — their settled home,
             folded verbatim from the retired ``transforms.builtin``).
 
-This is the T30 port of the old ``transforms/assemble.py`` ``_decode_time`` /
+This is the port of the old ``transforms/assemble.py`` ``_decode_time`` /
 ``_apply_time`` logic into named, versioned Methods (refactor_plan.md §3, phase 3).
 The old rules map 1:1:
 
@@ -33,10 +33,10 @@ The old rules map 1:1:
   ambiguous-overlap / imaginary-gap warnings, now via logging).
 - naive + no zone knowledge             -> ``AssumeUtcMethod`` (the old
   ``UTC_OFFSET_UNKNOWN`` fallback, promoted to an explicit named method).
-- the L1 date⊕time component split (D15) -> ``DatetimeCombineMethod``.
+- the L1 date⊕time component split -> ``DatetimeCombineMethod``.
 
-The applied-offset discipline (decision 9 / D32)
-------------------------------------------------
+The applied-offset discipline
+------------------------------
 The stored ``utc_offset_hours_lower/_upper`` is the offset ACTUALLY APPLIED to reach
 UTC for THAT bound — never the old flat model's display-zone override — with three
 distinct states (the ``vocabularies.TimespanIntegration`` contract):
@@ -46,12 +46,12 @@ distinct states (the ``vocabularies.TimespanIntegration`` contract):
                            definition (an epoch), nothing was localised;
 - ``UTC_OFFSET_UNKNOWN``:  a naive clock was materialised by ASSUMING UTC.
 
-The D32 cells derive per bound from unix µs + that applied offset: a known offset
+These cells derive per bound from unix µs + that applied offset: a known offset
 renders one offset-tagged local ISO (``2026-03-14T02:20:31.000000+01:00``); an
 absolute-UTC source renders the exact UTC clock tagged ``+00:00`` (true and
 self-describing — nothing was assumed, so no ``N/A``); an ASSUMED clock renders with
 the loud trailing `` N/A``; a bound with no instant renders EMPTY cells (empty
-string / NULLs — empty and N/A stay distinct, D32). Every row is method-stamped
+string / NULLs — empty and N/A stay distinct). Every row is method-stamped
 ``rule/version[/reference]`` (composites join with ``+``); a pass-through is a
 method too. NOTE: the stored ``tz_localize`` token keeps the settled docs' spelling
 (run_db_schema.md names ``tz_localize/2026a``) even though identifiers here use the
@@ -81,7 +81,7 @@ _US_PER_HOUR = 3_600_000_000
 _US_PER_DAY = 86_400_000_000
 
 # --- the epoch reference constants (recorded in the method strings) ---------
-# WHY recorded: the T30 contract is that an epoch row's derivation is auditable from
+# WHY recorded: an epoch row's derivation must be auditable from
 # its method string alone — the constant that anchored the decode is part of the rule.
 _CFABSOLUTE_OFFSET_S = 978_307_200          # 1970-01-01 -> 2001-01-01 (Apple CFAbsolute)
 _WIN1601_OFFSET_S = -11_644_473_600         # 1970-01-01 -> 1601-01-01 (WebKit / FILETIME)
@@ -91,7 +91,7 @@ _EXCEL_EPOCH_US = -25_569 * _US_PER_DAY     # 1899-12-30 is 25 569 days before 1
 # --- the bound part names (identifier-string constants) ---------------------
 _LOWER_PART_NAME = "lower"
 _UPPER_PART_NAME = "upper"
-_DATE_SUFFIX_NAME = "_date"     # the D15 split parts: lower_date / upper_date
+_DATE_SUFFIX_NAME = "_date"     # the split parts: lower_date / upper_date
 _TIME_SUFFIX_NAME = "_time"     # lower_time / upper_time
 _ACCURACY_SUFFIX_NAME = "_accuracy"   # the source-stated per-bound accuracy: lower_accuracy
 _INSTANT_KIND_NAME = V.TemporalKind.INSTANT.value
@@ -219,7 +219,7 @@ def _offset_tag(offset_hours: float) -> str:
 
 def _bound_cells(unix_us: int | None,
                  offset: float | str | None) -> tuple[str, int | None, int | None]:
-    """The D32 convenience cells for ONE bound: (datetime_iso, date µs, time-of-day µs).
+    """The convenience cells for ONE bound: (datetime_iso, date µs, time-of-day µs).
 
     HOW: shift the canonical UTC µs by the applied offset to get the local wall
     clock, render it with full microseconds, then tag it by the offset state:
@@ -230,7 +230,7 @@ def _bound_cells(unix_us: int | None,
     - offset UNKNOWN (assumed)    -> the assumed-UTC clock with the loud trailing
       `` N/A``.
     WHY the `` N/A`` suffix: "value, zone unknown" must stay visibly distinct from
-    "no value" (empty) — D32's empty ≠ N/A rule; confusing them hides an assumption.
+    "no value" (empty) — empty ≠ N/A; confusing them hides an assumption.
     All datetime arithmetic is timedelta-from-epoch (never ``fromtimestamp``): the
     Windows CRT raises for pre-1970/far-future instants that occur in real evidence.
     """
@@ -318,7 +318,7 @@ def _assume_utc(naive: dt.datetime) -> tuple[int, str]:
     """Materialise a naive clock by ASSUMING UTC, flagging the offset UNKNOWN.
 
     WHY the sentinel and not 0.0: a real 0.0 would claim the zone was known to be
-    UTC; the assumption must stay loud on the row (D32 / decision 9).
+    UTC; the assumption must stay loud on the row.
     """
     return datetime_to_us(naive.replace(tzinfo=dt.timezone.utc)), V.UTC_OFFSET_UNKNOWN
 
@@ -620,7 +620,7 @@ class AssumeUtcMethod(_ClockMethodBase):
 
 
 class DatetimeCombineMethod(_TemporalMethodBase):
-    """date column ⊕ time column -> one instant per bound (the D15 split parts).
+    """date column ⊕ time column -> one instant per bound (the split parts).
 
     The L1 assembler keeps a bound spanning a date column and a time column as TWO
     verbatim component rows (``lower_date`` + ``lower_time``); this method combines

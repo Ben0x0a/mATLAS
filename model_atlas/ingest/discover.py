@@ -13,7 +13,7 @@ Depends on: ``model_atlas.ingest.containers`` (the Container model), ``model_atl
             standard library.
 
 Ported from ``sources/discover.py``. Two changes vs the original, both
-required by decision 38 and justified in the writer's header:
+justified in the writer's header:
   * the walk now EMITS an ``ArchiveFound`` event per container (the old discover returned
     only leaf ``SourceFile``s), so the writer can record every archive encounter and an
     opt-in preset-scoped skip — never traceless;
@@ -57,7 +57,7 @@ _NESTED_ARCHIVE_MAX_BYTES = 512 * 1024 * 1024
 
 @dataclass(frozen=True)
 class ArchiveFound:
-    """One container (zip) encountered during the walk (decision 38).
+    """One container (zip) encountered during the walk.
 
     ``path`` is the container's stable identity: the canonical on-disk path for a real
     archive, or ``<parent path>!<member>`` for one nested inside another archive.
@@ -72,7 +72,7 @@ class ArchiveFound:
 
 @dataclass(frozen=True)
 class FileFound:
-    """One leaf file to be opened as a source (folder->file, zip->inner file — D29)."""
+    """One leaf file to be opened as a source (folder->file, zip->inner file)."""
 
     file: SourceFile
 
@@ -91,8 +91,8 @@ def _cd_sha256_from_bytes(data: bytes) -> str:
 
     HOW: ``fingerprint_zip`` needs a path, so the buffered bytes are written to a
     throwaway temp file and fingerprinted there, then removed.
-    WHY reuse it rather than hash inline: decision 38 mandates the SAME strategic hash for
-    every archive, on disk or nested, so the "same bytes twice" finding is comparable."""
+    WHY reuse it rather than hash inline: every archive must carry the SAME strategic hash,
+    on disk or nested, so the "same bytes twice" finding is comparable."""
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=True) as tmp:
         tmp.write(data)
         tmp.flush()

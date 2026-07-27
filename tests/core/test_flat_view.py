@@ -1,17 +1,18 @@
 """Tests for the flat-CSV projection (``model_atlas.core.flat_view``).
 
 Defines:    the column-contract test (the projected frame carries exactly the
-            docs/csv_migration.md columns, in order, against the T00 demo DB), the
-            one-row-per-assertion grain test (28 rows, corner-less assertions kept
-            with empty cells), the unquoted-numeric rendering test, the derived
+            docs/csv_migration.md columns, in order, against the worked-example demo
+            DB), the one-row-per-assertion grain test (28 rows, corner-less assertions
+            kept with empty cells), the unquoted-numeric rendering test, the derived
             ``locates`` test (single source of truth = the vocabulary enum), and the
             ``orig_<col>`` passthrough tests (first-appearance order, verbatim values,
             trailing-``_`` collision disambiguation).
-Used by:    the T14 verification gate (pytest tests/core/test_projection.py).
+Used by:    the verification gate (pytest tests/core/test_flat_view.py).
 Depends on: ``model_atlas.core.flat_view`` (under test), ``model_atlas.core.vocabularies``
             (the ``EntityPositionLink.locates`` derivation the projection must agree
-            with), pandas, and the T00 demo DB ``docs/examples/matlas_example.sqlite``
-            (28 assertions, one positionless nav-origin leg).
+            with), pandas, and the worked-example demo DB
+            ``docs/examples/matlas_example.sqlite`` (28 assertions, one positionless
+            nav-origin leg).
 """
 from __future__ import annotations
 

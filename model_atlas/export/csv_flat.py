@@ -7,7 +7,7 @@ Defines:    the ``Exporter`` protocol (refactor_plan.md §3 — ``export(store, 
             ``docs/csv_migration.md`` column order plus the per-run ``orig_<col>`` tail)
             and writes it as a single ``utf-8-sig`` semicolon CSV (one file per format —
             the ``preset_id`` column separates presets for a caller who wants that).
-Used by:    the app-layer pipeline (once T60 wires exporters after analysis) and
+Used by:    the app-layer pipeline (once it wires exporters after analysis) and
             tests/export/test_csv_flat.py.
 Depends on: ``model_atlas.core.flat_view`` (``build_flat_view`` / ``CANONICAL_COLUMNS`` — the
             flat frame and its column contract), ``model_atlas.core.store`` (``RunStore``
@@ -19,7 +19,7 @@ Why the flat view and not a hand-built frame
 The flat CSV stopped being a 45-column dict assembled per assertion; it is now a
 GENERATED query over the run database (docs/csv_migration.md). This brick therefore owns
 no column knowledge of its own — the order, the numeric dtypes and the ``orig_<col>``
-explosion all come from ``core.flat_view``. The four R6-mandatory columns
+explosion all come from ``core.flat_view``. The four mandatory columns
 (``spatial_referential``, ``locates``, ``spatial_method``, ``temporal_method``) are part
 of that contract, so a GPS fix, a geocoder centroid and a cell lookup each carry their
 own referential + method and can never render identically.

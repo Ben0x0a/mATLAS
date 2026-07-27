@@ -1,8 +1,8 @@
-"""The evidence-protected edit API for a persisted mATLAS run database (decisions 34/41).
+"""The evidence-protected edit API for a persisted mATLAS run database.
 
 Defines:    ``EditApi`` — opens an ALREADY-PERSISTED ``<name>.matlas.sqlite`` read-write,
-            lets a caller navigate rows and mutate them under the D34 evidence-protection
-            rules, and keeps the D41 rewindable ``edit_log`` journal. The public surface is
+            lets a caller navigate rows and mutate them under the evidence-protection
+            rules, and keeps the rewindable ``edit_log`` journal. The public surface is
             ``open`` / ``tables`` / ``rows`` / ``row`` / ``update`` / ``save_as_new_row`` /
             ``add_empty_row`` / ``rewind`` / ``edit_log`` / ``close``. All protection is
             enforced HERE (never in the UI): ``update`` refuses any L0/L1 evidence table and
@@ -24,13 +24,13 @@ The editable tables are derived from the store's layer partition rather than re-
 they cannot drift from the model: everything in L2 (the integrations + the spatial index)
 and L3 EXCEPT ``edit_log`` itself (the journal is never edited as evidence). That yields
 exactly ``{spatial_integration, timespan_integration, spatial_index, analysis}`` — the
-integration/analysis rows the model declares mutable in place (decision 34). Every other
+integration/analysis rows the model declares mutable in place. Every other
 table is L0/L1 evidence: an ``update`` on it RAISES and directs the caller to
 ``save_as_new_row``, the one allowed edit path for evidence (mint a new occurrence, keep the
 original untouched).
 
-Rewind mechanism (decision 41)
-------------------------------
+Rewind mechanism
+----------------
 ``update`` logs one entry per column carrying the JSON-encoded old->new scalar;
 ``new_row`` / ``empty_row`` log the FULL row snapshot as canonical JSON in ``new_value``
 (``old_value`` NULL — there was no prior row). ``ordinal`` is a monotonic UNIQUE journal
@@ -49,8 +49,8 @@ Scalars are JSON-encoded in the log (``ids.canonical_json``) rather than stored 
 text so a rewind restores the EXACT typed value (a REAL stays a float, a NULL stays None),
 never a string that SQLite would silently coerce into a REAL column.
 
-Id minting for new occurrences (decision 34 / 10)
--------------------------------------------------
+Id minting for new occurrences
+-------------------------------
 A manually created row is an operator artefact with no model natural key, so its id is
 derived deterministically from the audit event that created it: ``id_for(table,
 <origin>, ordinal)`` where ``ordinal`` is the monotonic UNIQUE journal position about to be
@@ -84,7 +84,8 @@ EDITABLE_TABLES: frozenset[str] = (
 
 
 class EditApi:
-    """Read-write access to a persisted mATLAS run DB under the D34/D41 edit rules.
+    """Read-write access to a persisted mATLAS run DB under the evidence-protection
+    and rewind-journal edit rules.
 
     Open with :meth:`open` (which authenticates the file), use as a context manager so the
     connection is always closed::
@@ -154,7 +155,8 @@ class EditApi:
     # --- mutation (protection enforced here) ------------------------------
 
     def update(self, table: str, row_id: str, column: str, value: Any) -> None:
-        """Edit ONE column of an integration/analysis row in place; log old->new (D34/D41).
+        """Edit ONE column of an integration/analysis row in place; log old->new in the
+        rewindable edit journal.
 
         Raises ``PermissionError`` on any L0/L1 evidence table (directing the caller to
         ``save_as_new_row``) — the protection lives here, not in the UI, so no caller can
@@ -234,7 +236,7 @@ class EditApi:
         return new_id
 
     def rewind(self, to_ordinal: int) -> None:
-        """Undo every edit after ``to_ordinal`` by appending its inverse (D41 full rewind).
+        """Undo every edit after ``to_ordinal`` by appending its inverse (a full rewind).
 
         HOW: snapshot the journal entries with ``ordinal > to_ordinal`` (only those present
         BEFORE the rewind — appended inverses get higher ordinals and are excluded), then

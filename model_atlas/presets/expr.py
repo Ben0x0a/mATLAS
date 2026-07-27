@@ -15,11 +15,11 @@ Reference forms — the value of a mapped field is ONE explicit call:
     param(linked_entity)      a run-level parameter (entity | linked_entity)
     preset(in_archive)        a key from the CURRENT preset's own definition (match/meta)
     const(VALUE)              a literal (number / bool / string)
-    format("{field(A)} at {field(B)}")   an f-string-style template (decision 42): literal
+    format("{field(A)} at {field(B)}")   an f-string-style template: literal
                               text with ``{<ref>}`` placeholders (each an existing ref);
                               ``{{`` / ``}}`` are literal braces
 
-Conditional form (decision 33) — a mapping value may instead be an if/elif/else chain
+Conditional form — a mapping value may instead be an if/elif/else chain
 over those same refs; branches evaluate top-to-bottom, first match wins::
 
     if field(X) == "NA" then const(instant)
@@ -57,7 +57,7 @@ PRESET_TOKENS = (
 _CALL_RE = re.compile(r"^\s*([a-z_]+)\s*\((.*)\)\s*$", re.DOTALL)
 _BARE_CALL_RE = re.compile(r"^\s*([a-z_]+)\s*$")
 
-# Conditional (decision 33) keywords + comparison operators.
+# Conditional keywords + comparison operators.
 _COND_OPS = ("==", "!=")
 _COND_PREFIX_RE = re.compile(r"^\s*if\s+", re.IGNORECASE)
 # The comparand spelling that means "the tested value is missing/absent" rather than a
@@ -66,7 +66,7 @@ NA_LITERAL = "NA"
 
 
 class _NASentinel(str):
-    """The value a conditional (decision 33) or template (decision 42) yields when it was
+    """The value a conditional or template yields when it was
     evaluated but produced nothing — a conditional with no matching branch and no ``else``,
     or a template whose every placeholder was missing.
 
@@ -93,7 +93,7 @@ class _NASentinel(str):
 
 
 # The single sentinel instance shared across the whole engine (produced by conditional /
-# template resolution in transforms.assemble; T23's successor engine imports it unchanged).
+# template resolution in transforms.assemble; the successor engine imports it unchanged).
 NA_SENTINEL = _NASentinel()
 
 
@@ -108,7 +108,7 @@ class Ref:
 
 @dataclass(frozen=True)
 class Template:
-    """A ``format(...)`` template (decision 42): an ordered sequence of segments, each either
+    """A ``format(...)`` template: an ordered sequence of segments, each either
     a literal ``str`` or an embedded ``Ref`` placeholder. Carried as the ``arg`` of a
     ``Ref(kind="format")`` so it composes with conditionals and the pipe tail for free."""
 
@@ -248,7 +248,7 @@ def parse_ref(text: Any) -> Ref:
 
 
 def parse_template(text: str) -> Template:
-    """Parse a ``format(...)`` template body into a ``Template`` (decision 42).
+    """Parse a ``format(...)`` template body into a ``Template``.
 
     HOW: scan the (already unquoted) text left to right. ``{{`` / ``}}`` emit a literal brace
     (f-string convention); a ``{`` opens a placeholder whose matching ``}`` is found while

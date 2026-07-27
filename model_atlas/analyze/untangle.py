@@ -6,17 +6,17 @@ Defines:    ``analyse`` — reads every assertion joined to its entity and its L
             groups, ranked by horizontal accuracy then completeness) and writes one
             method-stamped ``analysis`` row per assertion — plus ``METHOD_NAME`` /
             ``UNTANGLE_VERSION`` / ``DEFAULT_RESOLUTION_US``.
-Used by:    the app-layer pipeline (T60) and tests/analyze/test_untangle.py.
+Used by:    the app-layer pipeline and tests/analyze/test_untangle.py.
 Depends on: ``model_atlas.core`` (``ids`` — the analysis id derivation,
             ``vocabularies`` — the ``Analysis`` family + the ``RecordType`` labels,
-            ``store`` — the layer-typed L3 writer, ``projection`` — the shared
+            ``store`` — the layer-typed L3 writer, ``flat_view`` — the shared
             component subqueries, so this read and the flat CSV read the SAME
             component the same way) and pandas. The retired ``transforms/rank.py``
             was the normative reference: its ranking is ported here VERBATIM (see
             "The port", below), never modified.
 
-The L3 contract (docs/run_db_schema.md decision 19)
----------------------------------------------------
+The L3 contract (docs/run_db_schema.md)
+----------------------------------------
 Analysis is ABOUT assertions, never inside them: this brick runs after ingest and
 integration and only ever writes the generic ``analysis`` table. Its ``method``
 string is ``untangle/<version>``; re-running with a bumped version ADDS one row per
@@ -31,7 +31,7 @@ The port (the retired transforms/rank.py ``untangle()``, semantics UNCHANGED)
 -----------------------------------------------------------------
 ``_has_value`` / ``_completeness`` / ``_rank`` below are the old engine's code
 verbatim (only the ``RecordType`` import moved to ``core.vocabularies`` — same
-member values). The golden diff (T50) must be attributable ONLY to the schema move,
+member values). The golden diff must be attributable ONLY to the schema move,
 so nothing about the grouping key, the sort, or the tie-breaks may change here.
 What DID move is the input: the old flat 45-column frame is reassembled from the
 relational store by ``_ASSERTION_FRAME_SELECT``, each old flat column read from its
@@ -42,11 +42,13 @@ settled home (the csv_migration.md mapping):
 - ``time_*_raw`` / ``_source_field`` -> the ``lower``/``upper`` temporal components;
 - ``time_*_unix_utc_us`` -> ``timespan_integration``; ``time_accuracy_us`` -> COALESCE of
   the two split per-bound ``*_accuracy_us`` columns (the completeness bit the old column had);
-- ``utc_offset_hours``          -> COALESCE of the two split D32 applied offsets
-  (the old single column existed once per row; either bound's applied offset marks
-  the same "an offset is known" completeness bit the old column carried);
+- ``utc_offset_hours``          -> COALESCE of the two split per-bound applied
+  offsets (the old single column existed once per row; either bound's applied
+  offset marks the same "an offset is known" completeness bit the old column
+  carried);
 - ``temporal_source``           -> ``temporal_expression.temporal_source``;
-- ``position_source``           -> ``spatial_expression.spatial_source`` (F3 rename);
+- ``position_source``           -> ``spatial_expression.spatial_source`` (renamed
+  from the old flat CSV column of the same name);
 - the coordinate/accuracy/speed/heading/beam metrics -> ``spatial_integration``;
 - the three links               -> the ``assertion`` columns.
 
@@ -72,7 +74,7 @@ from model_atlas.core.store import RunStore
 
 log = logging.getLogger(__name__)
 
-# The method identity: ``untangle/<version>`` (decision 19). Bumping the version is
+# The method identity: ``untangle/<version>``. Bumping the version is
 # how a changed ranker ADDS a new verdict generation; the docs' current generation
 # is 2.0 (run_db_schema.md names ``untangle/2.0``).
 METHOD_NAME = "untangle"
@@ -118,7 +120,7 @@ _ASSERTION_FRAME_SELECT: tuple[tuple[str, str], ...] = (
     ("time_upper_source_field", _temporal_part("upper", "source_field")),
     ("time_upper_unix_utc_us", "ti.upper_unix_utc_us"),
     # The old flat model carried ONE applied offset per row; the settled schema
-    # split it per bound (F2/D32). Either bound's applied offset carries the same
+    # split it per bound. Either bound's applied offset carries the same
     # "an offset is known" completeness bit the old single column did.
     ("utc_offset_hours",
      "COALESCE(ti.utc_offset_hours_lower, ti.utc_offset_hours_upper)"),
@@ -131,7 +133,7 @@ _ASSERTION_FRAME_SELECT: tuple[tuple[str, str], ...] = (
     ("longitude_wgs84", "si.longitude_wgs84"),
     ("altitude_m", "si.altitude_m"),
     ("raw_position", _spatial_part("raw_position", "raw_value")),
-    ("position_source", "sx.spatial_source"),   # the F3 rename, read back under its old name
+    ("position_source", "sx.spatial_source"),   # renamed column, read back under its old name
     ("horizontal_accuracy_m", "si.horizontal_accuracy_m"),
     ("vertical_accuracy_m", "si.vertical_accuracy_m"),
     ("horizontal_speed_kmh", "si.horizontal_speed_kmh"),
@@ -169,7 +171,7 @@ def _load_frame(connection: sqlite3.Connection) -> pd.DataFrame:
 
 
 # --- the ranking, ported VERBATIM from transforms/rank.py -------------------
-# Any edit here would change the golden diff attribution — the T50 regeneration
+# Any edit here would change the golden diff attribution — the golden regeneration
 # must trace every difference to the schema move, never to a ranking change.
 
 def _has_value(value: Any) -> bool:
@@ -255,7 +257,7 @@ def analyse(store: RunStore, *, version: str = UNTANGLE_VERSION,
     ``(assertion_id, untangle/<version>, record_type, record_rank)`` rows through
     the L3 writer. Returns the number of rows written (== the assertion count).
     Normally a re-run with a changed ranker ADDS a new method generation beside the
-    old one (decision 19); re-running the SAME version hits ``UNIQUE(assertion_id,
+    old one; re-running the SAME version hits ``UNIQUE(assertion_id,
     method)`` and raises, so a recorded verdict is never silently overwritten.
 
     ``clear_existing`` is the ONE sanctioned exception: on APPEND (a new run added to

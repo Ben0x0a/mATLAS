@@ -14,12 +14,12 @@ Depends on: ``model_atlas.core.vocabularies`` (``RecordState``), ``model_atlas.i
 Ported from ``sources/readers/xml_reader.py``: the dialect Protocol/registry,
 ``sniff_namespace`` and the per-report prepare/cache shape are kept verbatim. What is
 DROPPED (deliberately, not an oversight) is the old reader's staging-tier machinery
-(``STAGING_TIER``, ``acquire_source``/``container.finalize``): T21 (discover/containers)
+(``STAGING_TIER``, ``acquire_source``/``container.finalize``): discover/containers
 has not landed, so ``source`` here is already a plain, real path on disk — there is no
 container to stage from or copy-tier to choose. A report is always read in place (never
 copied) via a fresh seekable stream per pass, exactly as before.
 
-R9 order: unlike sqlite/csv/excel, ``core/determinism.py`` states no numbered rule for XML
+Enumeration order: unlike sqlite/csv/excel, ``core/determinism.py`` states no numbered rule for XML
 (the "future UFDR reader" placeholder in docs/refactor_plan.md §2) — a model's records are
 numbered in the dialect's own document/block order, which is a deterministic linear parse,
 so re-reading the same report yields the same line_no sequence.

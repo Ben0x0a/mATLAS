@@ -9,7 +9,7 @@ Used by:    presets.resolve (runs pipes inside field resolution) and, through it
 Depends on: presets.expr (PipeCall), presets.expression (the arithmetic sandbox),
             presets.value_maps (lookup key normalisation); standard library.
 
-T60 fold: the registry/runner half is moved verbatim from
+The registry/runner half is moved verbatim from
 ``transforms/registry.py`` and the six pipe transforms from
 ``transforms/builtin.py``. WHY one module: the pipes are the execution
 half of the preset pipe LANGUAGE (``presets.expr`` parses ``PipeCall``s; this runs

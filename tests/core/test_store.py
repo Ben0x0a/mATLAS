@@ -1,15 +1,15 @@
 """Tests for the RunStore (``model_atlas.core.store``).
 
-Defines:    a compact rebuild of the T00 scenario THROUGH the store's write API (persist +
-            reopen), one test per store-relevant silent-loss inventory row (run_db_schema.md
-            — each RAISES / stays distinct as named), a double-run determinism test, and the
-            by-construction API-surface layer-split assertion.
-Used by:    the T13 verification gate (pytest tests/core/test_store.py).
+Defines:    a compact rebuild of the worked-example scenario THROUGH the store's write API
+            (persist + reopen), one test per store-relevant silent-loss inventory row
+            (run_db_schema.md — each RAISES / stays distinct as named), a double-run
+            determinism test, and the by-construction API-surface layer-split assertion.
+Used by:    the verification gate (pytest tests/core/test_store.py).
 Depends on: ``model_atlas.core.store`` (the RunStore under test), ``model_atlas.core.ids``
             (deterministic ids + the digest recipe — the assembler's real path), and
             ``model_atlas.core.vocabularies`` (the family dataclasses + enums).
 
-The scenario is built with the SAME ids/digest helpers the real assembly brick (T23) will
+The scenario is built with the SAME ids/digest helpers the real assembly brick will
 use, so these tests double as a cross-check that ids.py + the store agree with the settled
 model; the store itself computes no id and no digest — it only writes what it is given.
 """

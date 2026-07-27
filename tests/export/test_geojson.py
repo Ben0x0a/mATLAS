@@ -2,7 +2,7 @@
 
 Round-trips a small store (the golden ``secondary`` fixture) to GeoJSON and
 spot-checks feature count and coordinates against the flat CSV
-(``core.flat_view.build_flat_view``) of the SAME store — the T51 Verify bullet. Also checks
+(``core.flat_view.build_flat_view``) of the SAME store. Also checks
 the encoding decision (plain utf-8, NO BOM — RFC 7946 §5, a deliberate deviation from
 the old exporter, see model_atlas/export/geojson.py's docstring).
 """

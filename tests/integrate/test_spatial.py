@@ -1,10 +1,10 @@
-"""Tests for model_atlas/integrate/spatial.py (T31 — the D31 Verify list).
+"""Tests for model_atlas/integrate/spatial.py (the S2 spatial-index Verify list).
 
 Covers:     the known-point leaf cell + level, the uint64<->signed-int64 storage
             round-trip (including a real top-bit-set point), the ancestor-sharing /
-            range-containment property T41 relies on, the m/s->km/h and ft->m unit
-            conversions, the method stamp on every integration row, and the
-            no-coordinates -> no spatial_index row rule.
+            range-containment property the concomitance engine relies on, the m/s->km/h
+            and ft->m unit conversions, the method stamp on every integration row, and
+            the no-coordinates -> no spatial_index row rule.
 Uses:       ``model_atlas.integrate.spatial``, ``model_atlas.core`` (ids,
             vocabularies, store) and ``s2sphere`` directly for the reference values.
 Note:       every read-back goes through plain ``sqlite3`` (the store connection) —

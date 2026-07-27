@@ -1,22 +1,22 @@
 """The RunStore: a temp on-disk SQLite run database with a layer-typed write API.
 
 Defines:    ``RunStore`` — owns a TEMP ON-DISK SQLite database (a real file in a tempdir,
-            ``journal_mode=OFF`` / ``synchronous=OFF``), applies the T12 schema on open,
+            ``journal_mode=OFF`` / ``synchronous=OFF``), applies the schema on open,
             and exposes ONE write method per run-DB table, grouped by layer
             (L0 acquisition / L1 assertion / L2 integration / L3 analysis). Persists with
             ``VACUUM INTO`` (``persist``), exposes the live ``connection`` (read-only
             consumers/exporters) and cleans up the temp file on ``close`` / context-manager
             exit. Also exposes the introspectable ``WRITER_TABLE`` / ``TABLE_LAYER`` surface.
-Used by:    the ingestion/assembly bricks (they build the T10 family dataclasses and call
-            the writers in R20 order), read-only consumers/exporters (via ``.connection``),
-            and tests.core.test_store.
-Depends on: ``model_atlas.core.schema`` (``create_schema`` — the derived DDL + the R16/R19
+Used by:    the ingestion/assembly bricks (they build the family dataclasses and call
+            the writers in parent-before-child order, so foreign keys resolve),
+            read-only consumers/exporters (via ``.connection``), and tests.core.test_store.
+Depends on: ``model_atlas.core.schema`` (``create_schema`` — the derived DDL + the
             versioning stamps), ``model_atlas.core.vocabularies`` (the frozen family
             dataclasses the writers accept), and the standard library only (``sqlite3``,
             ``dataclasses``, ``enum``, ``pathlib``, ``tempfile``).
 
-Storage decision (R3, settled 2026-07-11)
------------------------------------------
+Storage decision (settled 2026-07-11)
+--------------------------------------
 The run DB is **reproducible scratch**: everything in it is a deterministic function of
 the evidence + presets, so crash-safety is not a fidelity property. We therefore open a
 real temp file with ``journal_mode=OFF`` and ``synchronous=OFF`` (no rollback journal, no
@@ -40,10 +40,10 @@ No silent loss
 --------------
 There is **no ``INSERT OR IGNORE`` anywhere**: a UNIQUE violation is a derivation bug and
 must surface, so ``sqlite3.IntegrityError`` is left to propagate. The one content-keyed
-convenience is ``write_preset`` (a preset's definition IS its identity — decision 27):
+convenience is ``write_preset`` (a preset's definition IS its identity):
 SELECT-then-INSERT, returning the existing id for an identical row but RAISING when the
-same ``key``+``version`` carries a different ``definition_digest`` (the D40 un-bumped-edit
-finding). The R20 ingest write order (case → run → source → raw_record →
+same ``key``+``version`` carries a different ``definition_digest`` (the un-bumped-edit
+finding). The parent-before-child ingest write order (case → run → source → raw_record →
 activity(+record) → entity + expressions + components BEFORE the assertion referencing
 them → integrations → analysis) is NOT enforced by the store: ``PRAGMA foreign_keys = ON``
 (set by ``create_schema``) makes every FK check immediately, so writing a child before its
@@ -133,9 +133,9 @@ def _bind(value: Any) -> Any:
 class RunStore:
     """A temp on-disk SQLite run database with a layer-typed, no-silent-loss write API.
 
-    Open one per run (``RunStore()``), write rows in R20 order through the layer methods,
-    then ``persist(path)`` a clean copy. Use as a context manager so the temp file is always
-    removed::
+    Open one per run (``RunStore()``), write rows in parent-before-child order through
+    the layer methods, then ``persist(path)`` a clean copy. Use as a context manager so
+    the temp file is always removed::
 
         with RunStore() as store:
             store.write_case_metadata(case)
@@ -185,7 +185,7 @@ class RunStore:
         # This store OWNS a scratch temp file, so close() deletes it. The persisted-DB opener
         # below clears this flag: an existing run DB is evidence, never deleted on close.
         self._owns_temp = True
-        # Reproducible scratch (R3): no rollback journal, no fsync — crash-safety is not a
+        # Reproducible scratch: no rollback journal, no fsync — crash-safety is not a
         # fidelity property here, and the run DB is a deterministic function of the inputs.
         self._conn.execute("PRAGMA journal_mode = OFF;")
         self._conn.execute("PRAGMA synchronous = OFF;")
@@ -226,7 +226,7 @@ class RunStore:
         """INSERT one frozen family dataclass into ``table`` (columns = its field names).
 
         HOW: the dataclass field names ARE the column names (the schema derives its columns
-        from the same dataclasses — T12), so a positional ``fields()`` walk gives an exact,
+        from the same dataclasses), so a positional ``fields()`` walk gives an exact,
         order-independent column list and value tuple; enums are lowered by ``_bind``.
         WHY private with a literal ``table`` at every call site: this is the ONLY generic
         writer, and keeping it private is what makes the public layer split structural — a
@@ -256,7 +256,7 @@ class RunStore:
         self._insert("run_archive", row)
 
     def write_preset(self, row: V.Preset) -> str:
-        """Content-keyed insert (decision 27): a preset's definition IS its identity.
+        """Content-keyed insert: a preset's definition IS its identity.
 
         HOW: SELECT on the natural key ``(key, version)`` first; if a row exists with the
         SAME ``definition_digest`` return its id (the preset was legitimately selected/applied
@@ -264,8 +264,8 @@ class RunStore:
         INSERT and return the new id.
         WHY this is the ONE exception to "no content-keyed insert / no OR IGNORE": re-applying
         an identical preset must not raise, but a changed definition under an UN-BUMPED version
-        is exactly the D40 finding the model exists to surface — so it must raise loudly, never
-        be silently ignored or merged.
+        is exactly the un-bumped-preset-edit finding the model exists to surface — so it must
+        raise loudly, never be silently ignored or merged.
         """
         existing = self._conn.execute(
             "SELECT preset_id, definition_digest FROM preset WHERE key = ? AND version IS ?",
@@ -273,7 +273,7 @@ class RunStore:
         ).fetchone()
         if existing is not None:
             existing_id, existing_digest = existing
-            # Invariant (D40): same key+version but a different digest means the definition
+            # Invariant: same key+version but a different digest means the definition
             # changed without a version bump — a surfaced finding, never a silent overwrite.
             if existing_digest != row.definition_digest:
                 raise ValueError(
@@ -353,8 +353,9 @@ class RunStore:
         open transaction, so we ``commit()`` first (flushing any pending writes); an existing
         target is removed first because ``VACUUM INTO`` refuses to overwrite a non-empty file.
         WHY not ``sqlite3.backup()``: the backup API's busy-retry loop deadlocked against an
-        open write transaction, forcing the old store into autocommit — a constraint the R3
-        ruling dissolved. ``VACUUM INTO`` has no such hazard, so it is the only persist path.
+        open write transaction, forcing the old store into autocommit — a constraint the
+        reproducible-scratch storage decision above dissolved. ``VACUUM INTO`` has no such
+        hazard, so it is the only persist path.
         """
         target = Path(path)
         if target.exists():

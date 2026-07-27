@@ -1,10 +1,11 @@
-"""Tests for preset template mapping values (decision 42: ``format(...)``).
+"""Tests for preset template mapping values (``format(...)``).
 
 Covers the expr parser (``parse_template`` via ``parse_ref``) — literal/placeholder
 segmentation, ``{{``/``}}`` escapes, malformed templates — the resolver
 (``presets.resolve.resolve_ref`` over a format ref: mixed render, a missing placeholder
 rendering empty, EVERY placeholder missing yielding the same ``NA_SENTINEL`` identity as
-decision 33), a template as a conditional branch result, and the load-time lint path.
+a conditional's no-match case), a template as a conditional branch result, and the
+load-time lint path.
 The end-to-end assemble coverage lives in tests/ingest/test_assemble.py.
 Used by:    pytest.
 Depends on: presets.expr, presets.spec, presets.fields, presets.lint, presets.resolve,

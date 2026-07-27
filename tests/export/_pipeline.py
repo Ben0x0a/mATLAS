@@ -1,4 +1,4 @@
-"""Shared test-side store builders for tests/export/ (T51).
+"""Shared test-side store builders for tests/export/.
 
 Defines:    ``GOLDEN_SRC`` (the committed golden fixture directory), ``rows`` (a
             dict-row SELECT helper), ``run_relational_pipeline`` (drives the full
@@ -15,11 +15,11 @@ Depends on: model_atlas.core (ids, store, vocabularies), model_atlas.ingest,
 Not a test module itself (leading underscore, per the ``exporters.registry`` plugin
 convention of skipping ``_``-prefixed files) — pytest does not collect it.
 
-Why factor this out (T51 scope)
---------------------------------
-T50's ``test_csv_flat.py`` already built a test-side pipeline runner (the app-layer
-pipeline that wires these bricks together is a later task, T60). T51 adds five more
-export bricks whose tests need the SAME runner over the SAME golden fixtures, so the
+Why factor this out
+----------------------
+``test_csv_flat.py`` already built a test-side pipeline runner (the app-layer
+pipeline that wires these bricks together came later). Five more export bricks need
+the SAME runner over the SAME golden fixtures, so the
 runner is factored out here rather than duplicated five times; ``test_csv_flat.py`` now
 imports it instead of defining it locally. This module stays inside tests/export/, so
 no other test package is touched.

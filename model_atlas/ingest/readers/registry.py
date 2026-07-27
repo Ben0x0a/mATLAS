@@ -2,7 +2,7 @@
 
 Defines:    ``register_reader`` (class decorator), ``get_reader``, ``registered_readers``.
 Used by:    every concrete reader module (decorates its class) and, later, the assemble
-            brick (T23) to dispatch a source's declared format to its reader.
+            brick to dispatch a source's declared format to its reader.
 Depends on: ``model_atlas.ingest.readers.base`` (the ``Reader`` protocol) only.
 
 WHY a class decorator (mirrors the old ``sources/readers/base.py`` pattern):

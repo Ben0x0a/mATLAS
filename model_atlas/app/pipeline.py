@@ -18,7 +18,7 @@ Depends on: ``model_atlas.core`` (ids, determinism, store), ``model_atlas.ingest
             ``model_atlas.presets`` (spec_loader, matcher, spec, resolve),
             ``model_atlas.app`` (config, reporting).
 
-This is the T60 successor of the deleted flat-engine ``model_atlas/pipeline.py``.
+This is the successor of the deleted flat-engine ``model_atlas/pipeline.py``.
 ``process()``'s public signature and the ``ProcessResult`` shape are kept EXACTLY as
 the GUI/CLI consume them; what changed is everything behind them — the run now fills
 one relational ``RunStore`` (L0..L3) and every output is a projection over it.
@@ -26,8 +26,8 @@ one relational ``RunStore`` (L0..L3) and every output is a projection over it.
 Design decisions
 ----------------
 * **Two walks, one read.** ``ingest_input`` owns the walk that READS evidence (it
-  fingerprints, materialises and persists every readable file — L0 is preset-free,
-  decision 27). Matching then re-walks the SAME container tree only to enumerate
+  fingerprints, materialises and persists every readable file — L0 is preset-free).
+  Matching then re-walks the SAME container tree only to enumerate
   ``SourceFile``s for the path/name selectors; its column peeks are answered FROM THE
   STORE (the first raw_record's keys), so no source file is ever opened twice for
   reading.
@@ -36,9 +36,9 @@ Design decisions
   sees exactly what ingest read — a separately-opened reader could disagree.
 * **sql selectors are not assembled.** L0 persists TABLES; a ``sql:`` selector has no
   corresponding source row, so it is reported loudly as unsupported rather than
-  silently dropped (the pre-T60 engine ran the query at extract time; running SQL over
+  silently dropped (the previous engine ran the query at extract time; running SQL over
   the verbatim raw_record layer is future work).
-* **case_number.** The relational schema roots every run in a case (decision 28). On a
+* **case_number.** The relational schema roots every run in a case. On a
   CREATE run the ``case`` label (falling back to ``base_name``) is stored as the
   case_number; on an APPEND run the case identity is READ from the existing DB, never
   re-derived, so a case keeps its identity across every run added to it.
@@ -162,7 +162,8 @@ def _file_label(file: SourceFile) -> str:
 def _preset_row(spec: PresetSpec) -> V.Preset:
     """The store's ``preset`` row for a loaded spec: id from (key ⟂ version) exactly as
     ``assemble_source`` re-derives it, the display title as ``name``, and the YAML
-    bytes' sha256 as the D40 change-detecting definition digest."""
+    bytes' sha256 as the definition digest (detects an edited preset whose key/version
+    was not bumped)."""
     return V.Preset(
         preset_id=ids.preset_id(spec.meta.id, spec.meta.version),
         key=spec.meta.id,
@@ -204,7 +205,7 @@ def _rows(store: RunStore, sql: str, *args: object) -> list[dict]:
 
 
 def _read_case_id(store: RunStore) -> str:
-    """The case id of an opened case DB (one case per DB, decision 28). A new run APPENDS
+    """The case id of an opened case DB (one case per DB). A new run APPENDS
     under this id rather than minting a fresh case."""
     row = store.connection.execute("SELECT case_id FROM case_metadata LIMIT 1").fetchone()
     if row is None:
@@ -387,7 +388,7 @@ def process(
         existing_case_id = None
 
     try:
-        # --- L0: one walk that READS everything (preset-free, decision 27) ----
+        # --- L0: one walk that READS everything (preset-free) ----
         _emit(progress, "Discovering & ingesting sources")
         ingest_report = ingest_input(
             input_path, store,
@@ -573,7 +574,7 @@ def _assemble_match(
         return False
 
     source = source_rows[0]
-    # APPEND idempotency (T98): this source is already in the case from an EARLIER run (ingest
+    # APPEND idempotency: this source is already in the case from an EARLIER run (ingest
     # skipped re-writing it, so the row still carries the prior run_id). Its assertions already
     # exist — re-assembling would collide — so skip it. Not an error and not a new match: the
     # skip was already recorded at ingest, so nothing is added to matched/unmatched here.
@@ -602,7 +603,7 @@ def _assemble_match(
         activity_ordinals=activity_ordinals,
     )
     warnings.extend(report.warnings)
-    # decision 24: assemble only REPORTS the source-grain data_source; the L0 owner —
+    # assemble only REPORTS the source-grain data_source; the L0 owner —
     # this pipeline — sets it on the source row (digests are unaffected: data_source is
     # source-grain, outside both digests, so folder==zip parity holds).
     if report.data_source is not None:

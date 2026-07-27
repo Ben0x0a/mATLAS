@@ -1,4 +1,4 @@
-"""Tests for T96 freelist + free-space carving (``model_atlas.sqlite.carve``).
+"""Tests for freelist + free-space carving (``model_atlas.sqlite.carve``).
 
 Covers, over fixtures built in-process (no committed binary): deleted rows are recovered
 from a leaf page's free space; dropped-table rows are recovered from freelist pages; each

@@ -1,4 +1,4 @@
-"""Tests for model_atlas/analyze/concomitance.py (T41 — the Verify list).
+"""Tests for model_atlas/analyze/concomitance.py (the Verify list).
 
 Covers:     pairs inside both thresholds found / outside either threshold not,
             the Q3/Q4 presence split (``references`` pins and

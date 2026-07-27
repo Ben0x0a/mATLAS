@@ -13,7 +13,7 @@ out (a ``name`` present in many folders, or a ``{uuid}`` path) applies the prese
 matching file. Same-role selectors are OR alternatives; the first to match supplies the
 reader params.
 
-T60: matching now rides the ingest Container model, and the two reader touch points
+Matching now rides the ingest Container model, and the two reader touch points
 (``peek`` for column peeks, ``subtables`` for force-mode sub-unit listing) are INJECTED
 callables rather than reader imports — the pipeline decides how a peek is served (the
 run store's already-ingested records), so the matcher stays free of any reader contract.

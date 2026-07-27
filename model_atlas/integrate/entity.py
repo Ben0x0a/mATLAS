@@ -1,22 +1,22 @@
-"""Entity normalisation (T32): fills the entity row's derived fields, per kind, with
+"""Entity normalisation: fills the entity row's derived fields, per kind, with
 refuse semantics — then recomputes the evidence digests the new identifier moves.
 
 Defines:    ``normalise_identifier`` (one raw identifier -> its canonical form or None,
             the REFUSE verdict, per the docs/entity_model.md rule table),
-            ``stem_concerns`` / ``concerns_uid`` (the decision-22 case-folded/stemmed
+            ``stem_concerns`` / ``concerns_uid`` (the case-folded/stemmed
             attribution digest: "A. Moreau" / "moreau a." / "A.MOREAU" share one uid),
             ``normalise_entities`` (the store-level driver: one narrow UPDATE per entity
             row setting ONLY identifier / identifier_type / concerns_uid, plus the
             assertion-digest recomputation described below and the rule-set stamps in
             ``matlas_meta``), and ``EntityNormaliseReport`` (its testable summary).
-Used by:    the app-layer pipeline (T60 wires L2 after ingest) and
+Used by:    the app-layer pipeline (wires L2 after ingest) and
             tests/integrate/test_entity.py.
 Depends on: ``model_atlas.core`` (``ids`` — the normative L1 projection + both digests,
             ``store`` — the run DB connection) and the standard library only
             (``dataclasses``, ``hashlib``, ``ipaddress``, ``json``, ``logging``, ``re``,
             ``sqlite3``, ``unicodedata``).
 
-Refuse semantics (docs/entity_model.md R1 — the design's whole point)
+Refuse semantics (docs/entity_model.md — the design's whole point)
 ---------------------------------------------------------------------
 A normaliser may REFUSE rather than guess: a refusal leaves ``identifier`` NULL, so the
 mention can never converge with anything — convergence is always the query
@@ -25,20 +25,20 @@ merge, and this brick writes per-row derived values only (no dedup, no row shari
 
 Refusal deliberately does NOT rewrite ``identifier_type``: the stored kind is the
 preset's CLAIM ("this string was declared an msisdn"), it sits INSIDE the hashed L1
-projection, and both assertion digests already committed to it at assembly (T23).
+projection, and both assertion digests already committed to it at assembly.
 Erasing it to ``none`` would either move the evidence digests for a value that was
 merely *declined* (a refusal is a non-derivation, not new evidence) or leave the stored
 digests stale against a fresh recomputation — both unacceptable. Only ``identifier``
-legitimately moves the digests (``concerns_uid`` is normatively excluded, decision 22),
+legitimately moves the digests (``concerns_uid`` is normatively excluded),
 so a refused row's assertion digests are byte-identical before and after this brick;
 the NULL identifier alone guarantees nothing converges. This is a deliberate deviation
-from tasks/T32.md's shorthand "identifier_type=none on refusal", resolved in favour of
-digest integrity.
+from the original design note's shorthand "identifier_type=none on refusal", resolved in
+favour of digest integrity.
 
 The digest recomputation (CRITICAL — run_db_schema.md, the normative L1 projection)
 -----------------------------------------------------------------------------------
 ``entity.identifier`` is inside the L1 projection both ``content_hash`` and
-``claim_digest`` hash. T23 stored digests hashing ``identifier=None`` (the assembled,
+``claim_digest`` hash. Assembly stored digests hashing ``identifier=None`` (the assembled,
 pre-normalisation row), so after a normalisation SUCCEEDS this brick re-reads every L1
 row the projection covers (entity, spatial/temporal expressions + components in ordinal
 order, activity context), rebuilds the projection via ``ids.l1_projection`` and both
@@ -52,7 +52,7 @@ Why the direct UPDATEs are not an evidence mutation (the store has no update API
 The RunStore exposes insert-only writers by design; this brick uses narrow SQL UPDATEs
 through ``store.connection`` because it completes a DEFERRED DERIVATION, not an edit:
 ``identifier`` / ``identifier_type`` / ``concerns_uid`` are the derived columns of the
-lean entity row (decision 17 collapsed the old L2 entity integration onto the row) and
+lean entity row (this collapsed the old L2 entity integration onto the row) and
 the two digest columns are derived summaries of the L1 projection. The evidence itself
 — ``raw_identifier``, ``concerns``, every component ``raw_value`` — is never touched,
 and the applied rule-set versions are recorded once per run in ``matlas_meta``
@@ -75,7 +75,7 @@ from model_atlas.core.store import RunStore
 _LOG = logging.getLogger(__name__)
 
 # The rule-set versions this module implements, recorded in matlas_meta by
-# ``normalise_entities`` (decisions 17/22: the normalisation + stemming rule-set
+# ``normalise_entities`` (the normalisation + stemming rule-set
 # versions are recorded once per run). The region calling-code table below is PART of
 # entity_norm/1.0 — extending it is a rule-set change and must bump this version.
 NORMALISATION_RULESET = "entity_norm/1.0"
@@ -306,7 +306,7 @@ def normalise_identifier(kind: str, raw: str, *, default_region: str | None = No
     return normaliser(raw, default_region)
 
 
-# --- concerns stemming + digest (decision 22) --------------------------------
+# --- concerns stemming + digest -----------------------------------------------
 
 def stem_concerns(text: str) -> str:
     """The stemmed grouping form of a ``concerns`` value (rule-set concerns_stem/1.0).
@@ -327,8 +327,8 @@ def stem_concerns(text: str) -> str:
 def concerns_uid(text: str) -> str:
     """``entity.concerns_uid``: sha256 hex of the stemmed concerns text.
 
-    Derived, NEVER a key, and normatively excluded from both evidence digests
-    (decision 22) — it only powers the attribution GROUP BY; the rows stay distinct.
+    Derived, NEVER a key, and normatively excluded from both evidence digests —
+    it only powers the attribution GROUP BY; the rows stay distinct.
     """
     return hashlib.sha256(stem_concerns(text).encode("utf-8")).hexdigest()
 
@@ -390,7 +390,7 @@ def normalise_entities(store: RunStore, *, default_region: str | None = None) ->
         if identifier is not None:
             report.digests_recomputed_count += _recompute_assertion_digests(
                 connection, entity_id, identifier, identifier_type, entity_type)
-    # Record the rule-set versions actually applied (decisions 17/22): the schema wrote
+    # Record the rule-set versions actually applied: the schema wrote
     # placeholders at creation; the derivation is only documented once these are real.
     connection.execute(
         "UPDATE matlas_meta SET normalisation_ruleset = ?, stemming_ruleset = ?",
@@ -437,7 +437,7 @@ def _recompute_assertion_digests(
      entity_position_link, entity_time_link, spatial_temporal_link,
      deleted, multiplicity) = assertion
 
-    # The content_hash prefix inputs (decision 27): fingerprint ⟂ preset KEY ⟂ line_no.
+    # The content_hash prefix inputs: fingerprint ⟂ preset KEY ⟂ line_no.
     line_no, fingerprint_sha256 = connection.execute(
         "SELECT record.line_no, source.fingerprint_sha256 FROM raw_record AS record "
         "JOIN source ON source.source_id = record.source_id "
@@ -496,7 +496,7 @@ def _load_temporal_projection(
     connection: sqlite3.Connection, temporal_expression_id: str | None,
 ) -> ids.TemporalProjection | None:
     """The stored temporal corner as its digest projection (bounds in ordinal order,
-    each with its own stated_offset — R13), or None when the corner is absent."""
+    each with its own stated_offset), or None when the corner is absent."""
     if temporal_expression_id is None:
         return None
     kind, referential = connection.execute(
@@ -515,7 +515,7 @@ def _load_activity_projection(
     connection: sqlite3.Connection, activity_id: str | None,
 ) -> ids.ActivityProjection | None:
     """The stored activity as its digest projection, or None when the assertion has no
-    activity. The context is DECODED back to the object the assembler hashed (R27):
+    activity. The context is DECODED back to the object the assembler hashed:
     ``l1_projection`` re-canonicalises it, so the stored JSON's key order is irrelevant
     and the round-trip through SQLite cannot move the digest."""
     if activity_id is None:

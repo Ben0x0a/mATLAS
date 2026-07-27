@@ -1,9 +1,9 @@
-"""New-engine export-brick registry (T51): register / list / run the query+serialiser
+"""The export-brick registry: register / list / run the query+serialiser
 ``Exporter`` bricks in this package.
 
 Defines:    ExporterSpec, register_exporter, available_exporters, get_exporter,
             run_exporters (register / list / run for the ``Exporter`` protocol —
-            ``export(store, ctx) -> list[Path]``, T50), ``load_builtin_exporters``
+            ``export(store, ctx) -> list[Path]``), ``load_builtin_exporters``
             (imports every shipped brick for its registration side effect) and the
             registration of the primary ``csv`` brick.
 Used by:    the app-layer pipeline (``model_atlas.app.pipeline`` runs the selected
@@ -13,7 +13,7 @@ Used by:    the app-layer pipeline (``model_atlas.app.pipeline`` runs the select
 Depends on: model_atlas.core.store.RunStore, model_atlas.export.csv_flat (the
             ``Exporter`` protocol + ``ExportContext``), the standard library only.
 
-T60: this became the ONE exporter registry — the old flat-frame registry (its
+This became the ONE exporter registry — the old flat-frame registry (its
 ``ExportContext`` carried a pre-built pandas ``DataFrame``; ``fn(ctx)`` contract)
 retired with the old engine, and the app pipeline now drives these bricks directly.
 """

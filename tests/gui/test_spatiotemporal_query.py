@@ -1,4 +1,4 @@
-"""Qt-free unit tests for the two spatiotemporal mapping seams (T72).
+"""Qt-free unit tests for the two spatiotemporal mapping seams.
 
 Covers:     the input->query-params mapping (``build_query`` + ``split_identifiers`` /
             ``duration_from``: axes AND-ed, empties left unconstrained, unknown unit

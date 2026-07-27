@@ -1,17 +1,17 @@
 """Tests for the L1 writer (model_atlas/ingest/assemble.py).
 
-Covers the T23 verification gate:
+Covers the L1-writer verification gate:
   * the nine worked examples (docs/model_worked_examples.md) reproduce their documented
     assertion counts — ANPR 1 · CCTV 1 · witness 1 · CDR 1 (+ the B-leg's own record
     = a second, separate line) · Cache 1 · visit 1 · robbery 1 · route search 2 ·
     shared pin 1 — and their component / context shapes;
   * one file matched by TWO presets stays ONE source with TWO assertion sets sharing
-    the raw_records (decision 27), converging on claim_digest but not content_hash;
+    the raw_records, converging on claim_digest but not content_hash;
   * both digests recompute byte-equal from the stored rows via ``core.ids`` (never a
     local recipe), and folder==zip parity holds end-to-end through the L0 writer;
-  * decision-33 conditionals survive the port (the pin's ``deleted`` mapping), the
+  * conditionals survive the port (the pin's ``deleted`` mapping), the
     ``N/A`` sentinel stays distinguishable from an unmapped NULL, operator params set
-    the origin columns (R24), and ``data_source`` is reported at source grain (D24).
+    the origin columns, and ``data_source`` is reported at source grain.
 
 The presets are constructed programmatically (``FieldSpec``/``TimeSpec``/…): the new
 L1-only field names (entity_role, identifier_type, activity_kind, context.<key>, …)

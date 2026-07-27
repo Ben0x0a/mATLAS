@@ -39,7 +39,7 @@ header, so FALSE POSITIVES are expected (random bytes that happen to decode as a
 schema-shaped record). Every carved row is therefore marked RECOVERED by the reader and
 tagged with its freelist/freespace provenance here — never mixed in with live evidence.
 
-Determinism (R9): the carve is a pure function of the file bytes. Pages are visited in
+Determinism: the carve is a pure function of the file bytes. Pages are visited in
 ASCENDING page-number order; within a page, regions in a fixed order (unallocated gap
 first, then the freeblock chain in chain order); within a region, offsets ascending. A
 re-run over the same bytes therefore yields a byte-identical carved-row sequence, so the
@@ -333,7 +333,7 @@ def _decode_value(buf: bytes, offset: int, serial: int) -> tuple[Any, int]:
 
     Values land in their native Python types (int / float / str / bytes / None) — the
     SAME types the reader's live ``SELECT`` yields — so a carved BLOB (bytes) flows
-    through the reader's R18 envelope step identically to a live one.
+    through the reader's BLOB-envelope step identically to a live one.
     """
     if serial == 0:
         return None, 0

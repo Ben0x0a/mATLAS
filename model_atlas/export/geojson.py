@@ -1,5 +1,5 @@
 """GeoJSON export brick: a Point FeatureCollection over the flat-projected rows that
-carry coordinates (T51 — ports ``exporters/builtin.py``'s
+carry coordinates (ports ``exporters/builtin.py``'s
 ``export_geojson``).
 
 Defines:    GeojsonExporter (the ``Exporter`` protocol brick, ``format = "geojson"``),
@@ -9,13 +9,13 @@ Depends on: model_atlas.core.flat_view (the flat query), model_atlas.export.csv_
             (the ``Exporter`` protocol / ``ExportContext``), model_atlas.export._shared
             (value helpers + partitioning).
 
-Query + serialiser (T51 scope)
--------------------------------
+Query + serialiser
+--------------------
 The data access is ONE query — ``core.flat_view.build_flat_view``. Every canonical column
 except the two coordinates becomes a GeoJSON ``properties`` entry (a blank/NaN/NA cell
 becomes ``null``, matching the old exporter), so a GIS consumer sees the same
 attribute set the old exporter exposed (extended with the relational model's new
-canonical columns — R6's ``spatial_referential`` / ``locates`` / ``spatial_method`` /
+canonical columns — the mandatory ``spatial_referential`` / ``locates`` / ``spatial_method`` /
 ``temporal_method`` among them).
 
 Encoding — a documented DEVIATION from the old exporter

@@ -12,7 +12,7 @@ The init is deliberately kept to these small helpers and does NOT import ``csv_f
 — a submodule import would pull pandas/projection into every
 ``import model_atlas.export`` and risk an import cycle, so consumers import
 ``model_atlas.export.csv_flat`` / ``.registry`` explicitly. (The old engine's
-``write_csv`` flat-frame writer retired with it at the T60 cut-over.)
+``write_csv`` flat-frame writer retired with it.)
 """
 from __future__ import annotations
 

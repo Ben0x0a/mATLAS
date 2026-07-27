@@ -5,7 +5,7 @@ Defines:    value_map_key — normalise a source value to a canonical lookup key
 Used by:    presets.pipes (the lookup transform).
 Depends on: standard library only.
 
-T60 fold: moved verbatim from ``transforms/value_maps.py`` — the lookup
+Moved verbatim from ``transforms/value_maps.py`` — the lookup
 tables are preset data, so their key normalisation lives with the preset pipes.
 """
 from __future__ import annotations

@@ -8,7 +8,7 @@ Depends on: ``model_atlas.core.determinism`` (``excel_line_no`` — rule 3),
 
 Ported from ``sources/readers/excel_reader.py`` (same ``pandas.read_excel`` +
 ``openpyxl`` engine, same ``sheet``/``skip_rows``/``header_row`` params), plus this task's
-two additions: R9 ``line_no`` (rule 3: the sheet row number itself) and verbatim values via
+two additions: the normative ``line_no`` (rule 3: the sheet row number itself) and verbatim values via
 ``dtype=str`` — this reader's "parse_float=str-style option": pandas skips numeric
 inference entirely, so a genuinely textual cell survives byte-for-byte. A numeric Excel
 cell is a documented, unavoidable exception: xlsx stores numbers as IEEE754, not text — a

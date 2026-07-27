@@ -1,4 +1,4 @@
-"""Qt-free mapping seams for the spatiotemporal concomitance panel (T72).
+"""Qt-free mapping seams for the spatiotemporal concomitance panel.
 
 Defines:    the two pure functions the GUI panel is built on, kept free of any Qt
             import so they unit-test without a running application:
@@ -133,7 +133,8 @@ RESULT_COLUMNS: tuple[str, ...] = (
 def format_entity(ref: EntityRef) -> str:
     """One entity as a cell: its working identity, or a loud unidentified marker.
 
-    A NULL identifier is a purely typed mention (decision 17) that can never
+    A NULL identifier is a purely typed mention (identified only by its type, with
+    no concrete identifier value) that can never
     converge, so it is shown as an em dash rather than blank — "no identity" must
     read differently from an empty cell. The type/identifier_type qualifier lets an
     analyst tell two unidentified devices apart at a glance.

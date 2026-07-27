@@ -1,6 +1,6 @@
 """Tests for the L0 writer (model_atlas/ingest/writer.py) + the container walk.
 
-Covers decision 27/29/38/40 and R16/R17/R23:
+Covers:
   * a folder and a zip of the same tree -> equal source ``fingerprint_sha256`` but
     distinct ``source_id`` / ``input_file_path`` (paths-only id, §2c);
   * two identical-bytes archives at two paths -> TWO ``archive`` rows sharing ``cd_sha256``
@@ -9,7 +9,7 @@ Covers decision 27/29/38/40 and R16/R17/R23:
     an identical preset set and still writes ``run_archive(skipped=1)``; a changed preset
     digest under the same key+version forbids the skip);
   * nested ``a.zip!b.zip!x.db`` vs ``c.zip!b.zip!x.db`` do not collide;
-  * a persisted ``*.matlas.sqlite`` fed as input is refused (R16).
+  * a persisted ``*.matlas.sqlite`` fed as input is refused (the self-ingestion guard).
 """
 from __future__ import annotations
 

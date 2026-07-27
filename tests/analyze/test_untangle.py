@@ -1,15 +1,15 @@
 """Tests for the untangle L3 brick (``model_atlas.analyze.untangle``).
 
 Defines:    the pinned-oracle verdict test (the ``_EXPECTED`` tuple was verified
-            against the retired ``transforms.rank.untangle`` before the T60 cut-over,
-            so the store-read ``analyse`` still answers to the old engine's exact
-            per-assertion ``(record_type, record_rank)``), the decision-19 re-run
-            tests (a bumped version ADDS a second row per assertion and the
+            against the retired ``transforms.rank.untangle`` before the cut-over to the
+            relational engine, so the store-read ``analyse`` still answers to the old
+            engine's exact per-assertion ``(record_type, record_rank)``), the
+            re-run tests (a bumped version ADDS a second row per assertion and the
             projection picks the current method's verdict; the SAME version re-run
             RAISES), the analysis id derivation check, and the empty-store no-op.
-Used by:    the T40 verification gate (pytest tests/analyze/test_untangle.py).
+Used by:    the verification gate (pytest tests/analyze/test_untangle.py).
 Depends on: ``model_atlas.analyze.untangle`` (under test), ``model_atlas.core``
-            (``ids`` / ``vocabularies`` / ``store`` / ``projection``), pandas and
+            (``ids`` / ``vocabularies`` / ``store`` / ``flat_view``), pandas and
             pytest.
 """
 from __future__ import annotations

@@ -1,8 +1,8 @@
 """The L0 writer: walk an input and persist the acquisition layer into a RunStore.
 
-Defines:    ``IngestReport`` (the counts a run produces), ``SelfIngestionError`` (R16 —
-            a persisted mATLAS run DB fed back as evidence), ``is_matlas_run_db`` (the R16
-            stamp probe) and ``ingest_input`` — the single L0 entry point that writes
+Defines:    ``IngestReport`` (the counts a run produces), ``SelfIngestionError`` (raised
+            when a persisted mATLAS run DB is fed back as evidence), ``is_matlas_run_db``
+            (the self-ingestion stamp probe) and ``ingest_input`` — the single L0 entry point that writes
             ``case_metadata`` + ``run`` + ``preset``/``run_preset`` + ``archive``/
             ``run_archive`` + ``source`` + ``raw_record`` rows, in FK-safe order.
 Used by:    the app-layer pipeline (once it exists) and tests/ingest/test_discover.py.
@@ -16,22 +16,22 @@ Depends on: ``model_atlas.ingest.discover`` (the walk events), ``model_atlas.ing
 WHY this is the L0 writer and not the old ``sources`` pipeline: the new engine's identity
 discipline lives entirely in ``core`` (paths-only ids, the two evidence digests, the
 canonical joins), so the acquisition layer is rebuilt here against ``core.store`` while the
-old engine keeps running until T60. The container *walk* is ported from
+old engine keeps running until the cut-over. The container *walk* is ported from
 ``sources/discover.py`` (see ``discover.py``); what is NEW is the persistence:
 
-  * every archive encounter is recorded (``archive`` + ``run_archive``), decision 38 — an
+  * every archive encounter is recorded (``archive`` + ``run_archive``) — an
     archive id is derived from its PATH only (never the central-directory hash), so two
     byte-identical archives at two paths become two rows sharing ``cd_sha256`` (a
     GROUP BY finding, never an ingest-time merge);
-  * an opt-in, preset-scoped skip (decision 38/40) still writes its ``run_archive`` link
+  * an opt-in, preset-scoped skip still writes its ``run_archive`` link
     with ``skipped=1`` — never traceless — and only when the operator opted in AND a prior
     run parsed the same ``cd_sha256`` with the SAME preset set (key + version + digest);
   * a source id derives from PATHS ONLY (``input_file_path`` ⟂ ``inner_path`` ⟂ ``subunit``,
-    decision 27/§2c), so a folder file and the same file inside a zip share a
+    §2c), so a folder file and the same file inside a zip share a
     ``fingerprint_sha256`` but stay two distinct source rows (the duplicate is a finding);
-  * the R17 fingerprint scope is the main-file bytes, with WAL/SHM/journal siblings hashed
+  * the fingerprint scope is the main-file bytes, with WAL/SHM/journal siblings hashed
     separately into ``sibling_fingerprints_json``;
-  * the R16 self-ingestion guard refuses a persisted ``*.matlas.sqlite`` top input and
+  * the self-ingestion guard refuses a persisted ``*.matlas.sqlite`` top input and
     flags (skips) any such file discovered inside a folder/archive.
 """
 from __future__ import annotations
@@ -74,7 +74,7 @@ _APPLICATION_ID_OFFSET = 68
 
 
 class SelfIngestionError(Exception):
-    """Refused: the input is a persisted mATLAS run DB (R16). A reproducible-scratch run
+    """Refused: the input is a persisted mATLAS run DB. A reproducible-scratch run
     DB must never be laundered back to L0 — its rows are derivations, not evidence."""
 
 
@@ -90,7 +90,7 @@ class IngestReport:
     records: int = 0
     skipped_unreadable: int = 0
     flagged_self_ingest: int = 0
-    # sources already present in the case from an EARLIER run — skipped on append (T98).
+    # sources already present in the case from an EARLIER run — skipped on append.
     sources_already_in_case: int = 0
     read_failures: int = 0
     # mutable default — a shared [] across instances would be a latent aliasing bug.
@@ -103,7 +103,7 @@ def _now_iso() -> str:
 
 def is_matlas_run_db(path: Path) -> bool:
     """True when ``path`` is a persisted mATLAS run DB: the SQLite magic, the mATLAS
-    ``application_id`` stamp (R16), AND the ``matlas_meta`` marker table.
+    ``application_id`` stamp, AND the ``matlas_meta`` marker table.
 
     WHY all three: a bare SQLite header or a coincidental application_id could occur in
     unrelated evidence; only the full set proves this file was minted by mATLAS, so the
@@ -130,11 +130,11 @@ def is_matlas_run_db(path: Path) -> bool:
 
 
 def _preset_signature(presets: tuple[Preset, ...]) -> str:
-    """The canonical signature of a SELECTED preset set for skip eligibility (decision 40).
+    """The canonical signature of a SELECTED preset set for skip eligibility.
 
     HOW: canonical JSON over the sorted ``(key, version, definition_digest)`` triples — a
     version bump OR an un-bumped definition edit changes the digest, which changes the
-    signature. WHY the digest and not just the version: decision 40 forbids a skip when the
+    signature. WHY the digest and not just the version: a skip must never happen when the
     definition changed silently under the same version, so the digest MUST participate."""
     triples = sorted([p.key, p.version, p.definition_digest] for p in presets)
     return canonical_json(triples)
@@ -144,7 +144,7 @@ def opened_input_path(file: SourceFile) -> Path:
     """The outermost on-disk artefact opened for ``file``: the first archive with an
     on-disk path in its container chain, else the loose file's own path.
 
-    Public (T60): the app pipeline derives each source's id from the SAME opened path
+    Public: the app pipeline derives each source's id from the SAME opened path
     the writer used, so the two derivations can never drift."""
     for container in file.containers:
         if isinstance(container, ZipContainer) and container.path is not None:
@@ -174,10 +174,10 @@ def ingest_input(
 ) -> IngestReport:
     """Walk ``input_path`` and write its acquisition layer into ``store``.
 
-    ``presets`` are the operator-SELECTED presets (decision 39: recorded even when a preset
+    ``presets`` are the operator-SELECTED presets (recorded even when a preset
     yields nothing). ``skip_reparsed_archives`` + ``prior_archive_presets`` (a
     ``cd_sha256 -> preset signature`` map from earlier runs) drive the opt-in, preset-scoped
-    archive skip (decision 38/40). ``exhibit_ref`` (R23) and ``examiner`` are the optional
+    archive skip. ``exhibit_ref`` and ``examiner`` are the optional
     chain-of-custody fields. Returns an ``IngestReport`` of the counts produced.
 
     ``existing_case_id`` switches CREATE vs APPEND: None (default) creates a fresh case rooted
@@ -190,14 +190,14 @@ def ingest_input(
     input_path = Path(input_path)
     prior_archive_presets = prior_archive_presets or {}
 
-    # R16: refuse a persisted run DB fed straight back in as the top input (never laundered).
+    # refuse a persisted run DB fed straight back in as the top input (never laundered).
     if input_path.is_file() and is_matlas_run_db(input_path):
         raise SelfIngestionError(
             f"input {input_path} is a persisted mATLAS run DB (application_id + matlas_meta); "
             f"refusing to re-ingest a reproducible-scratch DB as L0 evidence (R16)"
         )
 
-    # --- case + run (decision 28/39): the run row carries the COMPLETE operator settings.
+    # --- case + run: the run row carries the COMPLETE operator settings.
     # CREATE mints the case root; APPEND reuses the existing case (the caller read its id from
     # the opened DB) and only adds a run — re-writing case_metadata would collide on its PK.
     if existing_case_id is None:
@@ -230,9 +230,9 @@ def ingest_input(
     store.write_run(run)
     report = IngestReport(run_id=run.run_id, case_id=case_id)
 
-    # --- preset + run_preset (decision 39): every selected preset, recorded up front.
+    # --- preset + run_preset: every selected preset, recorded up front.
     for preset in presets:
-        preset_id = store.write_preset(preset)   # SELECT-then-INSERT; raises on a D40 edit
+        preset_id = store.write_preset(preset)   # SELECT-then-INSERT; raises on an un-bumped edit
         store.write_run_preset(
             RunPreset(
                 run_preset_id=ids.run_preset_id(run.run_id, preset_id),
@@ -263,7 +263,7 @@ def _write_archive(
     store: RunStore, run_id: str, event: ArchiveFound, written: set[str], report: IngestReport,
 ) -> None:
     """Record one archive encounter: the ``archive`` row (path-keyed) + a ``run_archive``
-    link (decision 38). The archive row is written once per path (UNIQUE(path)); the link
+    link. The archive row is written once per path (UNIQUE(path)); the link
     marks whether this run skipped it (opt-in, preset-scoped)."""
     archive_id = ids.archive_id(event.path)
     report.archives += 1
@@ -306,7 +306,7 @@ def _ingest_file(
 
     with tempfile.TemporaryDirectory(prefix="matlas-ingest-") as tmp:
         path = file.container.materialise(file, Path(tmp))
-        # R16: a run DB discovered inside a folder/archive is flagged and skipped (not the
+        # a run DB discovered inside a folder/archive is flagged and skipped (not the
         # whole-run refusal a top input gets) — it is still never re-ingested.
         if fmt == "sqlite" and is_matlas_run_db(path):
             report.flagged_self_ingest += 1
@@ -331,11 +331,11 @@ def _ingest_subunit(
     report: IngestReport,
 ) -> None:
     """Write one ``source`` row (paths-only id) plus its verbatim ``raw_record`` rows."""
-    # source id from PATHS ONLY (decision 27/§2c): the fingerprint is a plain indexed column,
+    # source id from PATHS ONLY (§2c): the fingerprint is a plain indexed column,
     # so byte-identical exhibits at two paths stay two rows sharing fingerprint_sha256.
     source_id = ids.source_id(input_file_path, inner_path, subunit)
 
-    # APPEND idempotency (T98): a source already in the case from an EARLIER run must not be
+    # APPEND idempotency: a source already in the case from an EARLIER run must not be
     # re-ingested — its assertions already exist and a second write would collide. Skip it and
     # RECORD the skip (no silent loss); the assemble loop skips it too (run_id mismatch). A
     # within-run duplicate (same run_id) is a DIFFERENT matter: the discover dedup should have

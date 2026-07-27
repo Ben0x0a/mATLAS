@@ -1,4 +1,4 @@
-"""CSV format reader (ingest brick): stdlib ``csv`` for verbatim text, R9 physical-line
+"""CSV format reader (ingest brick): stdlib ``csv`` for verbatim text, physical-line
 numbering from ``core/determinism.py``.
 
 Defines:    ``CsvReader`` (format "csv").
@@ -9,7 +9,7 @@ Depends on: ``model_atlas.core.determinism`` (``csv_data_line_numbers`` — rule
 
 Ported from ``sources/readers/csv_reader.py`` (its ``delimiter``/``encoding``/
 ``skip_rows``/``header_row`` params are kept verbatim), with two additions this task
-requires: R9 ``line_no`` assignment and verbatim values. WHY the stdlib ``csv`` module
+requires: the normative ``line_no`` assignment and verbatim values. WHY the stdlib ``csv`` module
 replaces the old reader's ``pandas.read_csv``: pandas infers a column's dtype and would
 re-format a textual value such as "46.193000" into the float 46.193, losing the trailing
 zeros (canonical JSON rule 5 forbids this); ``csv.reader`` never coerces types, so every

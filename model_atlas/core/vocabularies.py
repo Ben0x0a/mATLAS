@@ -4,12 +4,12 @@ Defines:    every controlled-vocabulary enum (the four link/role vocabularies, t
             corner referentials/kinds, the identifier/entity/activity/edit
             vocabularies), the two derived views (``Genesis``, ``Locates``), the
             component ``part`` vocabularies + ``is_standard_part`` predicate, the
-            D37 phrase fragments used by the verbalizer, one frozen dataclass per
+            phrase fragments used by the verbalizer, one frozen dataclass per
             table, and the ``column_cast`` / ``CANONICAL_UNIT`` / ``unit_factor``
             helpers describing the integration columns.
 Used by:    the schema builder (DDL + CHECKs derive one-directionally from these
             enums), the assembly/ingest engine (casts + unit conversion), the flat
-            CSV projection, and the T16 verbalizer (reads the ``phrase`` fragments).
+            CSV projection, and the verbalizer (reads the ``phrase`` fragments).
 Depends on: the standard library only (``dataclasses``, ``enum``).
 
 This is the successor to ``model_atlas/model/families.py``. It is authoritative:
@@ -24,7 +24,7 @@ invalid vocabulary value is caught the moment a preset is parsed or the DDL CHEC
 built, never written silently into the run DB. ``Genesis`` and ``Locates`` are the
 two exceptions to "declared once, stored once": they are DERIVED views of an edge
 (a deterministic function of ``EntityTimeLink`` / ``EntityPositionLink``), so they
-can never contradict the edge they derive from and are never stored (decisions 11).
+can never contradict the edge they derive from and are never stored.
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ class Genesis(str, Enum):
 class Locates(str, Enum):
     """Derived view of the entity-position edge: whose position the place carries.
 
-    Decision 11: at/claimed_at -> self, within_range_of/at_fixed_detector ->
+    at/claimed_at -> self, within_range_of/at_fixed_detector ->
     infrastructure, references -> referenced, inferred/unknown -> unknown.
     """
 
@@ -63,7 +63,7 @@ class Locates(str, Enum):
 
 # --- The four link / role vocabularies (live on the assertion) -------------
 # Each phrased member declares a British-English ``phrase`` fragment beside its
-# value (decision 37): the T16 verbalizer assembles one deterministic sentence from
+# value: the verbalizer assembles one deterministic sentence from
 # these fragments, so a member's wording is declared here once and derived nowhere
 # else. Negation members must read as negation, REFERENCES as a reference (never
 # presence), CLAIMED_AT as a claim.
@@ -71,10 +71,10 @@ class Locates(str, Enum):
 class EntityTimeLink(str, Enum):
     """Entity-time (E-T) edge: what the clock measured about the entity.
 
-    Carries a ``phrase`` fragment (D37) and derives ``genesis`` (never stored).
+    Carries a ``phrase`` fragment and derives ``genesis`` (never stored).
     ``NEVER_DURING_INTERVAL`` is the negation/alibi member on this edge (open item 1
-    of run_db_schema.md — negation beyond the S-T link — and the shape the T00 demo
-    stores on ``assertion.entity_time_link``).
+    of run_db_schema.md — negation beyond the S-T link — and the shape the
+    worked-example demo stores on ``assertion.entity_time_link``).
     """
 
     OBSERVED_AT = "observed_at", "was observed at"        # a sensor registered the entity
@@ -108,7 +108,7 @@ class EntityTimeLink(str, Enum):
 class EntityPositionLink(str, Enum):
     """Entity-position (E-S) edge: whose location this is / how it is bound.
 
-    Carries a ``phrase`` fragment (D37) and derives ``locates`` (never stored).
+    Carries a ``phrase`` fragment and derives ``locates`` (never stored).
     """
 
     AT = "at", "was at"                                   # the entity's own measured position
@@ -139,7 +139,7 @@ class SpatialTemporalLink(str, Enum):
     """Spatial-temporal (S-T) edge: how the position distributes over the interval.
 
     Absorbs the former ``Temporal relation`` field — they are one edge. Carries a
-    ``phrase`` fragment (D37); ``NEVER_DURING_INTERVAL`` reads as an exclusion.
+    ``phrase`` fragment; ``NEVER_DURING_INTERVAL`` reads as an exclusion.
     """
 
     INSTANT = "instant", "at"
@@ -163,7 +163,7 @@ class SpatialTemporalLink(str, Enum):
 class EntityRole(str, Enum):
     """The entity's part in the activity — the 4th member of the link triptych.
 
-    Carries a ``phrase`` fragment (D37): a noun phrase naming the part played.
+    Carries a ``phrase`` fragment: a noun phrase naming the part played.
     Consolidates the worked-examples ⊕ additions (subject, caller, callee, sender,
     recipient, reporter…).
     """
@@ -191,7 +191,7 @@ class EntityRole(str, Enum):
 # --- Corner referentials, kinds and their roles ---------------------------
 
 class IdentifierType(str, Enum):
-    """The identifier kinds the normaliser knows how to canonicalise (decision 17).
+    """The identifier kinds the normaliser knows how to canonicalise.
 
     These are the KNOWN/suggested kinds, NOT a closed constraint: ``entity.identifier_type``
     is a free string column, so a preset may name any kind it likes; an unrecognised one is
@@ -229,8 +229,8 @@ class EntityType(str, Enum):
     ANTENNA = "antenna"
     CASE = "case"
     LABEL = "label"
-    EVENT = "event"    # decision 36: a placed event from a structured list
-    POI = "poi"        # decision 36: a placed point of interest
+    EVENT = "event"    # a placed event from a structured list
+    POI = "poi"        # a placed point of interest
     UNKNOWN = "unknown"
 
 
@@ -253,7 +253,7 @@ class SpatialReferential(str, Enum):
 
 
 class SpatialRole(str, Enum):
-    """The place's part in the activity (per component — decision 25)."""
+    """The place's part in the activity (per component)."""
 
     VICINITY = "vicinity"
     ENTRY = "entry"
@@ -267,7 +267,7 @@ class SpatialRole(str, Enum):
 class TemporalKind(str, Enum):
     """Shape of the temporal expression.
 
-    Carries a ``phrase`` fragment (D37): the sentence differs for an instant vs an
+    Carries a ``phrase`` fragment: the sentence differs for an instant vs an
     interval, so the verbaliser reads the kind to choose 'at <instant>' or
     'from <lower> to <upper>'.
     """
@@ -304,7 +304,7 @@ class TemporalReferential(str, Enum):
 
 
 class TemporalRole(str, Enum):
-    """The bound's part in the activity (per component — decision 25).
+    """The bound's part in the activity (per component).
 
     Each bound carries its own role: a visit's lower is ``check_in``, its upper
     ``check_out``.
@@ -320,9 +320,9 @@ class TemporalRole(str, Enum):
 
 
 class ActivityKind(str, Enum):
-    """One real-world happening (decision 18/35).
+    """One real-world happening.
 
-    Deliberately LEAN (decisions 35/36): NO ``incident`` or ``navigation_search``
+    Deliberately LEAN: NO ``incident`` or ``navigation_search``
     members — an event from a structured list is an entity of ``type=event``, and a
     route/search is expressed by the ``references`` position link, not an activity
     kind.
@@ -354,7 +354,7 @@ class SourceTier(str, Enum):
 class RecordState(str, Enum):
     """Source-record recovery state (``raw_record.recovery_state``).
 
-    ``LIVE`` (the T00 demo / worked-examples term for an intact, in-place row) is
+    ``LIVE`` (the worked-example demo's term for an intact, in-place row) is
     kept beside the legacy ``INTACT`` synonym. ``RECOVERED`` (e.g. from WAL/freelist)
     is deliberately distinct from ``DELETED`` because their evidential weight differs.
     """
@@ -403,7 +403,7 @@ class RecordType(str, Enum):
 
 
 class EditKind(str, Enum):
-    """The kind of manual edit recorded in ``edit_log`` (decisions 34/41).
+    """The kind of manual edit recorded in ``edit_log``.
 
     Evidence protection: L0/L1 rows are NEVER updated in place — only ``NEW_ROW``
     (mint a new occurrence, keep the original) or ``EMPTY_ROW``; integration/analysis
@@ -418,17 +418,16 @@ class EditKind(str, Enum):
 class Origin(str, Enum):
     """Who specified a value: a preset mapping, or an operator argument.
 
-    Used by ``entity.concerns_origin`` and ``assertion.entity_origin`` (decisions
-    12/17/24). Excluded from both evidence digests — operator input never moves a
-    digest.
+    Used by ``entity.concerns_origin`` and ``assertion.entity_origin``. Excluded from
+    both evidence digests — operator input never moves a digest.
     """
 
     PRESET_MAPPED = "preset_mapped"
     OPERATOR_PARAM = "operator_param"
 
 
-# RelationType / RelationOrigin: DEFERRED with the analyst graph (decision 16,
-# entity_model.md). MentionRole: removed with assertion_mention (decision 18).
+# RelationType / RelationOrigin: DEFERRED with the analyst graph (entity_model.md).
+# MentionRole: removed with assertion_mention.
 
 
 # --- Derivation tables for the two derived views --------------------------
@@ -454,7 +453,7 @@ _EPLINK_LOCATES: dict[EntityPositionLink, Locates] = {
 }
 
 
-# --- Component `part` vocabularies (decision 23) --------------------------
+# --- Component `part` vocabularies -----------------------------------------
 # The standard export names. Any value is ACCEPTED at ingest (the columns are free
 # TEXT); only these standard names are export-projected — ``is_standard_part`` is the
 # predicate the exporter uses to decide. Spatial parts = the preset target-field
@@ -485,7 +484,7 @@ STANDARD_TEMPORAL_PARTS: frozenset[str] = frozenset({
     "lower",
     "upper",
     "duration",
-    # split forms: a bound spanning a date column + a time column (D15) — the
+    # split forms: a bound spanning a date column + a time column — the
     # integration recombines them (datetime_combine).
     "lower_date",
     "lower_time",
@@ -501,7 +500,7 @@ STANDARD_PARTS: frozenset[str] = STANDARD_SPATIAL_PARTS | STANDARD_TEMPORAL_PART
 def is_standard_part(part: str) -> bool:
     """True when ``part`` is one of the documented export-projected part names.
 
-    Any part value is accepted at ingest (verbatim, decision 23); only standard names
+    Any part value is accepted at ingest (verbatim); only standard names
     are lifted into the flat CSV, so the exporter gates projection on this predicate.
     """
     return part in STANDARD_PARTS
@@ -514,7 +513,7 @@ def is_standard_part(part: str) -> bool:
 
 @dataclass(frozen=True)
 class CaseMetadata:
-    """table: case_metadata — the root, exactly one row per DB (decision 28)."""
+    """table: case_metadata — the root, exactly one row per DB."""
 
     case_id: str          # uuid4
     case_number: str      # user-facing identifier
@@ -529,17 +528,17 @@ class Run:
 
     run_id: str           # uuid4
     case_id: str          # FK -> case_metadata
-    input_path: str | None = None       # the operator's --input root (decision 24)
+    input_path: str | None = None       # the operator's --input root
     started_at: str | None = None
     finished_at: str | None = None
     tool_version: str | None = None
-    settings_json: str | None = None    # normatively COMPLETE, canonical JSON (D39)
+    settings_json: str | None = None    # normatively COMPLETE, canonical JSON
     examiner: str | None = None
 
 
 @dataclass(frozen=True)
 class Archive:
-    """table: archive — one row per container path (decision 38)."""
+    """table: archive — one row per container path."""
 
     archive_id: str       # uuid5(path)
     path: str             # UNIQUE
@@ -548,7 +547,7 @@ class Archive:
 
 @dataclass(frozen=True)
 class RunArchive:
-    """table: run_archive — the run<->archive link (decision 38)."""
+    """table: run_archive — the run<->archive link."""
 
     run_archive_id: str   # uuid5(run_id ⟂ archive_id)
     run_id: str           # FK -> run
@@ -559,13 +558,13 @@ class RunArchive:
 
 @dataclass(frozen=True)
 class Source:
-    """table: source — what was opened; preset-free (decision 27); id from paths."""
+    """table: source — what was opened; preset-free; id from paths."""
 
     source_id: str        # uuid5(input_file_path ⟂ inner_path ⟂ subunit)
     run_id: str           # FK -> run
     input_file_path: str  # outermost artefact opened
     inner_path: str | None = None       # chain-inclusive container path
-    data_source: str | None = None      # where the data originally lived (D24); NULL for primary
+    data_source: str | None = None      # where the data originally lived; NULL for primary
     format: str | None = None
     subunit: str | None = None
     fingerprint_sha256: str | None = None
@@ -577,18 +576,18 @@ class Source:
 
 @dataclass(frozen=True)
 class Preset:
-    """table: preset — the only content-keyed table: key ⟂ version (decision 27)."""
+    """table: preset — the only content-keyed table: key ⟂ version."""
 
     preset_id: str        # uuid5(key ⟂ version)
     key: str
     name: str | None
     version: str | None
-    definition_digest: str  # sha256 of the canonical definition (decision 40)
+    definition_digest: str  # sha256 of the canonical definition
 
 
 @dataclass(frozen=True)
 class RunPreset:
-    """table: run_preset — the run<->preset link (decision 39)."""
+    """table: run_preset — the run<->preset link."""
 
     run_preset_id: str    # uuid5(run_id ⟂ preset_id)
     run_id: str           # FK -> run
@@ -612,7 +611,7 @@ class RawRecord:
 
 @dataclass(frozen=True)
 class Activity:
-    """table: activity — one happening; a bonus grouping table (decision 35).
+    """table: activity — one happening; a bonus grouping table.
 
     ``context_json`` is preset-mapped semi-structured context (callee, caller IMEI,
     recipients), canonical JSON, inside the L1 digest projection.
@@ -625,7 +624,7 @@ class Activity:
 
 @dataclass(frozen=True)
 class ActivityRecord:
-    """table: activity_record — the activity<->record link (decision 26).
+    """table: activity_record — the activity<->record link.
 
     Ingest writes exactly one row per activity (its own record); an analysis act may
     later attach further records.
@@ -638,7 +637,7 @@ class ActivityRecord:
 
 @dataclass(frozen=True)
 class Entity:
-    """table: entity — one lean row (decisions 17/21/22).
+    """table: entity — one lean row.
 
     ``identifier`` is NORMALISED at ingest (E.164, lowercase email…); NULL for a
     purely typed mention. ``raw_identifier`` is the source's own text, verbatim.
@@ -649,7 +648,7 @@ class Entity:
 
     entity_id: str        # uuid5(assertion natural key ⟂ corner tag)
     identifier: str | None            # normalised; None = purely typed mention
-    raw_identifier: str | None        # the source's own text, verbatim (decision 21)
+    raw_identifier: str | None        # the source's own text, verbatim
     # FREE text, not a closed vocabulary: a preset may name any identifier kind (bssid,
     # iccid, a bespoke register…). ``IdentifierType`` lists the kinds the normaliser knows
     # how to canonicalise; an unrecognised kind is simply never normalised (identifier stays
@@ -663,10 +662,10 @@ class Entity:
 
 @dataclass(frozen=True)
 class SpatialComponent:
-    """table: spatial_component — one verbatim row per source field (decision 15/25).
+    """table: spatial_component — one verbatim row per source field.
 
-    ``part`` uses the preset target-field names (decision 23); ``spatial_role`` is
-    per-component (decision 25).
+    ``part`` uses the preset target-field names; ``spatial_role`` is
+    per-component.
     """
 
     spatial_component_id: str   # uuid5(spatial_expression_id ⟂ ordinal)
@@ -680,11 +679,11 @@ class SpatialComponent:
 
 @dataclass(frozen=True)
 class SpatialExpression:
-    """table: spatial_expression — HEADER only (decision 15).
+    """table: spatial_expression — HEADER only.
 
     ``referential`` = encoding/CRS; ``spatial_source`` = the mechanism (GNSS, WiFi,
     cell…). The values live in ``spatial_component`` rows; ``spatial_role`` moved to
-    the component (decision 25).
+    the component.
     """
 
     spatial_expression_id: str      # uuid5(assertion natural key ⟂ corner tag)
@@ -694,11 +693,11 @@ class SpatialExpression:
 
 @dataclass(frozen=True)
 class TemporalComponent:
-    """table: temporal_component — one verbatim row per source field (decision 15/25).
+    """table: temporal_component — one verbatim row per source field.
 
-    ``part`` uses the preset field names (decision 23); ``temporal_role`` and
-    ``stated_offset`` (the offset the source stated for THIS bound, verbatim TEXT —
-    R13) are per-component (decision 25).
+    ``part`` uses the preset field names; ``temporal_role`` and
+    ``stated_offset`` (the offset the source stated for THIS bound, verbatim TEXT)
+    are per-component.
     """
 
     temporal_component_id: str   # uuid5(temporal_expression_id ⟂ ordinal)
@@ -706,17 +705,17 @@ class TemporalComponent:
     ordinal: int
     part: str                    # from the part vocabulary; any value accepted
     temporal_role: TemporalRole | None = None
-    stated_offset: str | None = None   # verbatim TEXT (R13)
+    stated_offset: str | None = None   # verbatim TEXT
     source_field: str | None = None
     raw_value: str | None = None       # VERBATIM
 
 
 @dataclass(frozen=True)
 class TemporalExpression:
-    """table: temporal_expression — HEADER only (decision 15).
+    """table: temporal_expression — HEADER only.
 
     ``temporal_role`` and the stated offsets moved to the component; ``granularity``
-    dropped (decision 25 — fuzziness lives in the raw value + integration method).
+    dropped (fuzziness lives in the raw value + integration method).
     """
 
     temporal_expression_id: str     # uuid5(assertion natural key ⟂ corner tag)
@@ -731,16 +730,16 @@ class Assertion:
 
     ``UNIQUE(raw_record_id, preset_id, output_ordinal)`` — two presets reading one
     record produce distinct assertions. Both digests are indexed, repeat legally, and
-    are never keys. The four link/role vocabularies live here (decision 5).
+    are never keys. The four link/role vocabularies live here.
     """
 
     assertion_id: str          # uuid5(raw_record_id ⟂ preset key ⟂ output_ordinal)
     raw_record_id: str         # FK -> raw_record
-    preset_id: str             # FK -> preset (decision 27)
+    preset_id: str             # FK -> preset
     output_ordinal: int
     entity_id: str             # FK -> entity (owned, UNIQUE)
     content_hash: str          # scoped to the preset's reading of this file
-    claim_digest: str          # preset-free L1 projection (R5)
+    claim_digest: str          # preset-free L1 projection
     entity_origin: Origin | None = None
     activity_id: str | None = None              # FK -> activity
     spatial_expression_id: str | None = None    # FK (owned, UNIQUE)
@@ -749,7 +748,7 @@ class Assertion:
     entity_position_link: EntityPositionLink | None = None
     entity_time_link: EntityTimeLink | None = None
     spatial_temporal_link: SpatialTemporalLink | None = None
-    deleted: RecordState | None = None          # the app's own flag (R11)
+    deleted: RecordState | None = None          # the app's own flag
     multiplicity: int | None = None             # NULL = 1
     source_label: str | None = None             # the one per-claim provenance field
     # A human locator for the ORIGINAL source record (the source's own id column, e.g. a
@@ -761,7 +760,7 @@ class Assertion:
 
 @dataclass(frozen=True)
 class SpatialIntegration:
-    """table: spatial_integration — the complete derived-spatial block (decision 30).
+    """table: spatial_integration — the complete derived-spatial block.
 
     The unit conversion IS the interpretation; raws survive in raw_json. 1:1 with the
     spatial expression in v1 (drop the UNIQUE to allow candidates later).
@@ -787,7 +786,7 @@ class SpatialIntegration:
 
 @dataclass(frozen=True)
 class SpatialIndex:
-    """table: spatial_index — the S2 leaf-cell index (decision 31).
+    """table: spatial_index — the S2 leaf-cell index.
 
     ``s2_cell_id`` is the signed-int64 leaf cell (deliberately non-unique — many
     points share a cell), INDEXED; hierarchy is implicit in the id (range scans).
@@ -801,7 +800,8 @@ class SpatialIndex:
 
 @dataclass(frozen=True)
 class TimespanIntegration:
-    """table: timespan_integration — canonical UTC µs + the D32 projections.
+    """table: timespan_integration — canonical UTC µs + the per-bound applied-offset
+    projections.
 
     ``*_unix_utc_us`` = canonical UTC µs; ``*_datetime_iso`` = one offset-tagged local
     ISO string (` N/A` when zone unknown, empty when no instant); ``*_date`` /
@@ -835,7 +835,7 @@ class TimespanIntegration:
 
 @dataclass(frozen=True)
 class Analysis:
-    """table: analysis — the generic, method-attributed verdict table (decision 19).
+    """table: analysis — the generic, method-attributed verdict table.
 
     Re-running a changed ranker ADDS rows, never mutates. ``record_type`` is a free,
     method-defined label in the run schema (the demo stores gps_fix / cdr_leg /
@@ -851,7 +851,7 @@ class Analysis:
 
 @dataclass(frozen=True)
 class EditLog:
-    """table: edit_log — the manual-edit audit journal (decisions 34/41).
+    """table: edit_log — the manual-edit audit journal.
 
     ``ordinal`` is a monotonic UNIQUE journal position enabling a full rewind:
     ``UPDATE`` logs per-column old->new; ``NEW_ROW``/``EMPTY_ROW`` log the FULL row
@@ -860,7 +860,7 @@ class EditLog:
     """
 
     edit_id: str          # uuid4 (an audit event)
-    ordinal: int          # monotonic UNIQUE journal position (decision 41)
+    ordinal: int          # monotonic UNIQUE journal position
     table_name: str | None = None
     row_id: str | None = None
     column: str | None = None
@@ -875,7 +875,7 @@ class EditLog:
 # Sentinel for an applied utc_offset when a naive timestamp was materialised by
 # ASSUMING UTC: the instant is recorded, but the true offset is unknown. Distinct
 # from None (not applicable) and from a real 0.0, so an examiner sees the assumption
-# loudly (the ` N/A` on the datetime_iso, decision 32).
+# loudly (the ` N/A` on the datetime_iso).
 UTC_OFFSET_UNKNOWN = "N/A"
 
 

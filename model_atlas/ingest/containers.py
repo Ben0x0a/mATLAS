@@ -6,7 +6,7 @@ Defines:    ``SourceFile`` (one leaf file inside its container chain), the
             in-memory bytes for a nested archive). Each container hands out leaf files
             (``files``), opens them (``open``), reveals an on-disk path when one exists
             (``ondisk_path``), fingerprints the main-file bytes and its WAL/SHM/journal
-            siblings (``content_sha256`` / ``sibling_sha256`` — R17), and materialises a
+            siblings (``content_sha256`` / ``sibling_sha256``), and materialises a
             leaf onto disk for a reader (``materialise``).
 Used by:    ``model_atlas.ingest.discover`` (traversal) and
             ``model_atlas.ingest.writer`` (fingerprints + reader materialisation).
@@ -15,9 +15,9 @@ Depends on: ``model_atlas.integrity`` (``sha256_file``), ``model_atlas.sqlite.in
             hashing here) and the standard library only.
 
 Ported from ``sources/container.py`` — the container model (folder and zip
-BOTH a ``Container`` addressing files by a logical path) is kept verbatim, per decision
-29 (a source is the *opened unit*: folder->file, zip->inner file). The staging/finalize
-integrity machinery of the old module is deliberately NOT ported: the T20 readers do
+BOTH a ``Container`` addressing files by a logical path) is kept verbatim (a source is
+the *opened unit*: folder->file, zip->inner file). The staging/finalize
+integrity machinery of the old module is deliberately NOT ported: the readers do
 their own throwaway-copy staging, so the L0 writer needs only enumeration, opening,
 fingerprinting and a plain materialise-onto-disk. The zip-bomb decompression bound is
 kept (a nested-archive or a member cannot exhaust the disk).
@@ -37,7 +37,7 @@ from model_atlas.integrity import sha256_file
 log = logging.getLogger(__name__)
 
 _CHUNK = 1024 * 1024
-# WAL/SHM/journal sidecars pair to these suffixes in this order (R17: the db is
+# WAL/SHM/journal sidecars pair to these suffixes in this order (the db is
 # fingerprinted on its own; each sibling is fingerprinted separately).
 SIBLING_SUFFIXES: tuple[str, ...] = ("-wal", "-shm", "-journal")
 SIBLING_KEYS: tuple[str, ...] = ("wal", "shm", "journal")
@@ -71,7 +71,7 @@ class SourceFile:
 
     @property
     def inner_chain(self) -> list[str]:
-        """The chain-inclusive ``inner_path`` elements (R10), or ``[]`` for a loose file.
+        """The chain-inclusive ``inner_path`` elements, or ``[]`` for a loose file.
 
         HOW: the archive labels (outermost->innermost) then this leaf's logical path, so
         ``core.determinism.container_inner_path`` joins them into ``a.zip!b.zip!x.db``.
@@ -239,7 +239,7 @@ class ZipContainer:
         the output file, tripping ``ZipBombError`` once the entry is large in absolute
         terms AND its expansion ratio is implausible (or the compressed size is unknown).
         WHY one method for both fingerprint and extraction: the decompressed bytes ARE the
-        R17 main-file fingerprint of a zipped source, so hashing and extracting share one
+        main-file fingerprint of a zipped source, so hashing and extracting share one
         bounded read path and can never disagree on what was read."""
         h = hashlib.sha256()
         written = 0

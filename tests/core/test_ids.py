@@ -1,11 +1,11 @@
 """Tests for the identity discipline: uuid5 ids, canonical JSON, and the two digests.
 
 Defines:    the folder==zip parity, overlapping-disclosure, "|"-forgery, integration-
-            invariance, mention-sensitivity, context-recipient (R27), and normative-
+            invariance, mention-sensitivity, context-recipient, and normative-
             exclusion tests for ``model_atlas/core/ids.py``, plus a DEMO CROSS-CHECK
             that rebuilds three assertions of docs/examples/matlas_example.sqlite from
             their stored rows and asserts byte-equal content_hash / claim_digest.
-Used by:    the T11 verification gate (pytest).
+Used by:    the verification gate (pytest).
 Depends on: ``model_atlas.core.ids`` and the read-only demo SQLite fixture.
 """
 from __future__ import annotations

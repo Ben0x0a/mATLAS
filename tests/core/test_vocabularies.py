@@ -1,10 +1,10 @@
 """Unit tests for the core run-DB vocabularies and family declarations.
 
-Defines:    a round-trip test proving every enum-valued string in the T00 demo DB is
-            a member of the corresponding enum (columns enumerated dynamically, no
-            hardcoded row lists), the Locates/Genesis derivation tests, the D37
-            phrase-fragment tests (including the negation/reference strings), and the
-            is_standard_part predicate test.
+Defines:    a round-trip test proving every enum-valued string in the worked-example
+            demo DB is a member of the corresponding enum (columns enumerated
+            dynamically, no hardcoded row lists), the Locates/Genesis derivation tests,
+            the phrase-fragment tests (including the negation/reference strings), and
+            the is_standard_part predicate test.
 Used by:    pytest.
 Depends on: model_atlas.core.vocabularies and docs/examples/matlas_example.sqlite.
 """

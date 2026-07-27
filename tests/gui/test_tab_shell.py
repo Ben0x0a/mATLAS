@@ -3,8 +3,8 @@
 Constructs the real MainController offscreen and checks the QTabWidget shell: three
 named tabs in order, the Transform form reparented (not rewritten) into the first tab
 with its widgets still bound and reachable, and accessible names on the tab bar and
-each page. The other two tabs now hold the T71/T72 panels (their placeholder labels
-removed so nothing renders above the real panel).
+each page. The other two tabs now hold the Database Edit and Spatiotemporal Analysis
+panels (their placeholder labels removed so nothing renders above the real panel).
 Used by:    pytest (headless: QT_QPA_PLATFORM=offscreen is forced below).
 Depends on: gui.app (MainController), gui/main_window.ui, PySide6.
 """

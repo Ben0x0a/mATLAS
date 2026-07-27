@@ -1,17 +1,17 @@
-"""Tests for model_atlas/integrate/entity.py (T32 — the entity-normalisation Verify list).
+"""Tests for model_atlas/integrate/entity.py (the entity-normalisation Verify list).
 
-Covers:     the tasks/T32.md Verify bullets (the two Swiss msisdn spellings converge and
-            the bare national form refuses; private IP refuses / public normalises; two
-            device mentions never get an identifier; "A. Moreau" / "moreau a." share a
-            concerns_uid but remain two rows), the full per-kind rule table incl. every
-            refuse condition, the digest recomputation (a normalised entity's assertion
-            digests move AND equal a fresh normative recomputation; a refused entity's
-            digests are byte-identical), the matlas_meta rule-set stamps, and the report
-            counts.
+Covers:     the entity-normalisation design note's Verify bullets (the two Swiss msisdn
+            spellings converge and the bare national form refuses; private IP refuses /
+            public normalises; two device mentions never get an identifier; "A. Moreau"
+            / "moreau a." share a concerns_uid but remain two rows), the full per-kind
+            rule table incl. every refuse condition, the digest recomputation (a
+            normalised entity's assertion digests move AND equal a fresh normative
+            recomputation; a refused entity's digests are byte-identical), the
+            matlas_meta rule-set stamps, and the report counts.
 Uses:       ``model_atlas.integrate.entity``, ``model_atlas.core`` (ids, vocabularies,
             store). Rows are written through the store's own layer-typed writers with
             digests derived exactly as ingest/assemble.py derives them (via core.ids),
-            so the pre-normalisation state is the genuine T23 shape.
+            so the pre-normalisation state is the genuine post-assembly shape.
 """
 from __future__ import annotations
 

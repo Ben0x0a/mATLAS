@@ -1,5 +1,5 @@
 """KML export brick: Google-Earth placemarks for the flat-projected rows that carry a
-coordinate (T51 — ports ``exporters/builtin.py``'s ``export_kml``).
+coordinate (ports ``exporters/builtin.py``'s ``export_kml``).
 
 Defines:    KmlExporter (the ``Exporter`` protocol brick, ``format = "kml"``),
             registered in model_atlas.export.registry at import time.
@@ -8,14 +8,14 @@ Depends on: model_atlas.core.flat_view (the flat query), model_atlas.export.csv_
             (the ``Exporter`` protocol / ``ExportContext``), model_atlas.export._shared
             (value helpers + partitioning), the standard library's ``xml.etree``.
 
-Query + serialiser (T51 scope)
--------------------------------
+Query + serialiser
+--------------------
 The data access is ONE query — ``core.flat_view.build_flat_view`` (the same flat frame the
 CSV exporter reads); this module's only job is picking the coordinate-bearing rows
 and shaping them into KML Placemarks, faithfully reproducing the old exporter's XML
 shape (name = linked_entity, TimeStamp/when = the lower-bound local ISO instant,
 Point/coordinates = "lon,lat"). The old single ``utc_offset_hours`` column split into
-``utc_offset_hours_lower`` / ``_upper`` in the relational model (finding F2); the
+``utc_offset_hours_lower`` / ``_upper`` in the relational model; the
 placemark's one timestamp uses the LOWER bound + ITS OWN offset — for an instant
 assertion (the common case) lower == upper, so this is exactly what the old single-
 offset model always meant.

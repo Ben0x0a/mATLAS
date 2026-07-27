@@ -3,7 +3,7 @@
 Defines:    the schema build/integrity test, the demo-fixture load test (proves the
             derived DDL accepts the settled example DB), the golden DDL snapshot, and the
             §2a / corner / edit-log UNIQUE guards + the enum CHECK rejection.
-Used by:    the T12 verification gate (pytest tests/core/test_schema.py).
+Used by:    the verification gate (pytest tests/core/test_schema.py).
 Depends on: ``model_atlas.core.schema`` and the checked-in fixture
             ``docs/examples/matlas_example.sqlite`` + golden ``tests/core/schema.gol.sql``.
 

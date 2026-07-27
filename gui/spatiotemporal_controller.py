@@ -1,4 +1,4 @@
-"""The Spatiotemporal Analysis panel controller (T72): who was together, where/when.
+"""The Spatiotemporal Analysis panel controller: who was together, where/when.
 
 Defines:    ``SpatiotemporalController`` — a controller that builds the concomitance
             panel INSIDE a parent QWidget (the "Spatiotemporal Analysis" tab). It
@@ -7,7 +7,7 @@ Defines:    ``SpatiotemporalController`` — a controller that builds the concom
             ``model_atlas.analyze.concomitance.find_concomitant`` OFF-THREAD via the
             shared ``TaskRunner``, shows the pairs (entity A, entity B, distance, time
             gap, and both source assertion ids) in a ``QTableView``, and exports the
-            result set to CSV via the T41 ``ResultSet.to_csv`` helper. Map/visualisation
+            result set to CSV via the ``ResultSet.to_csv`` helper. Map/visualisation
             is deferred (a disabled "Visualise" affordance — see the TODO). Also defines
             the read-only ``_PersistedRunView`` (``open_persisted_run_view``) the engine
             reads through, and the private ``_ConcomitanceTableModel``.
@@ -234,8 +234,8 @@ class SpatiotemporalController(QObject):
         self.export_button = QPushButton("Export CSV…", self.root)
         self.export_button.setObjectName("spatiotemporalExportButton")
         self.export_button.setEnabled(False)   # nothing to export until a query runs
-        # DEFERRED (T72 "talk when time comes"): the map/visualisation is not built.
-        # This disabled affordance is the marked hook — TODO(T72 follow-up): wire a map
+        # DEFERRED: the map/visualisation is not built yet.
+        # This disabled affordance is the marked hook — TODO: wire a map
         # view that plots the concomitant pairs; keep it disabled until then.
         self.visualise_button = QPushButton("Visualise", self.root)
         self.visualise_button.setObjectName("spatiotemporalVisualiseButton")

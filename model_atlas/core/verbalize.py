@@ -1,21 +1,21 @@
-"""Every assertion as ONE deterministic British-English sentence (decision 37).
+"""Every assertion as ONE deterministic British-English sentence.
 
-Defines:    ``verbalize(row) -> str`` — renders one flat-view row (the T14
-            column contract) as a single sentence assembled from the D37 ``phrase``
+Defines:    ``verbalize(row) -> str`` — renders one flat-view row (the flat-view
+            column contract) as a single sentence assembled from the ``phrase``
             fragments declared in ``model_atlas.core.vocabularies``. The owner's
-            target shape (run_db_schema.md decision 37): *"Entity <identifier>
+            target shape (run_db_schema.md): *"Entity <identifier>
             (referring <concerns>) was <entity_position_link phrase> at <place>
             <spatial_temporal_link phrase> and <entity_time_link phrase> from
             <lower> to <upper>"* — or *"at <instant>"* when the timespan is an
             instant.
-Used by:    consumers wired later (the T50 bonus CSV column, the T71/T72 GUI
+Used by:    consumers wired later (the bonus CSV column, the GUI
             panels — one function, called everywhere); tests.core.test_verbalize.
 Depends on: ``model_atlas.core.vocabularies`` (the ``phrase`` fragments — declared
             there once, never redeclared here) and ``pandas`` (NA detection for
             cells coming from the projected frame).
 
-Rendering rules (all decision-37 requirements, restated where the code enforces
-them):
+Rendering rules (all requirements from the target sentence shape above, restated
+where the code enforces them):
 
 - **Place** = the integration values when present (``latitude_wgs84`` /
   ``longitude_wgs84`` — which also covers a method's named substitution, e.g. a
@@ -26,7 +26,7 @@ them):
   the flat view carries no ``temporal_kind`` column): equal or lone bounds render
   "at <instant>", two distinct bounds render "the interval from <lower> to
   <upper>". Each bound prefers the integrated offset-tagged ISO string (its
-  ``N/A`` assumed-UTC sentinel stays visible, decision 32), then the verbatim
+  ``N/A`` assumed-UTC sentinel stays visible), then the verbatim
   raw, then the canonical epoch microseconds.
 - **Negation reads as negation**: the fragments already encode it
   (``never_during_interval`` -> "was never present during"); the assembler never
@@ -55,7 +55,7 @@ import pandas as pd
 
 from model_atlas.core import vocabularies as V
 
-# The said-absence wordings (decision 37: an empty corner is stated, never filled).
+# The said-absence wordings (an empty corner is stated, never filled).
 # Consumed by verbalize() below and asserted verbatim by tests.core.test_verbalize.
 NO_POSITION_WORDING = "with no recorded position"
 NO_TIME_WORDING = "with no recorded time"
@@ -99,7 +99,7 @@ def _coordinate(value: Any) -> str:
 def _subject(row: Mapping[str, Any] | pd.Series) -> str:
     """The sentence subject: identifier, else the entity type, plus qualifiers.
 
-    A purely typed mention (NULL identifier, decision 17) falls back to the type
+    A purely typed mention (NULL identifier) falls back to the type
     ("The device"); ``concerns`` and the role phrase join in one parenthesis, each
     omitted when absent — never invented.
     """
@@ -176,7 +176,7 @@ def _timespan(row: Mapping[str, Any] | pd.Series) -> tuple[str, bool] | None:
 
 def _link_phrase(row: Mapping[str, Any] | pd.Series, column: str,
                  vocabulary: type) -> str | None:
-    """The D37 fragment for a link column, or None when the link is NULL.
+    """The ``phrase`` fragment for a link column, or None when the link is NULL.
 
     An invalid stored token raises from the enum lookup on purpose: the DB CHECK
     guarantees closed-vocabulary values, so a failure here is a real derivation
@@ -191,7 +191,7 @@ def _link_phrase(row: Mapping[str, Any] | pd.Series, column: str,
 def verbalize(row: Mapping[str, Any] | pd.Series) -> str:
     """Render one assertion (a flat-view row) as one deterministic sentence.
 
-    ``row`` is a T14 flat-view row: a pandas Series (one row of
+    ``row`` is a flat-view row: a pandas Series (one row of
     ``flat_view.build_flat_view``'s frame) or any dict-like mapping of column name to
     value — absent columns and NA cells both read as "no recorded value".
     """

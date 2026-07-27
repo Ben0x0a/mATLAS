@@ -240,13 +240,13 @@ class MainController(QObject):
         accessibility.configure_accessibility(self)
 
     def _attach_panels(self) -> None:
-        """Build the two MVC panels inside their tab placeholders (T71/T72).
+        """Build the two MVC panels inside their tab placeholders.
 
         Each controller owns its whole panel and takes only the tab QWidget; all logic
         lives in the model layer (edit_api / analyze.concomitance) — the shell just
         constructs them. The edit panel reuses the shared TaskRunner so the app keeps a
         single lifecycle-managed worker (waited on aboutToQuit)."""
-        # Drop T70's placeholder labels first: they were scaffolding for exactly these
+        # Drop the placeholder labels first: they were scaffolding for exactly these
         # panels, and each controller reuses the tab's existing layout, so a surviving
         # placeholder would render above the real panel.
         for tab, placeholder_name in (

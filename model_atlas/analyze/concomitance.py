@@ -1,12 +1,12 @@
-"""The spatiotemporal concomitance engine (T41): who was together, where and when.
+"""The spatiotemporal concomitance engine: who was together, where and when.
 
 Defines:    the public query ``find_concomitant(store, *, entity_selector,
             space_threshold_m, time_threshold, ...) -> ResultSet`` plus its input/
             output shapes (``EntitySelector``, ``EntityRef``, ``ConcomitantPair``,
             ``ResultSet`` with its CSV export) and the exact great-circle helper
             ``great_circle_distance_m``. ALL S2 level-walking/covering lives here —
-            the schema stores only the leaf cell (decision 31).
-Used by:    the future concomitance GUI panel (T72 — MVC: the panel only calls this)
+            the schema stores only the leaf cell.
+Used by:    the concomitance GUI panel (the panel only calls this)
             and tests/analyze/test_concomitance.py.
 Depends on: ``model_atlas.core.store`` (the read connection), ``model_atlas.core.
             vocabularies`` (the presence-exclusion link tokens), ``model_atlas.
@@ -21,9 +21,9 @@ The algorithm (no O(n²) main path)
 2. For each candidate point an ``s2sphere.Cap`` of radius ``space_threshold_m`` is
    covered by a ``RegionCoverer`` into at most ``max_cells`` cells; each covering
    cell becomes one leaf range ``[range_min, range_max]`` in SIGNED storage form.
-3. Each range drives an indexed ``WHERE s2_cell_id BETWEEN ? AND ?`` scan (the D31
-   contract: hierarchy is implicit in the id, so the coarse-cell walk is a cheap
-   B-tree range scan, never a table scan), pre-filtered in SQL by the temporal
+3. Each range drives an indexed ``WHERE s2_cell_id BETWEEN ? AND ?`` scan (hierarchy
+   is implicit in the id, so the coarse-cell walk is a cheap B-tree range scan,
+   never a table scan), pre-filtered in SQL by the temporal
    window and by ``assertion_id > anchor`` so each unordered pair is visited once.
 4. The survivors are filtered EXACTLY: great-circle distance ≤ threshold and
    interval gap ≤ threshold (overlapping intervals gap 0). The covering is a
@@ -34,7 +34,7 @@ Presence exclusion (the worked examples' Q3/Q4 split)
 "Who was together" is a PRESENCE question, so three link tokens exclude a candidate:
 ``entity_position_link = 'references'`` (a pin/search points at a place — the entity
 was never there) and ``never_during_interval`` on EITHER the entity-time or the
-spatial-temporal edge (both read as negation — D37: negation never reads as
+spatial-temporal edge (both read as negation — negation never reads as
 presence). A NULL link is NOT excluded: unknown is not non-presence, and silently
 dropping unmapped rows would hide evidence (process everything by default).
 
@@ -108,7 +108,8 @@ class EntitySelector:
 
 @dataclass(frozen=True)
 class EntityRef:
-    """One entity as a result row names it (the lean D17 identity columns)."""
+    """One entity as a result row names it (the lean identity columns: entity_id,
+    identifier, identifier_type, type)."""
 
     entity_id: str
     identifier: str | None
@@ -218,8 +219,8 @@ class _Candidate:
 # so anchor and partner are drawn from the IDENTICAL population — an asymmetry here
 # (e.g. the partner path requiring an index row the candidate path did not) would
 # silently lose pairs. The spatial_index join is part of the candidate definition:
-# D31 writes one index row per integrated point, so a point without one is not a
-# queryable point.
+# spatial integration writes one index row per integrated point, so a point without
+# one is not a queryable point.
 
 _FROM_JOINS = (
     " FROM assertion a"
@@ -313,7 +314,7 @@ def _load_candidates(connection: sqlite3.Connection,
     return candidates
 
 
-# --- the S2 cap covering (ALL level-walking lives here — D31) --------------------
+# --- the S2 cap covering (ALL level-walking lives here) --------------------------
 
 def _cap_cell_ranges(latitude: float, longitude: float, radius_m: float,
                      max_cells: int) -> list[tuple[int, int]]:
@@ -325,7 +326,7 @@ def _cap_cell_ranges(latitude: float, longitude: float, radius_m: float,
     ``[range_min, range_max]``, converted to storage form by the ONE imported
     signing helper. WHY the signed form is BETWEEN-safe: a cell's range never
     crosses a face (top-bit) boundary, so both bounds keep their relative order
-    (the ``integrate/spatial.py`` D31 contract).
+    (see the same signing contract in ``integrate/spatial.py``).
     """
     axis = s2sphere.LatLng.from_degrees(latitude, longitude).to_point()
     angle = s2sphere.Angle.from_radians(radius_m / EARTH_RADIUS_M)

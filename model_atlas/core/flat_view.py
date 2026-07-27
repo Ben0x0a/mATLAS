@@ -6,25 +6,25 @@ Defines:    ``CANONICAL_COLUMNS`` (the ordered flat-CSV column contract encoded 
             ``orig_<col>`` passthrough), and ``build_flat_view`` (runs it against a
             read-only connection and returns the flat pandas frame with numeric dtypes
             restored and the derived ``locates`` filled).
-Used by:    the CSV exporter (T50) and any read-only consumer wanting the flat view;
+Used by:    the CSV exporter and any read-only consumer wanting the flat view;
             tests.core.test_flat_view. NB: this is the CSV-column "flat view", distinct
             from ids.py's ``l1_projection`` (the digest input) and the future road
-            geometry "projection" (T100) — the three no longer share the one word.
+            geometry "projection" — the three no longer share the one word.
 Depends on: ``model_atlas.core.vocabularies`` (``EntityPositionLink.locates`` — the single
             source of the ``locates`` derivation), ``pandas`` (the frame + numeric
             re-coercion the old frame builder did), and the standard library
             (``sqlite3``, ``json``).
 
-Why a GENERATED query and not a static VIEW (R21)
--------------------------------------------------
+Why a GENERATED query and not a static VIEW
+--------------------------------------------
 The canonical columns are fixed, but the ``orig_<col>`` verbatim passthrough is the
 UNION of every raw record's own keys — a set that differs per source and therefore per
 run. A static VIEW cannot carry a per-run column set, so the flat view is assembled
 as a SQL string once per run: the canonical SELECT list is constant, the ``orig_``
 tail is computed from the records actually present.
 
-One row PER ASSERTION (decisions 14/26)
----------------------------------------
+One row PER ASSERTION
+----------------------
 An assertion exists only per placement, so the line count IS the placement count (a
 one-legged CDR is one line, a 20-recipient message is one). The owned corners
 (entity is mandatory; the spatial/temporal expressions are optional) are LEFT JOINed,
@@ -38,16 +38,16 @@ column list)
   diffing), then the "New columns" block, then ``orig_<col>`` (its regeneration
   procedure).
 - ``position_type`` -> ``spatial_role`` and ``position_source`` -> ``spatial_source``
-  (cross-check findings F3 / row 42: the settled model's names; the old headers are
+  (cross-check row 42: the settled model's names; the old headers are
   retired).
-- ``utc_offset_hours`` -> ``utc_offset_hours_lower`` / ``_upper`` (finding F2).
-- ``deleted`` sources from ``assertion.deleted`` (the app's own flag, migration row 65
-  / R11); the separate ``recovery_state`` new column sources from
+- ``utc_offset_hours`` -> ``utc_offset_hours_lower`` / ``_upper``.
+- ``deleted`` sources from ``assertion.deleted`` (the app's own flag, migration row 65);
+  the separate ``recovery_state`` new column sources from
   ``raw_record.recovery_state``.
 - ``locates`` is SELECTed as a ``NULL`` placeholder and filled in Python from
   ``EntityPositionLink(...).locates`` — the mapping is declared once in vocabularies,
-  so it is never re-encoded as a SQL ``CASE`` (decision 11).
-- ``counterpart`` / ``facets`` / ``context`` are OPTIONAL bonus columns (decision 35):
+  so it is never re-encoded as a SQL ``CASE``.
+- ``counterpart`` / ``facets`` / ``context`` are OPTIONAL bonus columns:
   best-effort ``json_extract`` over ``activity.context_json``. No MANDATORY column
   sources from the activity table.
 - The preferred-integration predicate is future-proofing only: v1 is single-integration
@@ -93,7 +93,7 @@ def _spatial_part(part: str, column: str) -> str:
             f"AND sc.part = '{part}' ORDER BY sc.ordinal LIMIT 1)")
 
 
-# The place's role (old ``position_type``, F3): the first non-null component role by
+# The place's role (old ``position_type``): the first non-null component role by
 # ordinal — carried on the raw_position component for cell/camera/address, absent (NULL)
 # for a bare lat/lon fix, exactly as the old single position_type column behaved.
 _SPATIAL_ROLE = (
@@ -101,7 +101,7 @@ _SPATIAL_ROLE = (
     "WHERE sc.spatial_expression_id = a.spatial_expression_id "
     "AND sc.spatial_role IS NOT NULL ORDER BY sc.ordinal LIMIT 1)")
 
-# raw_source_path (decision 24): the data-source where the data originally lived, falling
+# raw_source_path: the data-source where the data originally lived, falling
 # back to the chain-inclusive input source path (``input_file_path!inner_path``).
 _RAW_SOURCE_PATH = (
     "COALESCE(s.data_source, CASE WHEN s.inner_path IS NOT NULL "
@@ -128,7 +128,7 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("longitude_wgs84", "si.longitude_wgs84"),
     ("longitude_source_field", _spatial_part("longitude_wgs84", "source_field")),
     ("altitude_m", "si.altitude_m"),
-    ("spatial_role", _SPATIAL_ROLE),                    # old position_type (F3)
+    ("spatial_role", _SPATIAL_ROLE),                    # old position_type
     ("raw_position", _spatial_part("raw_position", "raw_value")),
     ("spatial_source", "sx.spatial_source"),            # old position_source
     ("horizontal_accuracy_m", "si.horizontal_accuracy_m"),
@@ -153,7 +153,7 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("preset_name", "p.name"),
     ("source_label", "a.source_label"),
     ("source_tier", "s.source_tier"),
-    ("deleted", "a.deleted"),                           # the app's own flag (R11)
+    ("deleted", "a.deleted"),                           # the app's own flag
     ("record_type", "an.record_type"),
     ("record_rank", "an.record_rank"),
     # -- Block 2: new columns (csv_migration.md order) -------------------------
@@ -165,7 +165,7 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("entity_role", "a.entity_role"),
     ("concerns_origin", "e.concerns_origin"),
     ("spatial_referential", "sx.referential"),
-    ("locates", "NULL"),                                # derived in Python (decision 11)
+    ("locates", "NULL"),                                # derived in Python
     ("spatial_method", "si.method"),
     ("temporal_method", "ti.method"),
     ("time_lower_stated_offset", _temporal_part("lower", "stated_offset")),
@@ -180,7 +180,7 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("recovery_source", "r.recovery_source"),   # the fine origin (live/wal/…/freespace)
     ("data_source", "s.data_source"),
     ("activity_id", "a.activity_id"),
-    ("activity_kind", "act.kind"),                      # bonus, optional (decision 35)
+    ("activity_kind", "act.kind"),                      # bonus, optional
     ("counterpart", "json_extract(act.context_json, '$.counterpart')"),
     ("facets", "json_extract(act.context_json, '$.facets')"),
     ("context", "json_extract(act.context_json, '$.context')"),
@@ -234,7 +234,7 @@ LEFT JOIN activity act ON act.activity_id = a.activity_id
 LEFT JOIN analysis an ON an.assertion_id = a.assertion_id AND an.method = ?
 ORDER BY a.rowid
 """.strip()
-# NOTE (future-proofing, R21/decision 30): when plural integration candidates arrive, add
+# NOTE (future-proofing): when plural integration candidates arrive, add
 # ``AND si.preferred = 1`` / ``AND ti.preferred = 1`` to the two integration joins above.
 # v1 is single-integration (UNIQUE(expression_id)), so no ``preferred`` column exists yet
 # and a plain LEFT JOIN already yields the one preferred row.
@@ -294,8 +294,8 @@ def _resolve_ranking_method(
         connection: sqlite3.Connection, ranking_method: str | None) -> str | None:
     """The analysis method the CSV projects, or None when there is no analysis.
 
-    WHY MAX when unspecified: re-running a changed ranker ADDS rows (decision 19), method
-    strings are versioned (``untangle/2.0``), so the lexicographic maximum is the latest —
+    WHY MAX when unspecified: re-running a changed ranker ADDS rows rather than overwriting,
+    method strings are versioned (``untangle/2.0``), so the lexicographic maximum is the latest —
     the "current" verdict. The caller may pin a specific method explicitly.
     """
     if ranking_method is not None:
@@ -313,7 +313,7 @@ def build_flat_view_sql(
     """Assemble the per-run flat-view SELECT and return ``(sql, orig_column_names)``.
 
     The canonical block is constant; the ``orig_<col>`` tail is generated from the keys
-    actually present in this run's raw records (R21 — the reason this is a generated query
+    actually present in this run's raw records (the reason this is a generated query
     and not a VIEW). ``orig_column_names`` is the ordered list of appended passthrough
     columns (empty when ``include_source_columns`` is False), so a caller knows the frame's
     trailing column set without re-parsing the SQL.
@@ -349,7 +349,7 @@ def build_flat_view(
     HOW: resolve the current ranking method, build the generated SELECT, read it into a
     frame, restore the numeric-union TEXT columns to a numeric dtype (so they render
     unquoted), and fill the derived ``locates`` from ``EntityPositionLink`` — never from a
-    SQL mapping (decision 11: the vocabulary is the single source of truth). Corner-less
+    SQL mapping (the vocabulary is the single source of truth). Corner-less
     assertions keep their row with empty coordinate/time cells (LEFT JOINs), never dropped.
     """
     method = _resolve_ranking_method(connection, ranking_method)
@@ -400,7 +400,7 @@ def _restore_numeric_dtype(frame: pd.DataFrame, column: str) -> None:
 def _fill_locates(frame: pd.DataFrame) -> None:
     """Fill ``locates`` from ``entity_position_link`` via the vocabulary enum.
 
-    WHY in Python and not SQL: ``Locates`` is a DERIVED view of the E-S edge (decision 11),
+    WHY in Python and not SQL: ``Locates`` is a DERIVED view of the entity-spatial edge,
     declared once as ``EntityPositionLink.locates``; re-encoding the mapping as a SQL CASE
     would be a second source that could silently drift from the enum. An unmapped edge
     (NULL) stays empty; any stored value is a valid closed-vocabulary member (DB CHECK), so

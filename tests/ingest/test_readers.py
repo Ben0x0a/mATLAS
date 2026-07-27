@@ -1,7 +1,7 @@
 """Tests for the ingest ``Reader`` protocol implementations: csv/excel/sqlite/xml.
 
-Covers: R9 enumeration order per format (core/determinism.py rules 1-3), verbatim
-values (a float-precision CSV value survives byte-for-byte), the T90 sqlite
+Covers: normative enumeration order per format (core/determinism.py rules 1-3), verbatim
+values (a float-precision CSV value survives byte-for-byte), the sqlite
 ``peek_fields`` security fix (a table name containing ``"`` never reaches SQL), and
 determinism (re-reading the same file yields an identical ``line_no`` sequence).
 """

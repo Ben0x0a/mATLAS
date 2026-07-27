@@ -1,14 +1,16 @@
 """Tests for the evidence-protected edit API (``model_atlas.app.edit_api``).
 
 Defines:    a small persisted-DB fixture (a full L1->L3 GPS placement built through the
-            RunStore write API, then persisted with VACUUM INTO), and tests for the D34
-            protection (update RAISES on evidence, succeeds + logs on an integration table),
-            save_as_new_row / add_empty_row logging, the persisted-file authentication, and
-            the D41 full-rewind scenario (update -> new_row -> update, then rewind restores
-            the exact pre-edit state row-by-row and the journal keeps originals + inverses).
-Used by:    the T71 verification gate (pytest tests/app/test_edit_api.py).
+            RunStore write API, then persisted with VACUUM INTO), and tests for the
+            evidence-protection rules (update RAISES on evidence, succeeds + logs on an
+            integration table), save_as_new_row / add_empty_row logging, the
+            persisted-file authentication, and the full-rewind scenario (update ->
+            new_row -> update, then rewind restores the exact pre-edit state row-by-row
+            and the journal keeps originals + inverses).
+Used by:    the verification gate (pytest tests/app/test_edit_api.py).
 Depends on: ``model_atlas.app.edit_api`` (under test), ``model_atlas.core.store`` (builds the
-            fixture DB), ``model_atlas.core.ids`` / ``vocabularies`` (faithful T00 rows).
+            fixture DB), ``model_atlas.core.ids`` / ``vocabularies`` (faithful worked-example
+            rows).
 """
 from __future__ import annotations
 

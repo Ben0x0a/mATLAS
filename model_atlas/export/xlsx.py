@@ -1,4 +1,4 @@
-"""XLSX export brick: the flat-projected rows as an Excel worksheet (T51 — ports
+"""XLSX export brick: the flat-projected rows as an Excel worksheet (ports
 ``exporters/builtin.py``'s ``export_xlsx``).
 
 Defines:    XlsxExporter (the ``Exporter`` protocol brick, ``format = "xlsx"``),
@@ -8,8 +8,8 @@ Depends on: model_atlas.core.flat_view (the flat query), model_atlas.export.csv_
             (the ``Exporter`` protocol / ``ExportContext``), model_atlas.export._shared
             (partitioning), pandas + openpyxl (already a project dependency).
 
-Query + serialiser (T51 scope)
--------------------------------
+Query + serialiser
+--------------------
 The data access is ONE query — ``core.flat_view.build_flat_view`` — written straight to a
 worksheet via ``DataFrame.to_excel``, exactly as the old exporter did; the only change
 is that the frame now comes from a SELECT over the store rather than a pre-built

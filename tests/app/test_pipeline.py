@@ -1,7 +1,7 @@
 """End-to-end tests for the app-layer pipeline (model_atlas/app/pipeline.py).
 
 Drives ``process()`` over the golden source fixture (tests/fixtures/golden: cached.csv
-+ its two presets) as a FOLDER and as a ZIP, asserting the T60 cut-over contract: the
++ its two presets) as a FOLDER and as a ZIP, asserting the relational-engine contract: the
 stable ``ProcessResult`` shape, the mandatory case database, the flat-CSV projection on
 disk (one file per format), the sidecars, create-then-append determinism, and folder==zip
 evidence parity (equal content_uid / claim_digest sets — the paths differ, the evidence

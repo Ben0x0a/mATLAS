@@ -1,7 +1,8 @@
 """Unit tests for the pure zone/ISO primitives (integrate.timeparse).
 
-Moved/condensed from tests/transforms/test_iso8601.py + test_transforms.py at the T60
-cut-over — the primitives folded into ``model_atlas.integrate.timeparse``; the decode
+Moved/condensed from tests/transforms/test_iso8601.py + test_transforms.py at the
+cut-over to the relational engine — the primitives folded into
+``model_atlas.integrate.timeparse``; the decode
 LADDER that consumes them is covered by tests/integrate/test_temporal.py.
 Used by:    pytest.
 Depends on: model_atlas.integrate.timeparse.

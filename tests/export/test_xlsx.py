@@ -2,7 +2,7 @@
 
 Round-trips a small store (the golden ``secondary`` fixture) to Excel and
 spot-checks row-count/coordinates against the flat CSV (``core.flat_view.build_flat_view``)
-of the SAME store — the T51 Verify bullet.
+of the SAME store.
 """
 from __future__ import annotations
 

@@ -5,7 +5,7 @@ Defines:    evaluate() — a sandboxed evaluator that binds one variable ``value
 Used by:    presets.pipes (the ``arithmetic`` transform).
 Depends on: standard library (ast) only.
 
-T60 fold: moved verbatim from ``transforms/expression.py`` — the sandbox
+Moved verbatim from ``transforms/expression.py`` — the sandbox
 is part of the preset pipe language, so it lives with the pipes it powers.
 """
 from __future__ import annotations

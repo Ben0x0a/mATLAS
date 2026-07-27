@@ -6,7 +6,7 @@ Defines:    ``schema_statements()`` (the ordered CREATE TABLE / INDEX / VIEW str
             (``foreign_keys``, ``user_version``, ``application_id``) and the one
             ``matlas_meta`` row. Also exposes ``SCHEMA_VERSION`` / ``FAMILIES_VERSION`` /
             ``APPLICATION_ID`` / ``USER_VERSION`` and ``COPYABLE_TABLES`` (ingest order).
-Used by:    the store (T13 — creates the schema then writes rows in ingest order),
+Used by:    the store (creates the schema then writes rows in ingest order),
             tests.core.test_schema, and any tool that needs a fresh run DB.
 Depends on: ``model_atlas.core.vocabularies`` (the frozen table dataclasses give the
             columns + their python types; the closed enums give the CHECK constraints)
@@ -39,19 +39,19 @@ from typing import Any, get_args, get_origin, get_type_hints
 
 from model_atlas.core import vocabularies as V
 
-# --- versioning + self-ingestion stamps (R16/R19) -------------------------
-# schema_version / families_version go into the single matlas_meta row (R19). user_version
+# --- versioning + self-ingestion stamps -----------------------------------
+# schema_version / families_version go into the single matlas_meta row. user_version
 # is SQLite's per-file integer; we set it to the numeric schema generation so a tool can
 # gate on `PRAGMA user_version` without opening a table. application_id is the four-byte
-# self-ingestion stamp (R16): discovery reads it to refuse/flag a mATLAS run DB fed back
+# self-ingestion stamp: discovery reads it to refuse/flag a mATLAS run DB fed back
 # in as evidence. The value 0x6D41_744C spells the ASCII bytes "mAtL" (mATLAS) — an
 # arbitrary but memorable, documented constant, chosen once and never reused elsewhere.
 SCHEMA_VERSION = "1"
 FAMILIES_VERSION = "1"
 USER_VERSION = 1
-APPLICATION_ID = 0x6D41_744C  # b"mAtL" — the mATLAS run-DB self-ingestion stamp (R16)
+APPLICATION_ID = 0x6D41_744C  # b"mAtL" — the mATLAS run-DB self-ingestion stamp
 
-# The normalisation / stemming rule-set versions recorded once per run (decision 17/22).
+# The normalisation / stemming rule-set versions recorded once per run.
 # Placeholders at schema-creation time; the pipeline overwrites the matlas_meta row with
 # the real rule-set versions it applied. Kept here so a freshly created DB is never
 # missing its single meta row.
@@ -245,7 +245,7 @@ def _table_specs() -> "list[dict[str, Any]]":
          "not_null": ["spatial_expression_id", "method"],
          "fks": {"spatial_expression_id":
                  ("spatial_expression", "spatial_expression_id")},
-         "unique_cols": ["spatial_expression_id"]},   # v1 single integration (D30)
+         "unique_cols": ["spatial_expression_id"]},   # v1: one integration row per expression
         {"name": "spatial_index", "dataclass": V.SpatialIndex, "pk": "spatial_index_id",
          "not_null": ["spatial_integration_id"],
          "fks": {"spatial_integration_id":
@@ -266,7 +266,7 @@ def _table_specs() -> "list[dict[str, Any]]":
         {"name": "edit_log", "dataclass": V.EditLog, "pk": "edit_id",
          "not_null": ["ordinal"],
          "enum_checks": {"edit_kind": V.EditKind},
-         "unique_cols": ["ordinal"]},   # D41: a monotonic UNIQUE journal position
+         "unique_cols": ["ordinal"]},   # a monotonic UNIQUE journal position
     ]
 
 
@@ -403,7 +403,7 @@ def create_schema(connection: sqlite3.Connection) -> None:
     """Materialise the full schema on ``connection`` and stamp its versioning metadata.
 
     HOW: enable FK enforcement, set user_version + application_id, run every DDL statement,
-    then write the single matlas_meta row. WHY the pragmas: application_id is the R16
+    then write the single matlas_meta row. WHY the pragmas: application_id is the
     self-ingestion stamp so discovery can refuse a mATLAS DB fed back as evidence;
     user_version lets a tool gate on the schema generation without opening a table.
     """

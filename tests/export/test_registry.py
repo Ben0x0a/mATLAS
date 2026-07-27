@@ -1,6 +1,6 @@
 """Tests for the new-engine export registry (model_atlas/export/registry.py).
 
-Importing the five T51 brick modules registers each at import time; this checks the
+Importing the five brick modules registers each at import time; this checks the
 mechanism itself (listing, duplicate-name rejection, run_exporters' resilience) rather
 than any one brick's serialisation (covered in its own test module).
 """

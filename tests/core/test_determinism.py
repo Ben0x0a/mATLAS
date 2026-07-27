@@ -4,7 +4,7 @@ Defines:    one test per doc rule (run_db_schema.md §Determinism, rules 1-7) pl
             three mandated end-to-end checks: folder==zip digest parity THROUGH the
             store, the double-run diff (byte-identical ``iterdump`` output modulo the
             run-carrying columns), and the canonicalised ``|``-in-path forgery case.
-Used by:    the T15 verification gate (pytest tests/core/test_determinism.py).
+Used by:    the verification gate (pytest tests/core/test_determinism.py).
 Depends on: ``model_atlas.core.determinism`` (the module under test), ``ids`` /
             ``vocabularies`` / ``store`` (the end-to-end surfaces), and pytest.
 """

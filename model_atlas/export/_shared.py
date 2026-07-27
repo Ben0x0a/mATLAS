@@ -1,4 +1,4 @@
-"""Small value/formatting helpers shared by the T51 export bricks.
+"""Small value/formatting helpers shared by the export bricks.
 
 Defines:    ``is_blank`` / ``clean`` / ``as_float`` (blank/NaN/NA-safe value
             coercion — the same defensive helpers ``exporters.builtin`` used for the
@@ -7,11 +7,11 @@ Defines:    ``is_blank`` / ``clean`` / ``as_float`` (blank/NaN/NA-safe value
 Used by:    model_atlas.export.kml / .geojson / .xlsx / .geovisualizer.
 Depends on: pandas and the standard library only.
 
-Why these helpers were re-declared rather than imported (T51)
--------------------------------------------------------------------
+Why these helpers were re-declared rather than imported
+---------------------------------------------------------
 The old engine's exporters declared near-identical helpers for the OLD
-``fn(ctx) -> list[Path]`` exporters. That module is fenced (read, never modify) for
-T51, and importing from it would wire the new query+serialiser bricks back onto the
+``fn(ctx) -> list[Path]`` exporters. That module is fenced (read, never modify), and
+importing from it would wire the new query+serialiser bricks back onto the
 old engine's ``ExportContext`` shape, so these are re-declared here as this
 package's own small, dependency-free copy.
 """

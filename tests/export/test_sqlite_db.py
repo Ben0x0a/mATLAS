@@ -1,8 +1,8 @@
 """Tests for the sqlite_db export brick (model_atlas/export/sqlite_db.py).
 
 Persists a small store (the manual store — exercises every layer L0-L2, unlike the
-sqlite3-default-empty case) and reopens the file, checking the three T51 Verify
-requirements: it reopens; it carries ``PRAGMA user_version`` + the ``matlas_meta`` row
+sqlite3-default-empty case) and reopens the file, checking three requirements: it
+reopens; it carries ``PRAGMA user_version`` + the ``matlas_meta`` row
 + the ``application_id`` self-ingestion stamp; and ``PRAGMA foreign_key_check`` is
 clean.
 """

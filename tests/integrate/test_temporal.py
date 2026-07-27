@@ -1,10 +1,11 @@
-"""T30 verify suite: the temporal Methods and their timespan_integration rows.
+"""Verify suite: the temporal Methods and their timespan_integration rows.
 
-Defines:    the tests for ``model_atlas/integrate/temporal.py`` — the task's Verify
+Defines:    the tests for ``model_atlas/integrate/temporal.py`` — the Verify
             bullets (dual per-bound DST offsets, the assumed-UTC ``N/A`` discipline,
             empty cells for an absent bound, the epoch constants recorded in the
-            method strings, every row method-stamped) plus the D32 cell shapes, the
-            id derivation and the first-applicable-method dispatch. The DST cases
+            method strings, every row method-stamped) plus the per-bound applied-offset
+            cell shapes, the id derivation and the first-applicable-method dispatch.
+            The DST cases
             reuse the old corpus (tests/transforms/test_dst.py: Paris winter +1 /
             summer +2, the AXIOM ``UTC+01:00[DST]`` token, the fixed-offset and
             captured-offset cases of test_timezone.py).

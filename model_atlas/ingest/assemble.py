@@ -4,7 +4,7 @@ Defines:    ``assemble_source`` (the fan-out engine: one reader record × one ma
             preset → activity(+link), entity, spatial/temporal expressions with their
             verbatim component rows, and the assertion tying them together, written into
             a ``core.store.RunStore``), ``AssembleReport`` (its testable summary, carrying
-            the source-grain ``data_source`` for the caller — decision 24), and the
+            the source-grain ``data_source`` for the caller), and the
             EXTENDED preset field vocabulary (``entity_role``, ``identifier_type``,
             ``activity_kind``, ``context.<key>``, ``multiplicity``, the two referentials,
             the per-bound temporal role/part names, ``data_source``) that maps the new
@@ -17,19 +17,19 @@ Depends on: ``model_atlas.core`` (``ids`` — every id and both digests, ``vocab
             preset language; ``pipes`` — ``PipeContext``; ``resolve`` — the pure
             resolver functions, see "Reused resolvers" below).
 
-This is the successor to ``transforms/assemble.py`` (T23; the old module was
-deleted at the T60 cut-over). What was ported is the RESOLUTION machinery (refs,
-conditionals, templates, params, extract); what is NEW is the EMISSION: instead of one
-flat 45-column row per assertion, the engine writes the settled relational L1 shape
-(docs/run_db_schema.md, decisions 14-42).
+This is the successor to ``transforms/assemble.py`` (the old module was
+deleted at the cut-over to the relational engine). What was ported is the RESOLUTION
+machinery (refs, conditionals, templates, params, extract); what is NEW is the
+EMISSION: instead of one flat 45-column row per assertion, the engine writes the
+settled relational L1 shape (docs/run_db_schema.md).
 
-Reused resolvers (T22 survival)
--------------------------------
+Reused resolvers
+-----------------
 ``is_missing`` / ``resolve_ref`` / ``resolve_field`` / ``resolve_cond`` /
-``resolve_param`` / ``preset_values`` are IMPORTED from ``presets.resolve`` (their T60
-home) rather than re-ported. WHY: they are pure functions of their arguments (row dict +
-parsed refs + an ``entity``/``linked_entity`` param holder — no store, no module state),
-and the T22 conditional (decision 33) / template (decision 42) semantics —
+``resolve_param`` / ``preset_values`` are IMPORTED from ``presets.resolve`` (their
+settled home) rather than re-ported. WHY: they are pure functions of their arguments
+(row dict + parsed refs + an ``entity``/``linked_entity`` param holder — no store, no
+module state), and the conditional / template semantics —
 first-match-wins, ``NA_SENTINEL`` on no-match, empty-rendered missing placeholders —
 live inside them. Importing keeps them single-sourced; a re-port would create a second
 copy that could silently drift. The ``env`` they take is duck-typed here by
@@ -37,55 +37,55 @@ copy that could silently drift. The ``env`` they take is duck-typed here by
 
 The old→new field mapping (cross-check table of run_db_schema.md)
 -----------------------------------------------------------------
-- ``entity``            → ``entity.raw_identifier`` (VERBATIM — decision 21; the
-  normalised ``identifier`` and the definitive ``identifier_type`` are the T32 entity
+- ``entity``            → ``entity.raw_identifier`` (VERBATIM; the
+  normalised ``identifier`` and the definitive ``identifier_type`` are the entity
   normaliser's job: assemble leaves ``identifier`` NULL and ``concerns_uid`` NULL).
 - ``entity_type``       → ``entity.type`` (default ``unknown`` — the column is NOT NULL).
-- ``linked_entity``     → ``entity.concerns`` (+ ``concerns_origin`` — decision 17).
-- ``position_type``     → the components' ``spatial_role`` (finding F3: its semantics
+- ``linked_entity``     → ``entity.concerns`` (+ ``concerns_origin``).
+- ``position_type``     → the components' ``spatial_role`` (its semantics
   always were the place's role; the old language carries ONE role per assertion, so it
   is applied to every component of that expression — one value-group per assertion).
 - ``position_source``   → ``spatial_expression.spatial_source``.
 - ``temporal_source``   → ``temporal_expression.temporal_source``.
-- ``deleted``           → ``assertion.deleted`` (R11 — the app's OWN flag, distinct from
+- ``deleted``           → ``assertion.deleted`` (the app's OWN flag, distinct from
   ``raw_record.recovery_state``).
 - ``source_label``      → ``assertion.source_label`` (the one per-claim provenance field).
-- ``raw_source_path``   → the source-grain ``data_source`` (decision 24): assemble never
+- ``raw_source_path``   → the source-grain ``data_source``: assemble never
   emits it per assertion — it resolves the value once (first record) and RETURNS it on
   the report so the L0 owner can set it on the ``source`` row. ``data_source`` is the
   preferred new spelling; ``raw_source_path`` is accepted as its legacy alias.
 - the three ``links``   → the assertion link columns, joined by the new ``entity_role``.
-- spatial part fields (``raw_position``, ``latitude_wgs84``, … — decision 23) → one
+- spatial part fields (``raw_position``, ``latitude_wgs84``, … ) → one
   ``spatial_component`` row each, VERBATIM ``raw_value`` + the resolved ``source_field``.
 - the time bounds       → ``temporal_component`` rows (parts ``lower``/``upper``, or a
   preset-renamed part such as ``duration``), VERBATIM, with the resolved ``zone`` text
-  as each bound's ``stated_offset`` (R13 — the old language states one zone per time
+  as each bound's ``stated_offset`` (the old language states one zone per time
   spec, so the same verbatim text is stated on every bound of that expression).
 
 Extended vocabulary — new L1 columns the old flat model never had. These are ordinary
-``FieldSpec`` targets resolved through the same machinery (so decision-33 conditionals
-and decision-42 templates apply to them for free); the v3 YAML loader does not admit
+``FieldSpec`` targets resolved through the same machinery (so conditionals
+and templates apply to them for free); the v3 YAML loader does not admit
 them yet (its ``ASSIGNABLE_FIELDS`` gate lives in the fenced ``presets/spec.py``), so
 until the preset schema is extended they are constructed programmatically:
 ``entity_role``, ``identifier_type``, ``activity_kind`` (its presence in ``common:``
-creates the record's activity), ``context.<key>`` (decision 18 — gathered into
-``activity.context_json``), ``multiplicity`` (R15), ``spatial_referential`` /
+creates the record's activity), ``context.<key>`` (gathered into
+``activity.context_json``), ``multiplicity``, ``spatial_referential`` /
 ``temporal_referential`` (explicit override of the derivations below), and
 ``temporal_role_lower`` / ``temporal_role_upper`` / ``temporal_part_lower`` /
-``temporal_part_upper`` (decision 25 — each bound carries its own role/part).
+``temporal_part_upper`` (each bound carries its own role/part).
 
 No conversion at L1 (the run_db_schema.md invariant)
 ----------------------------------------------------
 Component ``raw_value``s and the entity's ``raw_identifier`` are resolved VERBATIM:
 conditionals choose a source value and ``extract`` selects source text (still verbatim
 characters), but the pipe / unit / cast tail is deliberately NOT applied — every
-conversion is Layer-2's job (T30/T31/T32), method-stamped. Scalar assertion columns
+conversion is Layer-2's job, method-stamped. Scalar assertion columns
 (links, roles, ``deleted``, activity kind, context values…) resolve through the FULL
 old tail because a lookup pipe there maps tokens, it does not convert measurements.
 
-No integration is written here (L2 is T30/T31/T32) and nothing is invented: a field
+No integration is written here (that is Layer 2's job) and nothing is invented: a field
 the preset never maps is simply absent; a conditional/template that evaluated but
-produced nothing yields the decision-33 ``N/A`` sentinel, which flows as the TEXT
+produced nothing yields the ``N/A`` sentinel, which flows as the TEXT
 ``N/A`` into free-text columns (a vocabulary CHECK column rejects it LOUDLY — the new
 engine has no ``INSERT OR IGNORE``, so nothing is ever dropped silently).
 """
@@ -106,8 +106,8 @@ from model_atlas.presets.fields import make_resolver
 from model_atlas.presets.spec import FieldSpec, InputSelector, PresetSpec, TimeSpec
 from model_atlas.presets.pipes import PipeContext
 from model_atlas.presets.resolve import (
-    # The folded pure resolvers (T60: ``presets.resolve`` is their settled home); they
-    # carry the T22 conditional/template semantics with them by construction. Aliased to
+    # The folded pure resolvers (``presets.resolve`` is their settled home); they
+    # carry the conditional/template semantics with them by construction. Aliased to
     # the historic private spellings so every call site below reads unchanged.
     is_missing as _is_missing,
     preset_values as _preset_values,
@@ -143,14 +143,14 @@ TIME_ACCURACY_US_UPPER_NAME = "time_accuracy_us_upper"
 _LOWER_SIDE_NAME = "lower"
 _UPPER_SIDE_NAME = "upper"
 _ACCURACY_PART_SUFFIX = "_accuracy"
-DATA_SOURCE_NAME = "data_source"           # decision 24 — source grain, via the report
-RAW_SOURCE_PATH_NAME = "raw_source_path"   # legacy alias of data_source (decision 24)
+DATA_SOURCE_NAME = "data_source"           # source grain, via the report
+RAW_SOURCE_PATH_NAME = "raw_source_path"   # legacy alias of data_source
 
 # Old field names read from the resolved holder (their new homes are in the header).
 _ENTITY_NAME = "entity"
 _ENTITY_TYPE_NAME = "entity_type"
 _LINKED_ENTITY_NAME = "linked_entity"
-_SPATIAL_ROLE_NAME = "position_type"       # finding F3: position_type IS the spatial role
+_SPATIAL_ROLE_NAME = "position_type"       # position_type IS the spatial role
 _SPATIAL_SOURCE_NAME = "position_source"
 _TEMPORAL_SOURCE_NAME = "temporal_source"
 _DELETED_NAME = "deleted"
@@ -189,7 +189,7 @@ class _ParamEnv:
 @dataclass
 class AssembleReport:
     """The counts one ``assemble_source`` call produced, plus the source-grain values it
-    resolved but does NOT write itself (decision 24: ``data_source`` belongs on the
+    resolved but does NOT write itself (``data_source`` belongs on the
     ``source`` row, which the L0 writer owns — assemble only reports it)."""
 
     assertion_count: int = 0
@@ -200,7 +200,7 @@ class AssembleReport:
 
 
 def _norm(value: Any) -> Any:
-    """None for a missing value (None/NaN), the value itself otherwise. The decision-33
+    """None for a missing value (None/NaN), the value itself otherwise. The ``N/A``
     sentinel is NOT missing — it is a real produced value and flows (as the TEXT N/A)."""
     return None if _is_missing(value) else value
 
@@ -223,7 +223,7 @@ def _resolve_verbatim(
     ctx: PipeContext,
     preset_values: dict[str, Any],
 ) -> tuple[Any, str | None]:
-    """Resolve one field to its VERBATIM L1 value: conditional (decision 33) or plain
+    """Resolve one field to its VERBATIM L1 value: conditional or plain
     ref, then ``extract`` only.
 
     HOW: the same head as the old ``_resolve_field`` — a conditional resolves to its
@@ -309,14 +309,14 @@ def assemble_source(
     """Assemble one already-L0-written source's records under ONE matched preset.
 
     The caller (the L0 writer / future pipeline) has already written the ``source`` and
-    its ``raw_record`` rows plus the ``preset`` row (decision 39); this function derives
+    its ``raw_record`` rows plus the ``preset`` row; this function derives
     ``raw_record_id`` / ``preset_id`` from the same natural keys (``core.ids``) and
-    writes only Layer 1, in the R20 order (activity+link → entity + expressions +
+    writes only Layer 1, in parent-before-child order (activity+link → entity + expressions +
     components → the assertion referencing them). ``PRAGMA foreign_keys = ON`` makes a
     missing parent raise immediately, so the layering is enforced, not assumed.
 
     ``entity`` / ``linked_entity`` are the run-level operator params (they OVERRIDE the
-    preset mapping and set the ``*_origin`` columns to ``operator_param`` — R24); either
+    preset mapping and set the ``*_origin`` columns to ``operator_param``); either
     may itself be a call-form reference (``field(...)``) resolved per row.
 
     ``activity_ordinals`` is the per-run ``raw_record_id → next activity ordinal``
@@ -353,7 +353,7 @@ def assemble_source(
     entity_expr = parse_param_expr(entity)
     linked_entity_expr = parse_param_expr(linked_entity)
 
-    # entity_origin / concerns_origin (decisions 12/17/24, R24): who specified the value.
+    # entity_origin / concerns_origin: who specified the value.
     entity_origin = V.Origin.OPERATOR_PARAM if entity is not None else V.Origin.PRESET_MAPPED
     operator_concerns = linked_entity is not None
 
@@ -382,13 +382,13 @@ def assemble_source(
         for spec in common_verbatim:
             shared[spec.model_field], _ = _resolve_verbatim(
                 spec, row, resolve, file_values, row_env, ctx, preset_values)
-        # Run-level entity / linked_entity OVERRIDE the preset value when supplied (R24).
+        # Run-level entity / linked_entity OVERRIDE the preset value when supplied.
         if row_env.entity:
             shared[_ENTITY_NAME] = row_env.entity
         if row_env.linked_entity:
             shared[_LINKED_ENTITY_NAME] = row_env.linked_entity
 
-        # data_source at SOURCE grain (decision 24): resolved once, from the first record
+        # data_source at SOURCE grain: resolved once, from the first record
         # that yields one, and only REPORTED — the source row is the L0 writer's to set.
         if report.data_source is None:
             data_source = _norm(shared.get(DATA_SOURCE_NAME))
@@ -397,8 +397,8 @@ def assemble_source(
             if data_source is not None:
                 report.data_source = str(data_source)
 
-        # --- activity (+ its ONE ingest link — decisions 18/26/35, R7) ------
-        # Created only when the preset maps activity_kind in common: (decision 35 — a
+        # --- activity (+ its ONE ingest link) -------------------------------
+        # Created only when the preset maps activity_kind in common: (a
         # single placement has nothing to group, so no kind mapped means no row) and the
         # kind resolved to a value. All of the record's fan-out assertions share it.
         activity_id: str | None = None
@@ -408,7 +408,7 @@ def assemble_source(
             ordinal = activity_ordinals.get(raw_record_id, 0)
             activity_ordinals[raw_record_id] = ordinal + 1
             activity_id = ids.activity_id(raw_record_id, ordinal)
-            # decision 18: the preset-mapped context (callee, caller IMEI, recipients…)
+            # the preset-mapped context (callee, caller IMEI, recipients…)
             # gathered from context.<key> mappings; missing values are simply absent —
             # never invented (the sentinel, a produced value, flows as text).
             context = {
@@ -421,14 +421,14 @@ def assemble_source(
                 kind=str(kind_value),
                 context_json=canonical_json(context) if context else None,
             ))
-            # R7 invariant: exactly ONE activity_record link at ingest — its own record.
+            # invariant: exactly ONE activity_record link at ingest — its own record.
             store.write_activity_record(V.ActivityRecord(
                 activity_record_id=ids.activity_record_id(activity_id, raw_record_id),
                 activity_id=activity_id,
                 raw_record_id=raw_record_id,
             ))
             report.activity_count += 1
-            # The digest hashes the DECODED context object (R27); l1_projection
+            # The digest hashes the DECODED context object; l1_projection
             # re-canonicalises it, so key order can never move a digest.
             activity_projection = ids.ActivityProjection(str(kind_value), context or None)
 
@@ -515,17 +515,18 @@ def _emit_assertion(
     entity_origin: V.Origin,
     operator_concerns: bool,
 ) -> None:
-    """Write one assertion and its owned corners, then the assertion row itself (R20).
+    """Write one assertion and its owned corners, then the assertion row itself
+    (parent-before-child order).
 
     HOW: the corner ids all derive from the assertion natural key
     ``(raw_record_id ⟂ preset key ⟂ output_ordinal)`` — the preset key is IN the corner
-    keys (unlike the T00 demo, which had one preset per source) so two presets reading
+    keys (unlike the worked-example demo, which had one preset per source) so two presets reading
     one record can never collide on a corner PK. Both digests come from ``core.ids``
     over the exact rows written below — never a local recipe.
     """
     natural_key = (raw_record_id, preset_key, output_ordinal)
 
-    # --- entity (decisions 17/21; identifier + concerns_uid left NULL for T32) ---
+    # --- entity (identifier + concerns_uid left NULL for the entity normaliser) ---
     raw_identifier = _text(flat.get(_ENTITY_NAME))
     identifier_type = _norm(flat.get(IDENTIFIER_TYPE_NAME)) or V.IdentifierType.NONE.value
     entity_type = _norm(flat.get(_ENTITY_TYPE_NAME)) or V.EntityType.UNKNOWN.value
@@ -537,7 +538,7 @@ def _emit_assertion(
     entity_id = ids.entity_id(natural_key)
     store.write_entity(V.Entity(
         entity_id=entity_id,
-        identifier=None,                 # T32 (entity normalisation) fills identifier +
+        identifier=None,                 # the entity normaliser fills identifier +
         raw_identifier=raw_identifier,   # refines identifier_type + derives concerns_uid.
         identifier_type=str(identifier_type),
         type=str(entity_type),
@@ -546,7 +547,7 @@ def _emit_assertion(
         concerns_uid=None,
     ))
 
-    # --- spatial expression + components (decisions 15/23/25) ---
+    # --- spatial expression + components ---
     # No component values → no spatial corner: an assertion without a place yields empty
     # coordinates by construction, never an invented header row.
     spatial_expression_id: str | None = None
@@ -577,10 +578,10 @@ def _emit_assertion(
         spatial_projection = ids.SpatialProjection(
             referential, spatial_source, tuple(component_projections))
 
-    # --- temporal expression + components (decisions 15/23/25, R13) ---
+    # --- temporal expression + components ---
     stated_offset: str | None = None
     if time_spec.zone is not None:
-        # The stated offset is the source's OWN zone text, VERBATIM per bound (R13). The
+        # The stated offset is the source's OWN zone text, VERBATIM per bound. The
         # old language declares one zone per time spec, so the same text states on every
         # bound of this expression.
         zone_value, _ = _resolve_verbatim(
@@ -664,7 +665,7 @@ def _emit_assertion(
     )
     deleted = _norm(flat.get(_DELETED_NAME))
     multiplicity_value = _norm(flat.get(MULTIPLICITY_NAME))
-    # R15: NULL means 1. The sentinel (text) cannot live in an INTEGER column, so a
+    # NULL means 1. The sentinel (text) cannot live in an INTEGER column, so a
     # multiplicity that produced nothing is NULL — the "=1" default, nothing invented.
     multiplicity = None
     if multiplicity_value is not None and multiplicity_value is not NA_SENTINEL:

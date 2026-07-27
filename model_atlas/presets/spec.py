@@ -33,7 +33,7 @@ v3 layout (readable, examiner-first)::
         links:    {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 
 A value is ONE explicit reference call (field/header/filename/param/const/format), an
-``if / elif / else`` conditional chain over such calls (decision 33), or a mapping
+``if / elif / else`` conditional chain over such calls, or a mapping
 ``{from: <ref-or-conditional>, type:, unit:, extract:, pipe:}``. See presets.expr.
 """
 from __future__ import annotations
@@ -68,7 +68,7 @@ from model_atlas.presets.expr import (
 # ``row_uid`` was generated per output row, and record_type/record_rank come from
 # untangle). ``raw_source_path`` and ``input_record_id`` stay assignable: a preset maps
 # them (e.g. AXIOM Source / Location) and the engine only fills a default when it does not.
-# T60: formerly derived from ``model.families.OUTPUT_COLUMNS``; with the flat model
+# Formerly derived from ``model.families.OUTPUT_COLUMNS``; with the flat model
 # retired, the preset language's target vocabulary is declared HERE, once. The extended L1
 # targets (entity_role, activity_kind, context.<key>, ...) that ingest.assemble consumes are
 # admitted here too, so a real YAML preset can map them (not only the programmatic tests).
@@ -197,7 +197,7 @@ class InputSelector:
 @dataclass(frozen=True)
 class FieldSpec:
     """How one model field is populated: either a single typed reference (``ref``) OR a
-    conditional chain (``condition``, decision 33) — exactly one is set — plus optional
+    conditional chain (``condition``) — exactly one is set — plus optional
     attributes. When a ``condition`` is set, ``ref`` is None; the compat accessors below
     then report None (a conditional is not a single field/header reference)."""
 
@@ -343,7 +343,7 @@ def _parse_field(
     if isinstance(raw, dict):
         if "from" not in raw:
             raise ValueError(f"{path}: {model_field!r} mapping must set 'from' (a reference)")
-        # A conditional chain (decision 33) is accepted anywhere a plain ref is: as the bare
+        # A conditional chain is accepted anywhere a plain ref is: as the bare
         # value or as the dict form's ``from``. The remaining attributes (type/unit/extract/
         # pipe) still apply to whichever branch value wins.
         from_value = raw["from"]
@@ -375,8 +375,8 @@ def _parse_field(
 
 
 def _parse_ref_or_cond(raw: Any) -> tuple[Ref | None, Cond | None]:
-    """Parse a mapping value into either a single ``Ref`` or a conditional ``Cond``
-    (decision 33). Exactly one of the returned pair is non-None."""
+    """Parse a mapping value into either a single ``Ref`` or a conditional ``Cond``.
+    Exactly one of the returned pair is non-None."""
     if is_condition(raw):
         return None, parse_cond(raw)
     return parse_ref(raw), None

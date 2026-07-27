@@ -1,11 +1,11 @@
-"""End-to-end panel test for the Spatiotemporal Analysis controller (T72).
+"""End-to-end panel test for the Spatiotemporal Analysis controller.
 
 Drives the real SpatiotemporalController offscreen against a persisted run DB: the
 query runs OFF-THREAD via TaskRunner, so the test waits on the runner and drains the
 queued result signal (the gui.app tab-shell pattern). Checks the Verify list:
 selecting entities within both thresholds lists the expected concomitant pair, a
 ``references`` pin is NOT listed (the presence split), and Export writes a CSV. A
-second test drives the shipped T00 demo DB read-only when it is present.
+second test drives the shipped worked-example demo DB read-only when it is present.
 
 Uses:       gui.spatiotemporal_controller, model_atlas.core (ids/vocabularies/store),
             model_atlas.integrate.spatial (real S2 index build), PySide6 (offscreen).

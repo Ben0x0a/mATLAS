@@ -107,8 +107,8 @@ def lint_spec(spec: PresetSpec, *, preset_label: str | None = None) -> list[Lint
 
 def _field_spec_refs(spec: FieldSpec) -> tuple[Ref, ...]:
     """The atomic refs a FieldSpec reads: its single ``ref``, or every ref of its
-    ``condition`` (decision 33), each expanded through ``flatten_ref`` so a ``format(...)``
-    template's placeholder fields (decision 42) are surfaced too. Lets the field-inventory
+    ``condition``, each expanded through ``flatten_ref`` so a ``format(...)``
+    template's placeholder fields are surfaced too. Lets the field-inventory
     checks below see every source field a conditional/template reads — a conditional or
     template referencing an undeclared field lint-WARNS, never crashes."""
     if spec.condition is not None:
@@ -295,7 +295,7 @@ def _author_values(spec: PresetSpec) -> list[tuple[str, str]]:
         out.append((str(ref.arg), where))
 
     def addspec(field: FieldSpec, where: str) -> None:
-        # A conditional (decision 33) exposes every ref it mentions, so a TODO placeholder
+        # A conditional exposes every ref it mentions, so a TODO placeholder
         # inside any branch is still surfaced by the placeholder check.
         for ref in _field_spec_refs(field):
             addref(ref, where)

@@ -1,5 +1,5 @@
 """Normative determinism rules (run_db_schema.md §"Determinism — normative enumeration
-and canonicalisation", R9) as testable functions and constants.
+and canonicalisation") as testable functions and constants.
 
 Defines:    rule 1 — ``sqlite_enumeration_sql`` (records enumerate in ``rowid`` order;
             ``WITHOUT ROWID`` tables in primary-key order) and ``numbered_records``
@@ -12,7 +12,7 @@ Defines:    rule 1 — ``sqlite_enumeration_sql`` (records enumerate in ``rowid`
             join for ``inner_path``); rule 5 — ``canonical_json`` (re-exported from
             ``core/ids.py``, the single definition — never duplicated); rule 6 —
             ``ordered_mentions`` (projection aggregation by mention ordinal, then value
-            — never rowid); rule 7 — ``BLOB_KEY`` / ``blob_envelope`` (R18: a binary
+            — never rowid); rule 7 — ``BLOB_KEY`` / ``blob_envelope`` (a binary
             cell becomes ``{"$blob": {"sha256": …, "bytes": n}}``; the bytes themselves
             never enter the run DB).
 Used by:    the reader/enumeration bricks (they assign ``line_no`` through rules 1-3),
@@ -158,7 +158,7 @@ def excel_line_no(sheet_row: int) -> int:
 
 # --- Rule 4: path canonicalisation for the source natural key -----------------
 
-# The container-chain join for `inner_path` (rule 4, R10/decision 24). WHY "!" here but
+# The container-chain join for `inner_path` (rule 4). WHY "!" here but
 # "\x1f" in the ids: inner_path is a HUMAN-READABLE column (the archive!member notation
 # examiners know); the unforgeable machine join lives in ids.SEP where the uuid5 inputs
 # are assembled.
@@ -192,7 +192,7 @@ def container_inner_path(chain: Sequence[str]) -> str | None:
     """The chain-inclusive ``inner_path``: the container chain joined with ``!`` (rule 4).
 
     HOW: each element — the outermost container's own name FIRST, then each nested
-    member path (R10: the chain is inclusive) — is NFC-normalised with ``/``
+    member path (the chain is inclusive) — is NFC-normalised with ``/``
     separators, then joined with ``CONTAINER_JOIN``. An empty chain (a loose file) has
     no ``inner_path`` -> None.
     WHY an empty ELEMENT raises: it would silently collapse two different chains onto
@@ -236,16 +236,16 @@ def ordered_mentions(
     return sorted(mentions, key=_key)
 
 
-# --- Rule 7: the BLOB envelope (R18) --------------------------------------------
+# --- Rule 7: the BLOB envelope ---------------------------------------------------
 
-# The raw_json envelope key marking a binary cell (rule 7, R18 — exercised when the
+# The raw_json envelope key marking a binary cell (rule 7 — exercised when the
 # UFDR reader ships). "$"-prefixed so it can never collide with a real source column
 # name that reaches raw_json verbatim.
 BLOB_KEY = "$blob"
 
 
 def blob_envelope(data: bytes) -> dict[str, dict[str, object]]:
-    """The R18 BLOB envelope: ``{"$blob": {"sha256": …, "bytes": n}}`` (rule 7).
+    """The BLOB envelope: ``{"$blob": {"sha256": …, "bytes": n}}`` (rule 7).
 
     HOW: sha256 of the cell's bytes (64-char lowercase hex) plus the byte count; the
     caller embeds the returned dict in the record's ``raw_json`` (serialised through

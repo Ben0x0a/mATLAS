@@ -1,20 +1,20 @@
-"""SQLite format reader (ingest brick): R9 rowid/PK order, WAL/journal recovery merge.
+"""SQLite format reader (ingest brick): normative rowid/PK order, WAL/journal recovery merge.
 
 Defines:    ``SqliteReader`` (format "sqlite").
 Used by:    the ``format -> Reader`` registry (registered on import).
 Depends on: ``model_atlas.core.determinism`` (``sqlite_enumeration_sql``, ``numbered_
             records`` — rule 1; ``blob_envelope`` — rule 7), ``model_atlas.core.
             vocabularies`` (``RecordState``), ``model_atlas.ingest.readers.base``/
-            ``registry``, ``model_atlas.sqlite._sql.quote_identifier`` (the T90 fix),
-            ``model_atlas.sqlite.sql_query`` (``validate_custom_sql``/``harden_connection``
+            ``registry``, ``model_atlas.sqlite._sql.quote_identifier`` (the security fix
+            below), ``model_atlas.sqlite.sql_query`` (``validate_custom_sql``/``harden_connection``
             for the custom-SQL path), ``model_atlas.sqlite.dedup.merge_with_source`` (the
             unchanged two-pass origin-labelling algorithm), ``model_atlas.sqlite.carve``
-            (T96 freelist + free-space carving of deleted rows), and ``pandas`` (the shape
+            (freelist + free-space carving of deleted rows), and ``pandas`` (the shape
             ``merge_with_source`` operates on).
 
 Recovery has THREE sources here, all funnelled into one ``recovered`` list numbered after
 the live rows (rule 1's ``numbered_records``): WAL and journal sidecars (the two-pass
-merge), plus — new in T96 — rows CARVED from the main file's own unallocated space
+merge), plus rows CARVED from the main file's own unallocated space
 (freelist pages + leaf-page free space), which is where deleted rows survive once a WAL
 has been checkpointed away. Carving is ON BY DEFAULT (params['carve']=False opts out):
 silently dropping recoverable evidence is the failure mode to avoid. It runs only on the
@@ -24,19 +24,19 @@ RAW bytes directly — never the staging copy or SQLite's row API, which only se
 Ported from ``sources/readers/sqlite_reader.py``: the WAL/journal two-pass
 merge algorithm (``merge_with_source``) is reused UNCHANGED. What differs is the row
 FETCH: the old engine's reader ran a bare ``SELECT * FROM table`` with no explicit order,
-relying on SQLite's incidental scan order. R9 rule 1 requires a PINNED order (``rowid``, or
+relying on SQLite's incidental scan order. Rule 1 requires a PINNED order (``rowid``, or
 primary-key order for a ``WITHOUT ROWID`` table), so this reader builds its own two-pass
 fetch using ``sqlite_enumeration_sql`` for the ``SELECT`` text — a rule-1-correct query the
 old bare select could not give. The staging-copy step (main db + optional WAL/SHM/journal
 siblings, copied into a throwaway temp dir so SQLite never opens the original) is done here
 directly for the same reason.
 
-Carries the T90 security fix: ``peek_fields`` quotes the selector-supplied table name via
+Carries a security fix: ``peek_fields`` quotes the selector-supplied table name via
 ``quote_identifier`` — never an f-string into SQL — so a table name containing ``"`` makes
 ``quote_identifier`` raise, which is caught and turned into ``None`` (cannot verify),
 never executed.
 
-Sibling discovery: since T21 (discover/containers) has not landed, ``source`` is a plain
+Sibling discovery: since discover/containers has not landed, ``source`` is a plain
 path already resolved to a real file on disk; WAL/SHM/journal siblings are found next to it
 by the standard SQLite naming convention (``<path>-wal`` etc.), exactly what the old
 reader's container-staged group already exposed.
@@ -219,7 +219,7 @@ class SqliteReader:
                 record[_RECOVERY_SOURCE_KEY] = RecoverySource.LIVE
                 live.append(record)
 
-        # T96: an ADDITIONAL recovery pass. Rows carved from the main file's unallocated
+        # An ADDITIONAL recovery pass. Rows carved from the main file's unallocated
         # space (freelist + leaf free space) are appended AFTER the sidecar-recovered
         # rows, so numbered_records numbers all recovered rows — sidecar then carved — in
         # one continuing sequence behind the live rows. Only the table path carves (a
@@ -249,7 +249,7 @@ class SqliteReader:
     def peek_fields(self, source: Path, subunit: str | None = None) -> set[str] | None:
         """Columns of ``subunit`` (a table name), or None when they cannot be verified.
 
-        T90 carry-over: ``quote_identifier`` is the ONLY path a table name reaches SQL
+        Security invariant: ``quote_identifier`` is the ONLY path a table name reaches SQL
         through. It raises on an embedded quote/NUL/control char, which the except below
         turns into None ("cannot verify") — the identifier is never f-string-interpolated
         and PRAGMA is never executed with an unvalidated name.

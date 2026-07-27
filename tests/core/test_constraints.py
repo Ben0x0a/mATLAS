@@ -8,7 +8,7 @@ Defines:    thirteen tests, one per row of the schema doc's "Silent-loss invento
             tests/core/test_store.py or tests/core/test_ids.py, the docstring names
             that sibling test — so the row -> test mapping is complete and auditable
             from this file alone.
-Used by:    the T15 verification gate (pytest tests/core/test_constraints.py).
+Used by:    the verification gate (pytest tests/core/test_constraints.py).
 Depends on: ``model_atlas.core.ids`` / ``vocabularies`` / ``store`` (the surfaces under
             test) and pytest.
 

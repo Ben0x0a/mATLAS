@@ -2,7 +2,7 @@
 
 Round-trips a small store (the golden ``secondary`` fixture) to KML and spot-checks
 placemark count and coordinates against the flat CSV (``core.flat_view.build_flat_view``) of
-the SAME store — the T51 Verify bullet. Also checks the encoding decision (plain
+the SAME store. Also checks the encoding decision (plain
 utf-8, no BOM — required for a valid KML/XML declaration) and split-mode partitioning.
 """
 from __future__ import annotations

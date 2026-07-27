@@ -1,5 +1,5 @@
-"""sqlite_db export brick: persist the run database itself via ``VACUUM INTO`` (T51 —
-the new-engine replacement for the old flat-table ``sqlite`` export in
+"""sqlite_db export brick: persist the run database itself via ``VACUUM INTO`` (the
+new-engine replacement for the old flat-table ``sqlite`` export in
 ``exporters/builtin.py``).
 
 Defines:    SqliteDbExporter (the ``Exporter`` protocol brick,
@@ -14,12 +14,12 @@ Why this replaces, rather than ports, the old ``sqlite`` exporter
 ---------------------------------------------------------------------
 The old exporter backed up the store's live connection wholesale too, but the OLD
 store held a single denormalised ``assertions`` table plus an ``assertion_flat`` VIEW
-— a flat-table dump. The relational store (T12/T13) already IS a full 21-table +
+— a flat-table dump. The relational store already IS a full 21-table +
 ``matlas_meta`` schema with versioning pragmas stamped at creation
 (``core.schema.create_schema``); there is no separate flat-table shape left to build,
 so this brick is a thin call onto ``RunStore.persist`` (``VACUUM INTO``), producing a
 clean, standalone, defragmented copy — every L0-L3 table, the two finding VIEWS, the
-``application_id`` (R16 self-ingestion stamp) and ``user_version``. A caller who wants
+``application_id`` (self-ingestion stamp) and ``user_version``. A caller who wants
 the flat projection has ``CsvFlatExporter`` / ``core.flat_view.build_flat_view`` for that.
 
 Encoding

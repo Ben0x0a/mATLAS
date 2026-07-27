@@ -11,7 +11,7 @@ Used by:    integrate.temporal (the zone ladder of the tz-localise / assume-UTC 
 Depends on: standard library (datetime, re, zoneinfo); dateutil optionally, as an
             ISO-8601 fallback parser.
 
-T60 fold: moved verbatim from ``transforms/builtin.py`` — these are the
+Moved verbatim from ``transforms/builtin.py`` — these are the
 decode semantics the L2 temporal methods rely on, so they live beside their consumer
 in ``integrate`` (they are NOT preset-pipe machinery; the pipe transforms moved to
 ``presets/pipes.py`` instead). The old module's epoch decoders
