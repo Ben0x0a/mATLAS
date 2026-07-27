@@ -7,14 +7,14 @@ Defines:    GeovisualizerExporter (the ``Exporter`` protocol brick,
             import time.
 Used by:    model_atlas.export.registry (registration) and
             tests/export/test_geovisualizer.py.
-Depends on: model_atlas.core.projection (the flat query), model_atlas.export.csv_flat
+Depends on: model_atlas.core.flat_view (the flat query), model_atlas.export.csv_flat
             (the ``Exporter`` protocol / ``ExportContext``, ``CSV_DELIMITER`` via
             model_atlas.export), model_atlas.export._shared (value helpers +
             partitioning), pandas.
 
 Query + serialiser, and the interval expansion (T51 scope)
 --------------------------------------------------------------
-The data access is ONE query — ``core.projection.project`` — which already carries
+The data access is ONE query — ``core.flat_view.build_flat_view`` — which already carries
 BOTH temporal bounds per row (``time_lower_unix_utc_us`` / ``time_upper_unix_utc_us``,
 sourced from ``timespan_integration.lower_unix_utc_us`` / ``upper_unix_utc_us``): the
 "natural SELECT over timespan_integration" the relational model gives for free. The
@@ -47,7 +47,7 @@ from typing import Any
 
 import pandas as pd
 
-from model_atlas.core.projection import project
+from model_atlas.core.flat_view import build_flat_view
 from model_atlas.core.store import RunStore
 from model_atlas.export import CSV_DELIMITER
 from model_atlas.export._shared import UNIX_EPOCH, as_float, clean, is_blank
@@ -216,7 +216,7 @@ class GeovisualizerExporter:
     format = "geovisualizer"
 
     def export(self, store: RunStore, ctx: ExportContext) -> list[Path]:
-        frame = project(
+        frame = build_flat_view(
             store.connection, ranking_method=ctx.ranking_method, include_source_columns=False)
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
         return [self._write(frame, ctx.output_dir / f"{ctx.base_name}.geovisualizer.csv")]

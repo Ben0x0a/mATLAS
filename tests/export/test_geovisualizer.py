@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from model_atlas.core.projection import project
+from model_atlas.core.flat_view import build_flat_view
 from model_atlas.core.store import RunStore
 from model_atlas.export.csv_flat import ExportContext
 from model_atlas.export.geovisualizer import GeovisualizerExporter, _GEOVIS_COLUMNS
@@ -46,7 +46,7 @@ def test_geovisualizer_round_trips_small_store(tmp_path: Path) -> None:
         _build_golden_store(store)
         written = GeovisualizerExporter().export(
             store, ExportContext(output_dir=tmp_path, base_name="merged"))
-        flat = project(store.connection, include_source_columns=False)
+        flat = build_flat_view(store.connection, include_source_columns=False)
 
     assert written == [tmp_path / "merged.geovisualizer.csv"]
     out = _read_geovis_csv(written[0])
@@ -68,7 +68,7 @@ def test_geovisualizer_expands_interval_into_two_rows(tmp_path: Path) -> None:
         build_manual_store(store)
         written = GeovisualizerExporter().export(
             store, ExportContext(output_dir=tmp_path, base_name="merged"))
-        flat = project(store.connection, include_source_columns=False)
+        flat = build_flat_view(store.connection, include_source_columns=False)
 
     out = _read_geovis_csv(written[0])
     # 2 assertions in the store: the instant one yields 1 row, the interval one yields

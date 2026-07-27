@@ -67,7 +67,7 @@ from model_atlas.core import vocabularies as V
 # LIMIT 1): importing them guarantees this brick ranks EXACTLY the value the flat
 # CSV shows for the same column — a locally re-derived subquery could silently
 # pick a different component row.
-from model_atlas.core.projection import _spatial_part, _temporal_part
+from model_atlas.core.flat_view import _spatial_part, _temporal_part
 from model_atlas.core.store import RunStore
 
 log = logging.getLogger(__name__)

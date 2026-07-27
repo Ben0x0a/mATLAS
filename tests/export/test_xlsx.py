@@ -1,7 +1,7 @@
 """Tests for the XLSX export brick (model_atlas/export/xlsx.py).
 
 Round-trips a small store (the golden ``secondary`` fixture) to Excel and
-spot-checks row-count/coordinates against the flat CSV (``core.projection.project``)
+spot-checks row-count/coordinates against the flat CSV (``core.flat_view.build_flat_view``)
 of the SAME store — the T51 Verify bullet.
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from model_atlas.core.projection import CANONICAL_COLUMNS, project
+from model_atlas.core.flat_view import CANONICAL_COLUMNS, build_flat_view
 from model_atlas.core.store import RunStore
 from model_atlas.export.csv_flat import ExportContext
 from model_atlas.export.xlsx import XlsxExporter
@@ -30,7 +30,7 @@ def test_xlsx_round_trips_small_store(tmp_path: Path) -> None:
         _build_store(store)
         written = XlsxExporter().export(
             store, ExportContext(output_dir=tmp_path, base_name="merged"))
-        flat = project(store.connection, include_source_columns=False)
+        flat = build_flat_view(store.connection, include_source_columns=False)
 
     assert written == [tmp_path / "merged.assertions.xlsx"]
     reopened = pd.read_excel(written[0])

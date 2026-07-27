@@ -32,7 +32,7 @@ UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 def is_blank(value: Any) -> bool:
     """True for None, an empty/whitespace string, float NaN, or pandas NA/NaT.
 
-    WHY pandas NA too: ``core.projection.project`` reads several columns (the epoch
+    WHY pandas NA too: ``core.flat_view.build_flat_view`` reads several columns (the epoch
     micros, ``s2_cell_id``…) as nullable ``Int64``, whose missing marker is
     ``pandas.NA`` — plain ``math.isnan`` (the old exporter's check) does not
     recognise it and would treat a missing value as present.

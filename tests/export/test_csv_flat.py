@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from model_atlas.core.projection import CANONICAL_COLUMNS, PASSTHROUGH_PREFIX, project
+from model_atlas.core.flat_view import CANONICAL_COLUMNS, PASSTHROUGH_PREFIX, build_flat_view
 from model_atlas.core.store import RunStore
 from model_atlas.export.csv_flat import CsvFlatExporter, ExportContext
 from model_atlas.presets.spec import PresetSpec
@@ -126,7 +126,7 @@ def test_mandatory_r6_columns_present_and_distinguishing() -> None:
     with RunStore() as store:
         run_relational_pipeline(
             store, _GOLDEN_SRC / "cached.csv", [spec], linked_entity=_LINKED_ENTITY)
-        projected = project(store.connection)
+        projected = build_flat_view(store.connection)
     for column in ("spatial_referential", "locates", "spatial_method", "temporal_method"):
         assert column in projected.columns
     first = projected.iloc[0]

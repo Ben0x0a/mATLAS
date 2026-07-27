@@ -21,7 +21,7 @@ import pytest
 
 from model_atlas.analyze import untangle
 from model_atlas.core import ids
-from model_atlas.core import projection
+from model_atlas.core import flat_view
 from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore
 
@@ -216,13 +216,13 @@ def test_bumped_version_adds_rows_and_projection_picks_current() -> None:
             assert methods == {"untangle/2.0", "untangle/2.1"}
 
         # The projection's default is the CURRENT method (MAX(method) = 2.1)…
-        current = projection.project(
+        current = flat_view.build_flat_view(
             store.connection, include_source_columns=False).set_index("row_uid")
         r4 = assertion_ids[4]
         assert current.at[r4, "record_type"] == "main"
         assert int(current.at[r4, "record_rank"]) == 1
         # …while the superseded generation stays readable by pinning its method.
-        pinned = projection.project(
+        pinned = flat_view.build_flat_view(
             store.connection, include_source_columns=False,
             ranking_method="untangle/2.0").set_index("row_uid")
         assert pd.isna(pinned.at[r4, "record_type"])

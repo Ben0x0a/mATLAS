@@ -5,13 +5,13 @@ carry coordinates (T51 — ports ``exporters/builtin.py``'s
 Defines:    GeojsonExporter (the ``Exporter`` protocol brick, ``format = "geojson"``),
             registered in model_atlas.export.registry at import time.
 Used by:    model_atlas.export.registry (registration) and tests/export/test_geojson.py.
-Depends on: model_atlas.core.projection (the flat query), model_atlas.export.csv_flat
+Depends on: model_atlas.core.flat_view (the flat query), model_atlas.export.csv_flat
             (the ``Exporter`` protocol / ``ExportContext``), model_atlas.export._shared
             (value helpers + partitioning).
 
 Query + serialiser (T51 scope)
 -------------------------------
-The data access is ONE query — ``core.projection.project``. Every canonical column
+The data access is ONE query — ``core.flat_view.build_flat_view``. Every canonical column
 except the two coordinates becomes a GeoJSON ``properties`` entry (a blank/NaN/NA cell
 becomes ``null``, matching the old exporter), so a GIS consumer sees the same
 attribute set the old exporter exposed (extended with the relational model's new
@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from model_atlas.core.projection import project
+from model_atlas.core.flat_view import build_flat_view
 from model_atlas.core.store import RunStore
 from model_atlas.export._shared import as_float, is_blank
 from model_atlas.export.csv_flat import ExportContext
@@ -50,7 +50,7 @@ class GeojsonExporter:
     format = "geojson"
 
     def export(self, store: RunStore, ctx: ExportContext) -> list[Path]:
-        frame = project(
+        frame = build_flat_view(
             store.connection, ranking_method=ctx.ranking_method, include_source_columns=False)
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
         return [self._write(frame, ctx.output_dir / f"{ctx.base_name}.points.geojson")]

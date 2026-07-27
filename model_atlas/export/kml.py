@@ -4,13 +4,13 @@ coordinate (T51 — ports ``exporters/builtin.py``'s ``export_kml``).
 Defines:    KmlExporter (the ``Exporter`` protocol brick, ``format = "kml"``),
             registered in model_atlas.export.registry at import time.
 Used by:    model_atlas.export.registry (registration) and tests/export/test_kml.py.
-Depends on: model_atlas.core.projection (the flat query), model_atlas.export.csv_flat
+Depends on: model_atlas.core.flat_view (the flat query), model_atlas.export.csv_flat
             (the ``Exporter`` protocol / ``ExportContext``), model_atlas.export._shared
             (value helpers + partitioning), the standard library's ``xml.etree``.
 
 Query + serialiser (T51 scope)
 -------------------------------
-The data access is ONE query — ``core.projection.project`` (the same flat frame the
+The data access is ONE query — ``core.flat_view.build_flat_view`` (the same flat frame the
 CSV exporter reads); this module's only job is picking the coordinate-bearing rows
 and shaping them into KML Placemarks, faithfully reproducing the old exporter's XML
 shape (name = linked_entity, TimeStamp/when = the lower-bound local ISO instant,
@@ -36,7 +36,7 @@ from xml.etree.ElementTree import Element, ElementTree, SubElement
 
 import pandas as pd
 
-from model_atlas.core.projection import project
+from model_atlas.core.flat_view import build_flat_view
 from model_atlas.core.store import RunStore
 from model_atlas.export._shared import UNIX_EPOCH, as_float, clean, is_blank
 from model_atlas.export.csv_flat import ExportContext
@@ -64,7 +64,7 @@ class KmlExporter:
     format = "kml"
 
     def export(self, store: RunStore, ctx: ExportContext) -> list[Path]:
-        frame = project(
+        frame = build_flat_view(
             store.connection, ranking_method=ctx.ranking_method, include_source_columns=False)
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
         return [self._write(frame, ctx.output_dir / f"{ctx.base_name}.points.kml")]

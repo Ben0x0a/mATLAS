@@ -1,4 +1,4 @@
-"""Tests for the flat-CSV projection (``model_atlas.core.projection``).
+"""Tests for the flat-CSV projection (``model_atlas.core.flat_view``).
 
 Defines:    the column-contract test (the projected frame carries exactly the
             docs/csv_migration.md columns, in order, against the T00 demo DB), the
@@ -8,7 +8,7 @@ Defines:    the column-contract test (the projected frame carries exactly the
             ``orig_<col>`` passthrough tests (first-appearance order, verbatim values,
             trailing-``_`` collision disambiguation).
 Used by:    the T14 verification gate (pytest tests/core/test_projection.py).
-Depends on: ``model_atlas.core.projection`` (under test), ``model_atlas.core.vocabularies``
+Depends on: ``model_atlas.core.flat_view`` (under test), ``model_atlas.core.vocabularies``
             (the ``EntityPositionLink.locates`` derivation the projection must agree
             with), pandas, and the T00 demo DB ``docs/examples/matlas_example.sqlite``
             (28 assertions, one positionless nav-origin leg).
@@ -24,7 +24,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from model_atlas.core import projection
+from model_atlas.core import flat_view
 from model_atlas.core import vocabularies as V
 
 _DEMO_DB = Path(__file__).resolve().parents[2] / "docs" / "examples" / "matlas_example.sqlite"
@@ -78,13 +78,13 @@ def demo() -> sqlite3.Connection:
 
 @pytest.fixture(scope="module")
 def frame(demo: sqlite3.Connection) -> pd.DataFrame:
-    return projection.project(demo)
+    return flat_view.build_flat_view(demo)
 
 
 # --- the column contract -----------------------------------------------------
 
 def test_canonical_columns_match_csv_migration_contract() -> None:
-    assert projection.CANONICAL_COLUMNS == _EXPECTED_CANONICAL
+    assert flat_view.CANONICAL_COLUMNS == _EXPECTED_CANONICAL
 
 
 def test_frame_carries_contract_columns_in_order_then_orig(frame: pd.DataFrame) -> None:
@@ -93,11 +93,11 @@ def test_frame_carries_contract_columns_in_order_then_orig(frame: pd.DataFrame) 
     trailing = list(frame.columns[len(_EXPECTED_CANONICAL):])
     # Everything after the canonical block is the passthrough; nothing else may appear.
     assert trailing, "the demo DB has raw_json keys, so orig_ columns must be present"
-    assert all(name.startswith(projection.PASSTHROUGH_PREFIX) for name in trailing)
+    assert all(name.startswith(flat_view.PASSTHROUGH_PREFIX) for name in trailing)
 
 
 def test_orig_columns_excluded_on_request(demo: sqlite3.Connection) -> None:
-    bare = projection.project(demo, include_source_columns=False)
+    bare = flat_view.build_flat_view(demo, include_source_columns=False)
     assert tuple(bare.columns) == _EXPECTED_CANONICAL
 
 
@@ -200,7 +200,7 @@ def test_orig_columns_union_in_first_appearance_order(demo: sqlite3.Connection,
         for key in json.loads(raw_json):
             if key not in seen:
                 seen.add(key)
-                expected.append(f"{projection.PASSTHROUGH_PREFIX}{key}")
+                expected.append(f"{flat_view.PASSTHROUGH_PREFIX}{key}")
     assert list(frame.columns[len(_EXPECTED_CANONICAL):]) == expected
 
 
@@ -216,6 +216,6 @@ def test_orig_values_are_verbatim(demo: sqlite3.Connection, frame: pd.DataFrame)
 def test_passthrough_collision_gets_trailing_underscore() -> None:
     # A source field whose prefixed name collides with a canonical column must be
     # disambiguated (trailing "_"), never allowed to shadow the canonical column.
-    names = projection._passthrough_names(["position", "position_"], "raw_")
+    names = flat_view._passthrough_names(["position", "position_"], "raw_")
     assert names["position"] == "raw_position_"       # "raw_position" is canonical
     assert names["position_"] == "raw_position__"     # and chains must not collide either

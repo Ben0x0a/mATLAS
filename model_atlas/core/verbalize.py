@@ -1,6 +1,6 @@
 """Every assertion as ONE deterministic British-English sentence (decision 37).
 
-Defines:    ``verbalize(row) -> str`` — renders one flat projection row (the T14
+Defines:    ``verbalize(row) -> str`` — renders one flat-view row (the T14
             column contract) as a single sentence assembled from the D37 ``phrase``
             fragments declared in ``model_atlas.core.vocabularies``. The owner's
             target shape (run_db_schema.md decision 37): *"Entity <identifier>
@@ -23,7 +23,7 @@ them):
   combined with the expression's verbatim raw (``raw_position``) when both exist;
   the verbatim raw alone is the fallback (address, place name, cell ref).
 - **Instant vs interval** comes from the timespan itself, not a stored kind (the
-  projection carries no ``temporal_kind`` column): equal or lone bounds render
+  the flat view carries no ``temporal_kind`` column): equal or lone bounds render
   "at <instant>", two distinct bounds render "the interval from <lower> to
   <upper>". Each bound prefers the integrated offset-tagged ISO string (its
   ``N/A`` assumed-UTC sentinel stays visible, decision 32), then the verbatim
@@ -72,7 +72,7 @@ _BOUND_COLUMN_SUFFIXES = ("datetime_iso", "raw", "unix_utc_us")
 
 
 def _cell(row: Mapping[str, Any] | pd.Series, column: str) -> Any | None:
-    """One projection cell, normalised so every flavour of 'absent' is ``None``.
+    """One flat-view cell, normalised so every flavour of 'absent' is ``None``.
 
     HOW: ``.get`` covers both accepted row types (a plain mapping and a pandas
     Series, whose missing-label ``.get`` also returns None), then ``pd.isna``
@@ -157,7 +157,7 @@ def _bound_text(row: Mapping[str, Any] | pd.Series, which: str) -> str | None:
 def _timespan(row: Mapping[str, Any] | pd.Series) -> tuple[str, bool] | None:
     """The timespan body and its shape: ``(text, is_instant)``, or None when empty.
 
-    Equal or lone bounds are an instant (the brief's rule — the projection carries
+    Equal or lone bounds are an instant (the brief's rule — the flat view carries
     no stored ``temporal_kind``, so the shape derives from the bounds themselves);
     two distinct bounds are an interval, introduced by the INTERVAL fragment.
     Equality compares the RENDERED texts: two bounds that display identically ARE
@@ -189,10 +189,10 @@ def _link_phrase(row: Mapping[str, Any] | pd.Series, column: str,
 
 
 def verbalize(row: Mapping[str, Any] | pd.Series) -> str:
-    """Render one assertion (a flat projection row) as one deterministic sentence.
+    """Render one assertion (a flat-view row) as one deterministic sentence.
 
-    ``row`` is a T14 projection row: a pandas Series (one row of
-    ``projection.project``'s frame) or any dict-like mapping of column name to
+    ``row`` is a T14 flat-view row: a pandas Series (one row of
+    ``flat_view.build_flat_view``'s frame) or any dict-like mapping of column name to
     value — absent columns and NA cells both read as "no recorded value".
     """
     subject = _subject(row)

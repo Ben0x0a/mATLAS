@@ -38,7 +38,7 @@ process()
   -> match_file()                 (presets.matcher)
   -> SingleSourceExtractor.extract() (sources.extractor -> FormatReader)
   -> build_assertions()           (transforms.assemble -> one run-wide RunStore)
-  -> RunStore.to_flat_frame()     (model.store — the assertion_flat projection)
+  -> RunStore.to_flat_frame()     (model.store — the assertion_flat view)
   -> untangle()                   (transforms.rank -> ranks written back to the store)
   -> run_exporters()              (exporters — csv / sqlite run DB / ...)
   -> ProcessResult

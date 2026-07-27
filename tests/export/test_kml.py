@@ -1,7 +1,7 @@
 """Tests for the KML export brick (model_atlas/export/kml.py).
 
 Round-trips a small store (the golden ``secondary`` fixture) to KML and spot-checks
-placemark count and coordinates against the flat CSV (``core.projection.project``) of
+placemark count and coordinates against the flat CSV (``core.flat_view.build_flat_view``) of
 the SAME store — the T51 Verify bullet. Also checks the encoding decision (plain
 utf-8, no BOM — required for a valid KML/XML declaration) and split-mode partitioning.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from model_atlas.core.projection import project
+from model_atlas.core.flat_view import build_flat_view
 from model_atlas.core.store import RunStore
 from model_atlas.export.csv_flat import ExportContext
 from model_atlas.export.kml import KmlExporter
@@ -32,7 +32,7 @@ def test_kml_round_trips_small_store(tmp_path: Path) -> None:
         _build_store(store)
         written = KmlExporter().export(
             store, ExportContext(output_dir=tmp_path, base_name="merged"))
-        flat = project(store.connection, include_source_columns=False)
+        flat = build_flat_view(store.connection, include_source_columns=False)
 
     assert written == [tmp_path / "merged.points.kml"]
     data = written[0].read_bytes()

@@ -1,25 +1,25 @@
-"""The csv_flat Exporter: the flat CSV as a projection over the run store.
+"""The csv_flat Exporter: the flat CSV view over the run store.
 
 Defines:    the ``Exporter`` protocol (refactor_plan.md §3 — ``export(store, ctx)``),
             ``ExportContext`` (the output settings one export needs), and
             ``CsvFlatExporter`` — the shipped flat-CSV brick. It projects the run store
-            through ``core.projection`` (one row per assertion, the authoritative
+            through ``core.flat_view`` (one row per assertion, the authoritative
             ``docs/csv_migration.md`` column order plus the per-run ``orig_<col>`` tail)
             and writes it as a single ``utf-8-sig`` semicolon CSV (one file per format —
             the ``preset_id`` column separates presets for a caller who wants that).
 Used by:    the app-layer pipeline (once T60 wires exporters after analysis) and
             tests/export/test_csv_flat.py.
-Depends on: ``model_atlas.core.projection`` (``project`` / ``CANONICAL_COLUMNS`` — the
+Depends on: ``model_atlas.core.flat_view`` (``build_flat_view`` / ``CANONICAL_COLUMNS`` — the
             flat frame and its column contract), ``model_atlas.core.store`` (``RunStore``
             — read-only ``.connection`` here), ``model_atlas.export`` (``CSV_DELIMITER``
             — the one delimiter definition), pandas and the standard library.
 
-Why a projection and not a hand-built frame
+Why the flat view and not a hand-built frame
 -------------------------------------------
 The flat CSV stopped being a 45-column dict assembled per assertion; it is now a
 GENERATED query over the run database (docs/csv_migration.md). This brick therefore owns
 no column knowledge of its own — the order, the numeric dtypes and the ``orig_<col>``
-explosion all come from ``core.projection``. The four R6-mandatory columns
+explosion all come from ``core.flat_view``. The four R6-mandatory columns
 (``spatial_referential``, ``locates``, ``spatial_method``, ``temporal_method``) are part
 of that contract, so a GPS fix, a geocoder centroid and a cell lookup each carry their
 own referential + method and can never render identically.
@@ -40,7 +40,7 @@ from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
-from model_atlas.core.projection import project
+from model_atlas.core.flat_view import build_flat_view
 from model_atlas.core.store import RunStore
 from model_atlas.export import CSV_DELIMITER
 
@@ -53,7 +53,7 @@ class ExportContext:
 
     ``base_name`` is the output file's stem (one file per format — the ``preset_id``
     column separates presets in the single file). ``ranking_method`` pins which
-    ``analysis`` method the projection reads (None = the current/maximum method);
+    ``analysis`` method the flat view reads (None = the current/maximum method);
     ``include_source_columns`` toggles the ``orig_<col>`` tail.
     """
 
@@ -85,12 +85,12 @@ class CsvFlatExporter:
     def export(self, store: RunStore, ctx: ExportContext) -> list[Path]:
         """Project the run store and write the flat CSV, returning the file written.
 
-        HOW: build the flat frame ONCE via ``core.projection.project`` (the authoritative
+        HOW: build the flat frame ONCE via ``core.flat_view.build_flat_view`` (the authoritative
         column order + the per-run ``orig_<col>`` tail + restored numeric dtypes) and
         write it whole to ``<output_dir>/<base_name>.csv``. One file per format: the
         ``preset_id`` column already separates presets for a caller who needs it.
         """
-        frame = project(
+        frame = build_flat_view(
             store.connection,
             include_source_columns=ctx.include_source_columns,
             ranking_method=ctx.ranking_method,
@@ -104,7 +104,7 @@ class CsvFlatExporter:
         QUOTE_NONNUMERIC quotes every non-numeric field, so a value containing the
         delimiter, a newline or a leading '=' (a spreadsheet formula trigger) can never
         break the column structure of a forensic export; the numeric-dtype columns the
-        projection restored stay unquoted so they read as numbers.
+        flat view restored stay unquoted so they read as numbers.
         """
         log.info(f"Writing flat CSV: path={path} rows={len(frame)} columns={len(frame.columns)}")
         frame.to_csv(

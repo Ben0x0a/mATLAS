@@ -2,7 +2,7 @@
 
 Round-trips a small store (the golden ``secondary`` fixture) to GeoJSON and
 spot-checks feature count and coordinates against the flat CSV
-(``core.projection.project``) of the SAME store — the T51 Verify bullet. Also checks
+(``core.flat_view.build_flat_view``) of the SAME store — the T51 Verify bullet. Also checks
 the encoding decision (plain utf-8, NO BOM — RFC 7946 §5, a deliberate deviation from
 the old exporter, see model_atlas/export/geojson.py's docstring).
 """
@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from model_atlas.core.projection import project
+from model_atlas.core.flat_view import build_flat_view
 from model_atlas.core.store import RunStore
 from model_atlas.export.csv_flat import ExportContext
 from model_atlas.export.geojson import GeojsonExporter
@@ -31,7 +31,7 @@ def test_geojson_round_trips_small_store(tmp_path: Path) -> None:
         _build_store(store)
         written = GeojsonExporter().export(
             store, ExportContext(output_dir=tmp_path, base_name="merged"))
-        flat = project(store.connection, include_source_columns=False)
+        flat = build_flat_view(store.connection, include_source_columns=False)
 
     assert written == [tmp_path / "merged.points.geojson"]
     data = written[0].read_bytes()

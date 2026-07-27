@@ -11,7 +11,7 @@ Defines:    the golden-sentence tests against the T00 demo store (the worked
             falls back to the entity type).
 Used by:    the T16 verification gate (pytest tests/core/test_verbalize.py).
 Depends on: ``model_atlas.core.verbalize`` (under test),
-            ``model_atlas.core.projection`` (the flat rows the verbaliser
+            ``model_atlas.core.flat_view`` (the flat rows the verbaliser
             consumes), ``model_atlas.core.vocabularies`` (the phrase fragments),
             pandas, and the T00 demo DB ``docs/examples/matlas_example.sqlite``
             (28 assertions).
@@ -32,7 +32,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from model_atlas.core import projection
+from model_atlas.core import flat_view
 from model_atlas.core import verbalize
 from model_atlas.core import vocabularies as V
 
@@ -66,7 +66,7 @@ def demo() -> sqlite3.Connection:
 
 @pytest.fixture(scope="module")
 def frame(demo: sqlite3.Connection) -> pd.DataFrame:
-    return projection.project(demo, include_source_columns=False)
+    return flat_view.build_flat_view(demo, include_source_columns=False)
 
 
 def _one_row(frame: pd.DataFrame, mask: pd.Series) -> pd.Series:

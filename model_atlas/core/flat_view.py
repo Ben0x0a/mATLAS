@@ -1,13 +1,15 @@
-"""The flat CSV as a GENERATED projection query over the run database.
+"""The flat CSV view: a GENERATED query over the run database.
 
 Defines:    ``CANONICAL_COLUMNS`` (the ordered flat-CSV column contract encoded from
-            [docs/csv_migration.md](../../docs/csv_migration.md)), ``build_projection_sql``
+            [docs/csv_migration.md](../../docs/csv_migration.md)), ``build_flat_view_sql``
             (assembles the per-run SELECT — canonical block first, then the exploded
-            ``orig_<col>`` passthrough), and ``project`` (runs it against a read-only
-            connection and returns the flat pandas frame with numeric dtypes restored
-            and the derived ``locates`` filled).
+            ``orig_<col>`` passthrough), and ``build_flat_view`` (runs it against a
+            read-only connection and returns the flat pandas frame with numeric dtypes
+            restored and the derived ``locates`` filled).
 Used by:    the CSV exporter (T50) and any read-only consumer wanting the flat view;
-            tests.core.test_projection.
+            tests.core.test_flat_view. NB: this is the CSV-column "flat view", distinct
+            from ids.py's ``l1_projection`` (the digest input) and the future road
+            geometry "projection" (T100) — the three no longer share the one word.
 Depends on: ``model_atlas.core.vocabularies`` (``EntityPositionLink.locates`` — the single
             source of the ``locates`` derivation), ``pandas`` (the frame + numeric
             re-coercion the old frame builder did), and the standard library
@@ -17,7 +19,7 @@ Why a GENERATED query and not a static VIEW (R21)
 -------------------------------------------------
 The canonical columns are fixed, but the ``orig_<col>`` verbatim passthrough is the
 UNION of every raw record's own keys — a set that differs per source and therefore per
-run. A static VIEW cannot carry a per-run column set, so the projection is assembled
+run. A static VIEW cannot carry a per-run column set, so the flat view is assembled
 as a SQL string once per run: the canonical SELECT list is constant, the ``orig_``
 tail is computed from the records actually present.
 
@@ -198,7 +200,7 @@ _NUMERIC_TEXT_COLUMNS: tuple[str, ...] = (
     "utc_offset_hours_lower", "utc_offset_hours_upper",
 )
 
-# INTEGER-typed projection columns that may carry NULLs (a corner-less assertion). Read
+# INTEGER-typed flat-view columns that may carry NULLs (a corner-less assertion). Read
 # as pandas nullable ``Int64`` rather than the float64 pandas would otherwise infer:
 # ``s2_cell_id`` is a signed int64 S2 leaf cell whose value EXCEEDS float64's 53-bit
 # integer range — a float round-trip would silently corrupt the cell id (a §2-class
@@ -212,7 +214,7 @@ _INTEGER_COLUMNS: tuple[str, ...] = (
 
 # The join chain up the grain (assertion -> raw_record -> source -> run -> case) plus the
 # owned corners, their integrations, the S2 index and the current analysis method. The
-# ``?`` binds the resolved ranking method (see build_projection_sql). ORDER BY a.rowid
+# ``?`` binds the resolved ranking method (see build_flat_view_sql). ORDER BY a.rowid
 # reproduces ingest order, so the flat frame is deterministic.
 _FROM_JOINS = """
 FROM assertion a
@@ -301,13 +303,13 @@ def _resolve_ranking_method(
     return row[0] if row is not None else None
 
 
-def build_projection_sql(
+def build_flat_view_sql(
     connection: sqlite3.Connection,
     *,
     include_source_columns: bool = True,
     source_column_prefix: str = PASSTHROUGH_PREFIX,
 ) -> tuple[str, list[str]]:
-    """Assemble the per-run projection SELECT and return ``(sql, orig_column_names)``.
+    """Assemble the per-run flat-view SELECT and return ``(sql, orig_column_names)``.
 
     The canonical block is constant; the ``orig_<col>`` tail is generated from the keys
     actually present in this run's raw records (R21 — the reason this is a generated query
@@ -334,14 +336,14 @@ def build_projection_sql(
     return sql, orig_columns
 
 
-def project(
+def build_flat_view(
     connection: sqlite3.Connection,
     *,
     include_source_columns: bool = True,
     source_column_prefix: str = PASSTHROUGH_PREFIX,
     ranking_method: str | None = None,
 ) -> pd.DataFrame:
-    """Project the run database to the flat CSV frame — one row per assertion.
+    """Build the flat CSV frame from the run database — one row per assertion.
 
     HOW: resolve the current ranking method, build the generated SELECT, read it into a
     frame, restore the numeric-union TEXT columns to a numeric dtype (so they render
@@ -350,7 +352,7 @@ def project(
     assertions keep their row with empty coordinate/time cells (LEFT JOINs), never dropped.
     """
     method = _resolve_ranking_method(connection, ranking_method)
-    sql, _orig_columns = build_projection_sql(
+    sql, _orig_columns = build_flat_view_sql(
         connection,
         include_source_columns=include_source_columns,
         source_column_prefix=source_column_prefix,

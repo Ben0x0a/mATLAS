@@ -20,7 +20,7 @@ store held a single denormalised ``assertions`` table plus an ``assertion_flat``
 so this brick is a thin call onto ``RunStore.persist`` (``VACUUM INTO``), producing a
 clean, standalone, defragmented copy — every L0-L3 table, the two finding VIEWS, the
 ``application_id`` (R16 self-ingestion stamp) and ``user_version``. A caller who wants
-the flat projection has ``CsvFlatExporter`` / ``core.projection.project`` for that.
+the flat projection has ``CsvFlatExporter`` / ``core.flat_view.build_flat_view`` for that.
 
 Encoding
 --------
