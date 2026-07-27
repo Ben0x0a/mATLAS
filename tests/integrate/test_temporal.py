@@ -343,6 +343,29 @@ def test_instant_accuracy_carries_onto_the_degenerate_upper_bound(store) -> None
     assert row["upper_accuracy_us"] == 500_000
 
 
+def test_source_stated_accuracy_accepts_a_fractional_value_rounded_to_us(store) -> None:
+    # A source stating a fractional µs count is rounded to whole µs (the INTEGER column).
+    bundle = _bundle(store, "acc-frac", "instant", "unix_epoch_s", [
+        ("lower", None, "1773450680"),
+        ("lower_accuracy", None, "1500000.4"),
+    ])
+    integrate_expression(store, bundle, epoch_methods())
+    assert _row(store, bundle)["lower_accuracy_us"] == 1_500_000
+
+
+def test_unreadable_source_accuracy_is_dropped_not_invented(store) -> None:
+    # A non-numeric accuracy cell warns and yields None — one bad cell never sinks the
+    # expression, and nothing is invented in its place (no-silent-loss discipline).
+    bundle = _bundle(store, "acc-bad", "instant", "unix_epoch_s", [
+        ("lower", None, "1773450680"),
+        ("lower_accuracy", None, "about a second"),
+    ])
+    integrate_expression(store, bundle, epoch_methods())
+    row = _row(store, bundle)
+    assert row["lower_unix_utc_us"] == 1_773_450_680_000_000   # the bound still decodes
+    assert row["lower_accuracy_us"] is None                    # the bad accuracy is dropped
+
+
 def test_source_stated_accuracy_overrides_the_method_level_claim(store) -> None:
     # A Method may carry its OWN accuracy claim (a fuzzy-time reader); a source-stated
     # per-bound value is stronger evidence and wins.

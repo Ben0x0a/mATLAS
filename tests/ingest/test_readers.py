@@ -16,7 +16,7 @@ import pytest
 from model_atlas.core.vocabularies import RecordState, RecoverySource
 from model_atlas.ingest.readers.csv_reader import CsvReader
 from model_atlas.ingest.readers.excel_reader import ExcelReader
-from model_atlas.ingest.readers.sqlite_reader import SqliteReader
+from model_atlas.ingest.readers.sqlite_reader import SqliteReader, _sidecar_recovery_source
 
 pytest.importorskip("openpyxl")
 from openpyxl import Workbook  # noqa: E402
@@ -199,6 +199,14 @@ def test_sqlite_recovered_rows_come_after_live_continuing_line_no(tmp_path: Path
     assert [r.line_no for r in recs] == [1, 2]
     # The fine origin: the live row is LIVE, the WAL-only row names its sidecar (WAL).
     assert [r.recovery_source for r in recs] == [RecoverySource.LIVE, RecoverySource.WAL]
+
+
+def test_sidecar_recovery_source_mapping() -> None:
+    # wal/journal map to their RecoverySource; the unnamed-sidecar fallback is UNKNOWN
+    # (a recovered row of indeterminate origin — never silently mislabelled LIVE).
+    assert _sidecar_recovery_source("wal") == RecoverySource.WAL
+    assert _sidecar_recovery_source("journal") == RecoverySource.JOURNAL
+    assert _sidecar_recovery_source("sidecar") == RecoverySource.UNKNOWN
 
 
 def test_sqlite_peek_fields_rejects_quoted_table_name(tmp_path: Path) -> None:
