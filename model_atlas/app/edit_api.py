@@ -167,8 +167,8 @@ class EditApi:
         if table not in EDITABLE_TABLES:
             layer = store_mod.TABLE_LAYER.get(table, "?")
             raise PermissionError(
-                f"{table!r} is {layer} evidence and is never edited in place "
-                f"(decision 34); call save_as_new_row({table!r}, ...) to mint a new "
+                f"{table!r} is {layer} evidence and is never edited in place; "
+                f"call save_as_new_row({table!r}, ...) to mint a new "
                 f"occurrence carrying the change and keep the original untouched")
         self._require_column(table, column)
         pk = self._pk(table)

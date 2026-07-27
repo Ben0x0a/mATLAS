@@ -194,7 +194,7 @@ def ingest_input(
     if input_path.is_file() and is_matlas_run_db(input_path):
         raise SelfIngestionError(
             f"input {input_path} is a persisted mATLAS run DB (application_id + matlas_meta); "
-            f"refusing to re-ingest a reproducible-scratch DB as L0 evidence (R16)"
+            f"refusing to re-ingest a reproducible-scratch DB as L0 evidence"
         )
 
     # --- case + run: the run row carries the COMPLETE operator settings.

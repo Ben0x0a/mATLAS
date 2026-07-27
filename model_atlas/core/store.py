@@ -279,7 +279,7 @@ class RunStore:
                 raise ValueError(
                     f"preset {row.key!r} version {row.version!r} already recorded with a "
                     f"different definition_digest ({existing_digest!r} != "
-                    f"{row.definition_digest!r}): an un-bumped preset edit (decision 40)")
+                    f"{row.definition_digest!r}): an un-bumped preset edit")
             return existing_id
         self._insert("preset", row)
         return row.preset_id

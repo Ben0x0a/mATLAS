@@ -403,7 +403,7 @@ def _load_expressions(connection: sqlite3.Connection) -> list[SpatialExpressionI
             if part in _INTERPRETABLE_PARTS:
                 raise ValueError(
                     f"spatial expression {expression_id} carries part {part!r} twice: "
-                    f"one canonical column cannot hold two candidate values (D30)")
+                    f"one canonical column cannot hold two candidate values")
             continue   # non-interpretable repeat: first occurrence wins, raws stay at L1
         part_values[part] = raw_value
     return list(expressions.values())
