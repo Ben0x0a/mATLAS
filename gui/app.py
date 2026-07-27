@@ -377,9 +377,28 @@ class MainController(QObject):
         self._sync_ufdr_mode()
 
     def _sync_ufdr_mode(self) -> None:
-        """Swap the centre header title between the transform and UFDR-parser modes."""
-        title = APP_TITLE_UFDR if self.dump_full_ufdr_check.isChecked() else APP_TITLE_DEFAULT
-        self.app_title_label.setText(title)
+        """Reflect the UFDR-dump toggle: swap the header title AND grey out the controls that
+        only apply to the transform pipeline. In dump mode only the source and output matter,
+        so disabling the preset/entity/export controls signals they are ignored."""
+        dump = self.dump_full_ufdr_check.isChecked()
+        self.app_title_label.setText(APP_TITLE_UFDR if dump else APP_TITLE_DEFAULT)
+        self._set_transform_controls_enabled(not dump)
+
+    def _set_transform_controls_enabled(self, enabled: bool) -> None:
+        """Enable/disable every control that only feeds the transform pipeline — everything
+        except the source, the output folder and Run (which both modes need)."""
+        for widget in (
+            self.presets_path_edit, self.preset_search_edit,
+            self.available_preset_list, self.selected_preset_list,
+            self.presets_folder_button, self.presets_file_button,
+            self.add_preset_button, self.remove_preset_button,
+            self.add_all_presets_button, self.remove_all_presets_button,
+            self.reload_presets_button, self.auto_preset_check,
+            self.case_name_edit, self.entity_edit, self.linked_entity_edit,
+            self.include_source_columns_check, self.traceability_combo,
+            self.additional_export_button,
+        ):
+            widget.setEnabled(enabled)
 
     def eventFilter(self, watched: QObject, event: object) -> bool:
         accessibility.handle_status_resize(self, watched, event)

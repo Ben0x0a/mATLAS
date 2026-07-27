@@ -114,8 +114,17 @@ def test_ufdr_toggle_available_and_switches_title(controller) -> None:
     try:
         check.setChecked(True)      # emits toggled -> _sync_ufdr_mode
         assert controller.app_title_label.text() == APP_TITLE_UFDR
+        # dump mode greys out the transform-only controls; source/output/run stay live.
+        assert not controller.linked_entity_edit.isEnabled()
+        assert not controller.available_preset_list.isEnabled()
+        assert not controller.additional_export_button.isEnabled()
+        assert controller.source_edit.isEnabled()
+        assert controller.output_edit.isEnabled()
+        assert controller.run_button.isEnabled()
         check.setChecked(False)
         assert controller.app_title_label.text() == APP_TITLE_DEFAULT
+        assert controller.linked_entity_edit.isEnabled()      # re-enabled off dump mode
+        assert controller.available_preset_list.isEnabled()
     finally:
         check.setChecked(False)     # module-scoped controller: leave it as found
 
