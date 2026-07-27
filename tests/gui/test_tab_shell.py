@@ -23,7 +23,7 @@ pytest.importorskip("PySide6", reason="GUI extra not installed")
 
 from PySide6.QtWidgets import QApplication, QLabel, QTabWidget, QWidget
 
-from gui.app import MainController
+from gui.app import APP_TITLE_DEFAULT, APP_TITLE_UFDR, MainController
 
 EXPECTED_TAB_TITLES = ["Transform", "Database Edit", "Spatiotemporal Analysis"]
 
@@ -101,3 +101,32 @@ def test_tab_shell_accessibility_registered(controller) -> None:
     ):
         assert page.accessibleName()
         assert page.accessibleDescription()
+
+
+# --- the UFDR dump toggle (now available) ------------------------------------
+
+def test_ufdr_toggle_available_and_switches_title(controller) -> None:
+    check = controller.dump_full_ufdr_check
+    # Available: enabled and not explicitly hidden (isHidden is independent of whether the
+    # top window has been shown, which it is not in these offscreen tests).
+    assert check.isEnabled()
+    assert not check.isHidden()
+    try:
+        check.setChecked(True)      # emits toggled -> _sync_ufdr_mode
+        assert controller.app_title_label.text() == APP_TITLE_UFDR
+        check.setChecked(False)
+        assert controller.app_title_label.text() == APP_TITLE_DEFAULT
+    finally:
+        check.setChecked(False)     # module-scoped controller: leave it as found
+
+
+def test_run_routes_to_ufdr_dump_when_checked(controller, monkeypatch) -> None:
+    # With the box checked, Run invokes the standalone UFDR dump, not the transform pipeline.
+    called: list[bool] = []
+    monkeypatch.setattr(controller, "_run_ufdr_dump", lambda: called.append(True))
+    controller.dump_full_ufdr_check.setChecked(True)
+    try:
+        controller._run_process()
+        assert called == [True]
+    finally:
+        controller.dump_full_ufdr_check.setChecked(False)

@@ -18,6 +18,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QFile, QObject, QStringListModel, QTimer, QUrl, Qt, Slot
 from PySide6.QtGui import QAction, QDesktopServices, QIcon
@@ -57,6 +58,9 @@ from model_atlas.export.registry import available_exporters, load_builtin_export
 from model_atlas.ingest.writer import is_matlas_run_db
 from model_atlas.app.pipeline import ProcessResult, process
 from model_atlas.presets.spec_loader import load_preset_specs
+
+if TYPE_CHECKING:
+    from ufdr_parser.dump import DumpSummary
 
 log = logging.getLogger("model_atlas.gui")
 
@@ -361,15 +365,15 @@ class MainController(QObject):
                 label.setMinimumWidth(125)
 
     def _configure_ufdr_toggle(self) -> None:
-        """Reflect the UFDR-parser checkbox state in the title; hidden pending testing.
+        """Show the UFDR-parser toggle and reflect its state in the header title.
 
-        The toggle logic and signal wiring stay in place — re-enabling the feature is just
-        flipping these two flags back to True (and the label visible).
+        When checked, Run invokes the standalone UFDR parser (dump every Cellebrite model to
+        CSV) instead of the transform pipeline — see ``_run_ufdr_dump``.
         """
-        self.dump_full_ufdr_check.setVisible(False)
-        self.dump_full_ufdr_check.setEnabled(False)
+        self.dump_full_ufdr_check.setVisible(True)
+        self.dump_full_ufdr_check.setEnabled(True)
         if (label := self.window.findChild(QLabel, "dumpFullUfdrLabel")) is not None:
-            label.setVisible(False)
+            label.setVisible(True)
         self._sync_ufdr_mode()
 
     def _sync_ufdr_mode(self) -> None:
@@ -633,6 +637,13 @@ class MainController(QObject):
         )
 
     def _run_process(self) -> None:
+        # Dump mode (the "Dump full UFDR" toggle) runs the standalone UFDR parser instead of
+        # the transform pipeline: no presets/entity/exports apply, so it branches out here
+        # before any of the transform-path validation below.
+        if self.dump_full_ufdr_check.isChecked():
+            self._run_ufdr_dump()
+            return
+
         source = self.source_edit.text().strip()
         output = self.output_edit.text().strip()
         preset_root = self._preset_root()
@@ -753,6 +764,56 @@ class MainController(QObject):
         self._set_status("Failed")
         log.error(f"Processing failed:\n{tb}")
         self._show_error(last)
+
+    # --- UFDR dump mode (the standalone parser, no transform / no case) --------
+
+    def _run_ufdr_dump(self) -> None:
+        """Dump every Cellebrite model in the source ``.ufdr`` to per-model CSVs under the
+        output folder. Independent of presets and the case model — it writes no run DB, so it
+        needs only a source file and an output folder (the transform fields are ignored)."""
+        source = self.source_edit.text().strip()
+        output = self.output_edit.text().strip()
+        if not source:
+            self._show_error("Choose a source .ufdr file.")
+            return
+        source_path = Path(source).expanduser()
+        if not source_path.is_file() or source_path.suffix.lower() != ".ufdr":
+            self._show_error("UFDR dump mode needs a .ufdr file as the source.")
+            return
+        if not output:
+            self._show_error("Choose an output folder.")
+            return
+        output_path = Path(output).expanduser()
+
+        self._set_running(True)
+        self._last_output_folder = None
+        self.open_output_folder_button.setEnabled(False)
+        self._apply_log_level()
+
+        def task() -> "DumpSummary":
+            # Lazy import: the UFDR parser and its streaming readers load only when a dump is
+            # actually run, keeping normal GUI start-up light (the codebase's ufdr convention).
+            from ufdr_parser.dump import run_dump
+            return run_dump(source_path, output_path)
+
+        self._runner.run(
+            task,
+            lambda summary: self._on_dump_done(summary, output_path),
+            self._on_process_failed,
+        )
+
+    def _on_dump_done(self, summary: "DumpSummary", out_dir: Path) -> None:
+        self._set_running(False)
+        self._last_output_folder = out_dir
+        self.open_output_folder_button.setEnabled(True)
+        status = (
+            f"Dumped {summary.record_count} record(s) from {summary.source_count} "
+            f"source(s) to {len(summary.files)} CSV file(s)"
+        )
+        self._set_status(status)
+        log.info(status)
+        for name, rows in summary.files.items():
+            log.info(f"  {name}: {rows} row(s)")
 
     # --- active case (the top-level context across the three tabs) ------------
 
