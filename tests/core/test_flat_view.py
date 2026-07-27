@@ -61,7 +61,7 @@ _EXPECTED_CANONICAL = (
     "time_lower_stated_offset", "time_upper_stated_offset",
     "time_lower_datetime_iso", "time_upper_datetime_iso",
     "time_lower_date", "time_upper_date", "time_lower_time", "time_upper_time",
-    "recovery_state", "data_source",
+    "recovery_state", "recovery_source", "data_source",
     "activity_id", "activity_kind", "counterpart", "facets", "context",
     "s2_cell_id",
 )

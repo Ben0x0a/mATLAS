@@ -177,6 +177,7 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("time_lower_time", "ti.lower_time"),
     ("time_upper_time", "ti.upper_time"),
     ("recovery_state", "r.recovery_state"),
+    ("recovery_source", "r.recovery_source"),   # the fine origin (live/wal/…/freespace)
     ("data_source", "s.data_source"),
     ("activity_id", "a.activity_id"),
     ("activity_kind", "act.kind"),                      # bonus, optional (decision 35)

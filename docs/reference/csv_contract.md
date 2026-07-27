@@ -83,7 +83,8 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | time_lower_stated_offset / _upper | temporal_component.stated_offset | what the source stated per bound |
 | time_lower_datetime_iso / _upper | timespan_integration.*_datetime_iso | one offset-tagged local ISO; ` N/A` when zone unknown, empty when no instant |
 | time_lower_date / _upper, time_lower_time / _upper | timespan_integration.*_date / *_time | local date + time-of-day |
-| recovery_state | raw_record.recovery_state | how the bytes were obtained — live/WAL/journal; distinct from `deleted` |
+| recovery_state | raw_record.recovery_state | the coarse state — live vs recovered; distinct from `deleted` |
+| recovery_source | raw_record.recovery_source | the fine origin — live/wal/journal/freelist/freespace; ordered by descending reliability, so it doubles as the confidence signal |
 | data_source | source.data_source | where the data originally lived |
 | activity_id | assertion.activity_id | **kept** — regroups the lines referencing the same activity (the legs of one record) |
 | activity_kind | activity.kind | call / message / trip / … — **bonus, optional** |

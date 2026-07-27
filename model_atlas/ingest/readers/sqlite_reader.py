@@ -55,7 +55,7 @@ from typing import Any
 import pandas as pd
 
 from model_atlas.core.determinism import blob_envelope, numbered_records, sqlite_enumeration_sql
-from model_atlas.core.vocabularies import RecordState
+from model_atlas.core.vocabularies import RecordState, RecoverySource
 from model_atlas.ingest.readers.base import RawRecord
 from model_atlas.ingest.readers.registry import register_reader
 from model_atlas.sqlite._sql import quote_identifier
@@ -84,6 +84,22 @@ def _sidecar_label(siblings: dict[str, Path]) -> str:
     if "journal" in siblings:
         return "journal"
     return "sidecar"
+
+
+# A private key carried on each record dict from the split loop through numbered_records
+# (which passes records through untouched) to the yield, where it is popped and becomes the
+# row's ``recovery_source``. Private (``_meta_``) so it can never collide with a real column.
+_RECOVERY_SOURCE_KEY = "_meta_recovery_source"
+
+
+def _sidecar_recovery_source(sidecar_label: str) -> RecoverySource:
+    """The ``RecoverySource`` for a sidecar-recovered row: WAL or JOURNAL by the label,
+    UNKNOWN for the unnamed-sidecar fallback (a recovered row of indeterminate origin)."""
+    if sidecar_label == RecoverySource.WAL.value:
+        return RecoverySource.WAL
+    if sidecar_label == RecoverySource.JOURNAL.value:
+        return RecoverySource.JOURNAL
+    return RecoverySource.UNKNOWN
 
 
 @contextlib.contextmanager
@@ -188,27 +204,35 @@ class SqliteReader:
         # continuing sequence", never re-derived here.
         live: list[dict[str, Any]] = []
         recovered: list[dict[str, Any]] = []
+        sidecar_source = _sidecar_recovery_source(sidecar_label)
         for record in merged.to_dict(orient="records"):
             origin = record.pop(SOURCE_COLNAME)
             record.pop(SOURCE_ROW_NUMBER_COLNAME)
             # merge_with_source labels every row 'both' / 'db_only_unique' (live) or
-            # sidecar_label (recovered) — never any other value.
-            (recovered if origin == sidecar_label else live).append(record)
+            # sidecar_label (recovered) — never any other value. Each row carries its fine
+            # recovery_source (wal/journal for a sidecar row, live otherwise) through to the
+            # yield below via the private key numbered_records passes through untouched.
+            if origin == sidecar_label:
+                record[_RECOVERY_SOURCE_KEY] = sidecar_source
+                recovered.append(record)
+            else:
+                record[_RECOVERY_SOURCE_KEY] = RecoverySource.LIVE
+                live.append(record)
 
         # T96: an ADDITIONAL recovery pass. Rows carved from the main file's unallocated
         # space (freelist + leaf free space) are appended AFTER the sidecar-recovered
         # rows, so numbered_records numbers all recovered rows — sidecar then carved — in
         # one continuing sequence behind the live rows. Only the table path carves (a
         # custom SQL join has no single schema); the carver reads `source`'s raw bytes,
-        # never the staging copy. The freelist/freespace provenance is popped here exactly
-        # as the sidecar origin is above (RawRecord carries no provenance slot — both
-        # collapse to RecordState.RECOVERED).
+        # never the staging copy. The carver's freelist/freespace tag becomes the row's
+        # recovery_source (its colname values ARE the enum values — a direct mapping).
         if table is not None and params.get("carve", True):
             for carved in carve_table(source, str(table), columns=columns):
-                carved.pop(CARVE_SOURCE_COLNAME)
+                carved[_RECOVERY_SOURCE_KEY] = RecoverySource(carved.pop(CARVE_SOURCE_COLNAME))
                 recovered.append(carved)
 
         for line_no, fields, is_recovered in numbered_records(live, recovered):
+            recovery_source = fields.pop(_RECOVERY_SOURCE_KEY)
             # rule 7: a binary cell becomes the {"$blob": {...}} envelope, applied only now
             # (after the fingerprint-based merge, which needs bytes' native hashability).
             fields = {
@@ -219,6 +243,7 @@ class SqliteReader:
                 line_no=line_no,
                 fields=fields,
                 recovery_state=RecordState.RECOVERED if is_recovered else RecordState.LIVE,
+                recovery_source=recovery_source,
             )
 
     def peek_fields(self, source: Path, subunit: str | None = None) -> set[str] | None:

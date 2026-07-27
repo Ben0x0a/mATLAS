@@ -88,6 +88,7 @@
   <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype></row>
   <row name="id_source" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Source metadata" row="id" /></row>
   <row name="raw_json" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>the complete source row, verbatim - incl. every context party</comment></row>
+  <row name="recovery_source" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>fine origin: live/wal/journal/freelist/freespace - ordered by descending reliability, so it doubles as the confidence signal; digest-excluded, reaches a claim via the join</comment></row>
   <key type="PRIMARY" name=""><part>id</part></key>
 </table>
 

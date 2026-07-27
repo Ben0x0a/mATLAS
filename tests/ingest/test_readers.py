@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from model_atlas.core.vocabularies import RecordState
+from model_atlas.core.vocabularies import RecordState, RecoverySource
 from model_atlas.ingest.readers.csv_reader import CsvReader
 from model_atlas.ingest.readers.excel_reader import ExcelReader
 from model_atlas.ingest.readers.sqlite_reader import SqliteReader
@@ -197,6 +197,8 @@ def test_sqlite_recovered_rows_come_after_live_continuing_line_no(tmp_path: Path
         (2, RecordState.RECOVERED),
     ]
     assert [r.line_no for r in recs] == [1, 2]
+    # The fine origin: the live row is LIVE, the WAL-only row names its sidecar (WAL).
+    assert [r.recovery_source for r in recs] == [RecoverySource.LIVE, RecoverySource.WAL]
 
 
 def test_sqlite_peek_fields_rejects_quoted_table_name(tmp_path: Path) -> None:

@@ -227,7 +227,7 @@ CREATE TABLE run_preset (run_preset_id TEXT PRIMARY KEY,
     UNIQUE (run_id, preset_id));
 CREATE TABLE raw_record (raw_record_id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL REFERENCES source(source_id), line_no INTEGER NOT NULL,
-    native_record_uid TEXT, recovery_state TEXT,
+    native_record_uid TEXT, recovery_state TEXT, recovery_source TEXT,
     raw_json TEXT NOT NULL, UNIQUE (source_id, line_no));
 
 -- Layer 1 ------------------------------------------------------------------
@@ -394,11 +394,12 @@ class Builder:
              "2026-03-15T08:00:05Z", skipped))
         return aid
 
-    def record(self, sid, line, raw: dict, recovery="live"):
+    def record(self, sid, line, raw: dict, recovery="live", recovery_source="live"):
         rrid = u5("record", sid, line)
-        # raw_json is the COMPLETE row (verbatim values).
-        self.cx.execute("INSERT INTO raw_record VALUES (?,?,?,?,?,?)",
-            (rrid, sid, line, None, recovery, canonical_json(raw)))
+        # raw_json is the COMPLETE row (verbatim values). recovery_source is the fine origin
+        # (live/wal/journal/freelist/freespace) behind the coarse recovery_state.
+        self.cx.execute("INSERT INTO raw_record VALUES (?,?,?,?,?,?,?)",
+            (rrid, sid, line, None, recovery, recovery_source, canonical_json(raw)))
         return rrid
 
     # ---- Layer 1 ---------------------------------------------------------

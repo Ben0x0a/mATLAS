@@ -8,8 +8,8 @@ Used by:    every concrete reader (csv_reader.py, excel_reader.py, sqlite_reader
             discover/assemble bricks consume ``RawRecord`` to build the persisted
             ``core.vocabularies.RawRecord`` table row (which adds ``raw_record_id``,
             ``source_id`` and serialises ``fields`` into canonical-JSON ``raw_json``).
-Depends on: ``model_atlas.core.vocabularies`` (``RecordState`` — live vs recovered) and
-            the standard library only.
+Depends on: ``model_atlas.core.vocabularies`` (``RecordState`` — live vs recovered;
+            ``RecoverySource`` — the fine origin) and the standard library only.
 
 WHY ``RawRecord`` is distinct from ``core.vocabularies.RawRecord``: the persisted table
 row needs a ``source_id`` (T21's discover brick assigns it) and a ``raw_record_id`` derived
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from model_atlas.core.vocabularies import RecordState
+from model_atlas.core.vocabularies import RecordState, RecoverySource
 
 
 @dataclass(frozen=True)
@@ -34,12 +34,15 @@ class RawRecord:
     ``fields`` is a plain ``{column_name: value}`` mapping kept as source text/native
     SQLite types wherever float precision matters (canonical JSON rule 5) — never
     re-formatted. ``recovery_state`` defaults to LIVE; a sqlite reader overrides it to
-    RECOVERED for WAL/journal-only rows (rule 1).
+    RECOVERED for WAL/journal/carved rows (rule 1). ``recovery_source`` is the fine
+    companion — the exact origin (live/wal/journal/freelist/freespace); non-sqlite readers
+    keep the LIVE default (their rows are always live).
     """
 
     line_no: int
     fields: dict[str, Any]
     recovery_state: RecordState = RecordState.LIVE
+    recovery_source: RecoverySource = RecoverySource.LIVE
 
 
 @runtime_checkable

@@ -366,6 +366,30 @@ class RecordState(str, Enum):
     UNKNOWN = "unknown"
 
 
+class RecoverySource(str, Enum):
+    """Where a source record was physically recovered FROM (``raw_record.recovery_source``).
+
+    The finer companion to ``recovery_state`` (which only says live vs recovered): this
+    names the exact origin, and the members are ordered by DESCENDING evidential
+    reliability, so ``recovery_source`` doubles as the confidence signal (no separate
+    column) — a ``freespace`` row (heuristically byte-carved, a possible false positive)
+    is weaker evidence than a ``freelist`` row (an intact but unlinked cell), which is
+    weaker than a ``wal``/``journal`` row (a row SQLite itself wrote), which is weaker
+    than a ``live`` row still in the b-tree. Provenance only — it is deliberately EXCLUDED
+    from the L1 digest (like paths / data_source), so it never moves an identity: a claim
+    carved from freespace is the SAME claim as a live one, only less certain to have been
+    truly recorded. It reaches each assertion through the raw_record→assertion join, never
+    a copied column.
+    """
+
+    LIVE = "live"
+    WAL = "wal"
+    JOURNAL = "journal"
+    FREELIST = "freelist"
+    FREESPACE = "freespace"
+    UNKNOWN = "unknown"
+
+
 class RecordType(str, Enum):
     """Legacy derived rank label (main vs additional).
 
@@ -581,6 +605,9 @@ class RawRecord:
     raw_json: str         # the complete source row, canonical JSON
     native_record_uid: str | None = None   # the artefact's own key
     recovery_state: RecordState | None = None
+    # WHERE the row was recovered from (live/wal/journal/freelist/freespace) — the fine
+    # provenance behind the coarse recovery_state, and the confidence signal by its ordering.
+    recovery_source: RecoverySource | None = None
 
 
 @dataclass(frozen=True)

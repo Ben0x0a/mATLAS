@@ -41,7 +41,7 @@ v1** — designed in entity_model.md, absent from the run schema.
 | run_preset | run_preset_id, run_id FK, preset_id FK | **The run↔preset link**: every preset SELECTED for the run (reusing the preset table), recorded even when a preset yields no assertion. UNIQUE(run_id, preset_id) |
 | source | source_id, run_id FK, input_file_path, inner_path, data_source, format, subunit, fingerprint_sha256, sibling_fingerprints_json, exhibit_ref, source_tier, record_count | UNIQUE(run_id, input_file_path, inner_path, subunit); INDEX fingerprint_sha256 — the id derives from **paths, never the fingerprint**. **Preset-free**: a source is *what was opened* (folder→file, zip→inner file); one file matching several presets is ONE source row and ONE set of raw_records — the reading lives on the assertion. `inner_path` = chain-inclusive container path; `data_source` = where the data originally lived (UFDR/tool manifest device path), NULL for primary acquisitions. Fingerprint = main file bytes; siblings in sibling_fingerprints_json; exhibit_ref |
 | preset | preset_id, key, name, version, definition_digest | the companion table: one row per preset applied in this run — uuid5(key ⟂ version), a config row whose definition IS its identity (same argument as the old method registry). UNIQUE(key, version). **definition_digest**: sha256 of the canonical preset definition — catches edits the author forgot to version-bump (same key+version, different digest across runs = a surfaced finding; skip eligibility compares digests, never just versions) |
-| raw_record | raw_record_id, source_id FK, line_no, native_record_uid, input_record_id, recovery_state, raw_json | UNIQUE(source_id, line_no); raw_json is the COMPLETE source row |
+| raw_record | raw_record_id, source_id FK, line_no, native_record_uid, recovery_state, recovery_source, raw_json | UNIQUE(source_id, line_no); raw_json is the COMPLETE source row. `recovery_source` is the fine origin (live/wal/journal/freelist/freespace) behind the coarse `recovery_state`, ordered by descending reliability so it doubles as the confidence signal; digest-excluded provenance, surfaced per claim via the raw_record→assertion join |
 
 #### The source hierarchy (reinstated; grain fixed by the owner)
 
@@ -199,9 +199,9 @@ The ids and digests embed `line_no` and `output_ordinal`; diffability is a promi
 only if enumeration is pinned. Normative rules, each with a test:
 
 1. **SQLite**: records enumerate in `rowid` order (`WITHOUT ROWID` tables: primary-key
-   order). Recovered records (WAL / journal / freelist / carved) enumerate **after**
+   order). Recovered records (WAL / journal / freelist / freespace) enumerate **after**
    all live rows, in recovery-scan order, continuing the same `line_no` sequence;
-   their `recovery_state` marks them.
+   `recovery_state` marks them recovered and `recovery_source` names the exact origin.
 2. **CSV**: physical line order; `line_no` = 1-based data-line number (header
    excluded), blank lines counted.
 3. **Excel**: sheet row order; `line_no` = the sheet row number, so blank rows shift

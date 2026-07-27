@@ -380,6 +380,7 @@ def _ingest_subunit(
                 # the source's own order (feeds no digest — safe to differ from canonical).
                 raw_json=source_order_json(record.fields),
                 recovery_state=record.recovery_state,
+                recovery_source=record.recovery_source,
             )
         )
     report.records += len(records)

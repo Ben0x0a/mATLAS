@@ -82,6 +82,7 @@ CREATE TABLE raw_record (
     raw_json TEXT NOT NULL,
     native_record_uid TEXT,
     recovery_state TEXT CHECK (recovery_state IN ('live', 'intact', 'deleted', 'recovered', 'unknown') OR recovery_state IS NULL),
+    recovery_source TEXT CHECK (recovery_source IN ('live', 'wal', 'journal', 'freelist', 'freespace', 'unknown') OR recovery_source IS NULL),
     UNIQUE (source_id, line_no)
 );
 

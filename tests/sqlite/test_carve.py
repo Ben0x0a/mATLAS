@@ -17,7 +17,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from model_atlas.core.vocabularies import RecordState
+from model_atlas.core.vocabularies import RecordState, RecoverySource
 from model_atlas.ingest.readers.sqlite_reader import SqliteReader
 from model_atlas.sqlite.carve import (
     CARVE_SOURCE_COLNAME,
@@ -149,6 +149,13 @@ def test_reader_surfaces_carved_rows_recovered_after_live(tmp_path: Path) -> Non
     assert [r.line_no for r in records] == list(range(1, len(records) + 1))
     # At least one carved row carries the deleted-row sentinel.
     assert any(r.fields.get("hacc") == 77.7 for r in recovered)
+    # Provenance: live rows are LIVE; every carved row names its origin (freelist/freespace),
+    # the fine recovery_source behind the coarse RECOVERED state.
+    assert all(r.recovery_source == RecoverySource.LIVE for r in live)
+    assert all(
+        r.recovery_source in (RecoverySource.FREELIST, RecoverySource.FREESPACE)
+        for r in recovered
+    )
 
 
 def test_reader_reread_is_identical_with_carving(tmp_path: Path) -> None:

@@ -176,7 +176,8 @@ def _table_specs() -> "list[dict[str, Any]]":
         {"name": "raw_record", "dataclass": V.RawRecord, "pk": "raw_record_id",
          "not_null": ["source_id", "line_no", "raw_json"],
          "fks": {"source_id": ("source", "source_id")},
-         "enum_checks": {"recovery_state": V.RecordState},
+         "enum_checks": {"recovery_state": V.RecordState,
+                         "recovery_source": V.RecoverySource},
          "unique": [("source_id", "line_no")]},
         # -- Layer 1: assertion ----------------------------------------------
         {"name": "activity", "dataclass": V.Activity, "pk": "activity_id",
