@@ -34,6 +34,7 @@ from model_atlas.core.vocabularies import (
     TemporalKind,
     TemporalReferential,
     TemporalRole,
+    column_cast,
     is_standard_part,
 )
 
@@ -173,3 +174,27 @@ def test_is_standard_part_accepts_documented_names_rejects_arbitrary() -> None:
         assert is_standard_part(part)
     assert not is_standard_part("not_a_real_part")
     assert not is_standard_part("")
+
+
+# --- column_cast: the implicit cast keys on assignable field names ---------
+
+def test_column_cast_int_fires_for_assignable_integer_fields() -> None:
+    # The implicit int-cast must fire for the integer fields a preset can actually MAP
+    # (assignable names), mirroring how the float cast works — otherwise it is dead and a
+    # preset would have to restate `cast: int`.
+    for field in ("multiplicity", "time_accuracy_us_lower", "time_accuracy_us_upper"):
+        assert column_cast(field) is int
+    # A float-shaped source value (e.g. pandas materialising "2.0") coerces to the integer 2.
+    cast = column_cast("multiplicity")
+    assert cast is not None and cast(2.0) == 2
+
+
+def test_column_cast_float_and_free_text_unchanged() -> None:
+    # Float metrics still cast to float; a free-text field carries no implicit cast.
+    assert column_cast("latitude_wgs84") is float
+    assert column_cast("horizontal_accuracy_m") is float
+    assert column_cast("source_label") is None
+    # The downstream write-column names are NOT the assignable keys, so they do not match
+    # (the previous dead-branch bug keyed on these and never fired).
+    assert column_cast("lower_accuracy_us") is None
+    assert column_cast("record_rank") is None

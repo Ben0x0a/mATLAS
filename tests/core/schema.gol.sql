@@ -6,7 +6,7 @@ CREATE TABLE matlas_meta (
 );
 
 CREATE TABLE case_metadata (
-    case_id TEXT PRIMARY KEY,
+    case_id TEXT PRIMARY KEY NOT NULL,
     case_number TEXT NOT NULL,
     title TEXT,
     description TEXT,
@@ -14,7 +14,7 @@ CREATE TABLE case_metadata (
 );
 
 CREATE TABLE run (
-    run_id TEXT PRIMARY KEY,
+    run_id TEXT PRIMARY KEY NOT NULL,
     case_id TEXT NOT NULL REFERENCES case_metadata(case_id),
     input_path TEXT,
     started_at TEXT,
@@ -25,7 +25,7 @@ CREATE TABLE run (
 );
 
 CREATE TABLE archive (
-    archive_id TEXT PRIMARY KEY,
+    archive_id TEXT PRIMARY KEY NOT NULL,
     path TEXT NOT NULL UNIQUE,
     cd_sha256 TEXT NOT NULL
 );
@@ -33,7 +33,7 @@ CREATE TABLE archive (
 CREATE INDEX ix_archive_cd ON archive(cd_sha256);
 
 CREATE TABLE run_archive (
-    run_archive_id TEXT PRIMARY KEY,
+    run_archive_id TEXT PRIMARY KEY NOT NULL,
     run_id TEXT NOT NULL REFERENCES run(run_id),
     archive_id TEXT NOT NULL REFERENCES archive(archive_id),
     parsed_at TEXT,
@@ -42,7 +42,7 @@ CREATE TABLE run_archive (
 );
 
 CREATE TABLE source (
-    source_id TEXT PRIMARY KEY,
+    source_id TEXT PRIMARY KEY NOT NULL,
     run_id TEXT NOT NULL REFERENCES run(run_id),
     input_file_path TEXT NOT NULL,
     inner_path TEXT,
@@ -60,7 +60,7 @@ CREATE TABLE source (
 CREATE INDEX ix_source_fp ON source(fingerprint_sha256);
 
 CREATE TABLE preset (
-    preset_id TEXT PRIMARY KEY,
+    preset_id TEXT PRIMARY KEY NOT NULL,
     key TEXT NOT NULL,
     name TEXT,
     version TEXT,
@@ -69,14 +69,14 @@ CREATE TABLE preset (
 );
 
 CREATE TABLE run_preset (
-    run_preset_id TEXT PRIMARY KEY,
+    run_preset_id TEXT PRIMARY KEY NOT NULL,
     run_id TEXT NOT NULL REFERENCES run(run_id),
     preset_id TEXT NOT NULL REFERENCES preset(preset_id),
     UNIQUE (run_id, preset_id)
 );
 
 CREATE TABLE raw_record (
-    raw_record_id TEXT PRIMARY KEY,
+    raw_record_id TEXT PRIMARY KEY NOT NULL,
     source_id TEXT NOT NULL REFERENCES source(source_id),
     line_no INTEGER NOT NULL,
     raw_json TEXT NOT NULL,
@@ -87,20 +87,20 @@ CREATE TABLE raw_record (
 );
 
 CREATE TABLE activity (
-    activity_id TEXT PRIMARY KEY,
+    activity_id TEXT PRIMARY KEY NOT NULL,
     kind TEXT CHECK (kind IN ('call', 'message', 'trip', 'transaction', 'stay', 'observation', 'unknown') OR kind IS NULL),
     context_json TEXT
 );
 
 CREATE TABLE activity_record (
-    activity_record_id TEXT PRIMARY KEY,
+    activity_record_id TEXT PRIMARY KEY NOT NULL,
     activity_id TEXT NOT NULL REFERENCES activity(activity_id),
     raw_record_id TEXT NOT NULL REFERENCES raw_record(raw_record_id),
     UNIQUE (activity_id, raw_record_id)
 );
 
 CREATE TABLE entity (
-    entity_id TEXT PRIMARY KEY,
+    entity_id TEXT PRIMARY KEY NOT NULL,
     identifier TEXT,
     raw_identifier TEXT,
     identifier_type TEXT NOT NULL,
@@ -115,13 +115,13 @@ CREATE INDEX ix_entity_norm ON entity(identifier_type, identifier);
 CREATE INDEX ix_entity_concerns ON entity(concerns_uid);
 
 CREATE TABLE spatial_expression (
-    spatial_expression_id TEXT PRIMARY KEY,
+    spatial_expression_id TEXT PRIMARY KEY NOT NULL,
     referential TEXT NOT NULL CHECK (referential IN ('epsg:4326', 'geohash', 'mgrs', 'address', 'place_name', 'cell_ref', 'asset_ref', 'region', 'unknown') OR referential IS NULL),
     spatial_source TEXT
 );
 
 CREATE TABLE spatial_component (
-    spatial_component_id TEXT PRIMARY KEY,
+    spatial_component_id TEXT PRIMARY KEY NOT NULL,
     spatial_expression_id TEXT NOT NULL REFERENCES spatial_expression(spatial_expression_id),
     ordinal INTEGER NOT NULL,
     part TEXT NOT NULL,
@@ -132,14 +132,14 @@ CREATE TABLE spatial_component (
 );
 
 CREATE TABLE temporal_expression (
-    temporal_expression_id TEXT PRIMARY KEY,
+    temporal_expression_id TEXT PRIMARY KEY NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('instant', 'interval', 'open_lower', 'open_upper') OR kind IS NULL),
     referential TEXT CHECK (referential IN ('unix_epoch_s', 'unix_epoch_ms', 'unix_epoch_us', 'apple_cfabsolute', 'webkit', 'filetime', 'excel_serial', 'iso8601', 'local_string', 'unknown') OR referential IS NULL),
     temporal_source TEXT
 );
 
 CREATE TABLE temporal_component (
-    temporal_component_id TEXT PRIMARY KEY,
+    temporal_component_id TEXT PRIMARY KEY NOT NULL,
     temporal_expression_id TEXT NOT NULL REFERENCES temporal_expression(temporal_expression_id),
     ordinal INTEGER NOT NULL,
     part TEXT NOT NULL,
@@ -151,7 +151,7 @@ CREATE TABLE temporal_component (
 );
 
 CREATE TABLE assertion (
-    assertion_id TEXT PRIMARY KEY,
+    assertion_id TEXT PRIMARY KEY NOT NULL,
     raw_record_id TEXT NOT NULL REFERENCES raw_record(raw_record_id),
     preset_id TEXT NOT NULL REFERENCES preset(preset_id),
     output_ordinal INTEGER NOT NULL,
@@ -180,7 +180,7 @@ CREATE INDEX ix_assertion_cd ON assertion(claim_digest);
 CREATE INDEX ix_assertion_act ON assertion(activity_id);
 
 CREATE TABLE spatial_integration (
-    spatial_integration_id TEXT PRIMARY KEY,
+    spatial_integration_id TEXT PRIMARY KEY NOT NULL,
     spatial_expression_id TEXT NOT NULL UNIQUE REFERENCES spatial_expression(spatial_expression_id),
     method TEXT NOT NULL,
     latitude_wgs84 REAL,
@@ -199,7 +199,7 @@ CREATE TABLE spatial_integration (
 );
 
 CREATE TABLE spatial_index (
-    spatial_index_id TEXT PRIMARY KEY,
+    spatial_index_id TEXT PRIMARY KEY NOT NULL,
     spatial_integration_id TEXT NOT NULL UNIQUE REFERENCES spatial_integration(spatial_integration_id),
     s2_cell_id INTEGER,
     s2_level INTEGER
@@ -208,7 +208,7 @@ CREATE TABLE spatial_index (
 CREATE INDEX ix_spatial_index_cell ON spatial_index(s2_cell_id);
 
 CREATE TABLE timespan_integration (
-    timespan_integration_id TEXT PRIMARY KEY,
+    timespan_integration_id TEXT PRIMARY KEY NOT NULL,
     temporal_expression_id TEXT NOT NULL UNIQUE REFERENCES temporal_expression(temporal_expression_id),
     method TEXT NOT NULL,
     lower_unix_utc_us INTEGER,
@@ -226,7 +226,7 @@ CREATE TABLE timespan_integration (
 );
 
 CREATE TABLE analysis (
-    analysis_id TEXT PRIMARY KEY,
+    analysis_id TEXT PRIMARY KEY NOT NULL,
     assertion_id TEXT NOT NULL REFERENCES assertion(assertion_id),
     method TEXT NOT NULL,
     record_type TEXT,
@@ -235,7 +235,7 @@ CREATE TABLE analysis (
 );
 
 CREATE TABLE edit_log (
-    edit_id TEXT PRIMARY KEY,
+    edit_id TEXT PRIMARY KEY NOT NULL,
     ordinal INTEGER NOT NULL UNIQUE,
     table_name TEXT,
     row_id TEXT,

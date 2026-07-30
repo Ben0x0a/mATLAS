@@ -234,3 +234,31 @@ def test_valid_enum_value_accepted() -> None:
         (str(uuid.uuid4()), 7, "empty_row"))
     assert connection.execute(
         "SELECT edit_kind FROM edit_log WHERE ordinal = 7").fetchone()[0] == "empty_row"
+
+
+# --- derived enum-CHECK coverage + NOT-NULL primary keys (SS2 / SS4) --------
+
+def test_every_enum_typed_column_has_a_derived_check() -> None:
+    """SS2: coverage is DERIVED, not a hand-kept map — so every Enum-typed dataclass field
+    carries a membership CHECK in the DDL and a future Enum column cannot silently ship
+    unconstrained. Drives the same column->Enum registry (_enum_of) the builder uses."""
+    ddl = "\n".join(schema.schema_statements())
+    checked = 0
+    for spec in schema._table_specs():
+        hints = schema._hints(spec["dataclass"])
+        for name, annotation in hints.items():
+            if schema._enum_of(annotation) is not None:
+                assert f"CHECK ({name} IN (" in ddl, (
+                    f"{spec['name']}.{name} is Enum-typed but has no derived CHECK")
+                checked += 1
+    assert checked > 0, "expected at least one Enum-typed column to be covered"
+
+
+def test_null_text_primary_key_is_rejected() -> None:
+    """SS4: a TEXT (non-INTEGER) PRIMARY KEY permits NULL in SQLite unless marked NOT NULL;
+    the derived DDL now marks every TEXT pk NOT NULL, so a None/NULL id fails at write time."""
+    connection = _memory_conn()
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO case_metadata (case_id, case_number) VALUES (?, ?)",
+            (None, "C-NULL"))

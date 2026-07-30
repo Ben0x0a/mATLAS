@@ -47,6 +47,34 @@ def test_sqlite_without_rowid_enumeration_is_primary_key_order() -> None:
         cx.close()
 
 
+def test_without_rowid_with_noncanonical_spacing_enumerates_in_pk_order() -> None:
+    # A WITHOUT ROWID table whose clause carries non-canonical spacing ("WITHOUT  ROWID")
+    # must still be detected (a schema-substring test would false-negative and try to
+    # ORDER BY rowid on a rowid-less table, which raises).
+    cx = sqlite3.connect(":memory:")
+    try:
+        cx.execute("CREATE TABLE w (k TEXT, v TEXT, PRIMARY KEY (k)) WITHOUT  ROWID")
+        cx.executemany("INSERT INTO w VALUES (?, ?)", [("b", "2"), ("a", "1")])
+        rows = [r[0] for r in cx.execute(determinism.sqlite_enumeration_sql(cx, "w"))]
+        assert rows == ["a", "b"]   # PK order — no error despite the double space
+    finally:
+        cx.close()
+
+
+def test_normal_table_with_without_rowid_in_a_comment_enumerates_in_rowid_order() -> None:
+    # The phrase "WITHOUT ROWID" inside a comment must NOT be mistaken for the real clause;
+    # this is an ordinary rowid table and must enumerate in insertion (rowid) order.
+    cx = sqlite3.connect(":memory:")
+    try:
+        cx.execute("CREATE TABLE t (k TEXT PRIMARY KEY, v TEXT /* not WITHOUT ROWID */)")
+        cx.executemany("INSERT INTO t VALUES (?, ?)",
+                       [("charlie", "3"), ("alpha", "1"), ("bravo", "2")])
+        rows = [r[0] for r in cx.execute(determinism.sqlite_enumeration_sql(cx, "t"))]
+        assert rows == ["charlie", "alpha", "bravo"]   # rowid order, NOT re-sorted by PK
+    finally:
+        cx.close()
+
+
 def test_sqlite_enumeration_of_an_unknown_table_raises() -> None:
     cx = sqlite3.connect(":memory:")
     try:
@@ -109,6 +137,34 @@ def test_container_inner_path_is_chain_inclusive() -> None:
             == "exhibit.zip!inner/cache.sqlite")
     with pytest.raises(ValueError):
         determinism.container_inner_path(("exhibit.zip", ""))   # collapsible chain
+
+
+def test_container_join_is_injective_a_bang_in_a_segment_cannot_be_forged() -> None:
+    # The forgeable "!" join: archive "a.zip!b" -> member "c" and archive "a.zip" ->
+    # member "b!c" must NOT flatten to one inner_path (and one source_id). Escaping the
+    # within-segment "!" keeps the join reversible, so the two chains stay distinct.
+    left_inner = determinism.container_inner_path(("a.zip!b", "c"))
+    right_inner = determinism.container_inner_path(("a.zip", "b!c"))
+    assert left_inner != right_inner
+    assert (ids.source_id("/case/x", left_inner, None)
+            != ids.source_id("/case/x", right_inner, None))
+
+
+def test_posix_backslash_is_kept_literal_and_does_not_collide_with_slash() -> None:
+    # On POSIX a literal "\" is a legal filename byte: /dir/a\b and /dir/a/b are two
+    # different files and must derive two source_ids (an unconditional \->/ fold collapses
+    # them into one — the ID4 collision).
+    kept = determinism.canonical_path("/dir/a\\b")
+    assert "\\" in kept and kept != "/dir/a/b"
+    assert (ids.source_id(determinism.canonical_path("/dir/a\\b"), None, None)
+            != ids.source_id(determinism.canonical_path("/dir/a/b"), None, None))
+
+
+def test_non_ascii_letter_is_not_accepted_as_a_drive_root() -> None:
+    # A real drive letter is ASCII a-z/A-Z; a non-ASCII "letter" (Greek capital omega)
+    # must not pass as an absolute drive-rooted path.
+    with pytest.raises(ValueError):
+        determinism.canonical_path("Ω:/x")   # "Ω:/x" — not a genuine drive root
 
 
 # --- rule 5: canonical JSON -----------------------------------------------------

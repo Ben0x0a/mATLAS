@@ -101,19 +101,26 @@ def _authenticate_run_db(conn: sqlite3.Connection, path: Path) -> None:
     so a foreign SQLite file (or a wrong-generation DB) must fail loudly here rather than be
     read or written as if it were ours.
     """
-    application_id = conn.execute("PRAGMA application_id;").fetchone()[0]
-    user_version = conn.execute("PRAGMA user_version;").fetchone()[0]
-    if application_id != APPLICATION_ID or user_version != USER_VERSION:
+    # Close-on-reject guarantee: ANY failure here — a ValueError reject OR the
+    # sqlite3.DatabaseError the very first PRAGMA raises on a garbage/truncated file (which
+    # is not a valid SQLite database at all) — must close the connection before propagating,
+    # or open_persisted() leaks the fd/handle on the malformed-file path (contradicting the
+    # docstring). Wrapping the whole probe means every exit path frees the connection.
+    try:
+        application_id = conn.execute("PRAGMA application_id;").fetchone()[0]
+        user_version = conn.execute("PRAGMA user_version;").fetchone()[0]
+        if application_id != APPLICATION_ID or user_version != USER_VERSION:
+            raise ValueError(
+                f"{path} is not a mATLAS run database (application_id={application_id:#x}, "
+                f"user_version={user_version}; expected {APPLICATION_ID:#x} / {USER_VERSION})")
+        has_meta = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'matlas_meta';"
+        ).fetchone()[0]
+        if has_meta != 1 or conn.execute("SELECT COUNT(*) FROM matlas_meta;").fetchone()[0] < 1:
+            raise ValueError(f"{path} carries the mATLAS stamps but no matlas_meta row")
+    except Exception:
         conn.close()
-        raise ValueError(
-            f"{path} is not a mATLAS run database (application_id={application_id:#x}, "
-            f"user_version={user_version}; expected {APPLICATION_ID:#x} / {USER_VERSION})")
-    has_meta = conn.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'matlas_meta';"
-    ).fetchone()[0]
-    if has_meta != 1 or conn.execute("SELECT COUNT(*) FROM matlas_meta;").fetchone()[0] < 1:
-        conn.close()
-        raise ValueError(f"{path} carries the mATLAS stamps but no matlas_meta row")
+        raise
 
 
 def _bind(value: Any) -> Any:
@@ -185,6 +192,9 @@ class RunStore:
         # This store OWNS a scratch temp file, so close() deletes it. The persisted-DB opener
         # below clears this flag: an existing run DB is evidence, never deleted on close.
         self._owns_temp = True
+        # Tracks whether close() has already run, so a second close()/context-exit is a no-op
+        # (close() now commits, and commit() on an already-closed connection would raise).
+        self._closed = False
         # Reproducible scratch: no rollback journal, no fsync — crash-safety is not a
         # fidelity property here, and the run DB is a deterministic function of the inputs.
         self._conn.execute("PRAGMA journal_mode = OFF;")
@@ -218,6 +228,7 @@ class RunStore:
         store._path = target
         store._conn = conn
         store._owns_temp = False             # an existing run DB is never deleted on close
+        store._closed = False
         return store
 
     # --- the single private mechanism -------------------------------------
@@ -368,10 +379,22 @@ class RunStore:
         return target
 
     def close(self) -> None:
-        """Close the connection; delete the file only if this store owns a scratch temp DB.
+        """Flush pending writes, close the connection; delete the file only for a scratch temp DB.
 
+        HOW: ``commit()`` before ``close()`` so any writes made directly through an
+        ``open_persisted(read_only=False)`` handle are durable (on a read-only handle it is a
+        harmless no-op). WHY: the connection is not autocommit, so ``close()`` without a commit
+        would silently ROLL BACK uncommitted direct writes — a forensic store must never drop a
+        write on the floor. ``persist()`` commits independently, so this does not affect the
+        VACUUM INTO path (and reintroduces no backup()/autocommit constraint).
         A store opened over an EXISTING persisted run DB (``open_persisted``) keeps the file —
         it is evidence. Idempotent."""
+        # Idempotent guard: a second close() (e.g. explicit close() then context-exit) must not
+        # commit()/close() again — commit() on an already-closed connection raises.
+        if self._closed:
+            return
+        self._closed = True
+        self._conn.commit()
         self._conn.close()
         if self._owns_temp:
             # missing_ok: close may run after a failed __init__ or a second call; a scratch run

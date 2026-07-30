@@ -364,6 +364,62 @@ def test_open_persisted_rejects_foreign_and_missing(tmp_path) -> None:
         RunStore.open_persisted(foreign)
 
 
+def test_open_persisted_on_a_garbage_file_leaks_no_connection(tmp_path, monkeypatch) -> None:
+    """SS3: a truncated/garbage file is not a valid SQLite DB, so the first PRAGMA raises
+    sqlite3.DatabaseError — before the fix that leaked the connection (the reject branches
+    closed, this path did not). The close-on-reject guarantee must hold here too."""
+    garbage = tmp_path / "garbage.sqlite"
+    garbage.write_bytes(b"this is definitely not a sqlite database header" * 8)
+
+    # Track every connection open_persisted creates, so we can prove it was closed on reject.
+    opened: list[sqlite3.Connection] = []
+    real_connect = store_mod.sqlite3.connect
+
+    def _tracking_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(store_mod.sqlite3, "connect", _tracking_connect)
+    with pytest.raises(sqlite3.DatabaseError):
+        RunStore.open_persisted(garbage)
+    assert opened, "expected open_persisted to have opened a connection"
+    for conn in opened:
+        # Operating on a closed connection raises ProgrammingError — so this asserts the
+        # connection was closed (no leak) rather than left dangling.
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
+
+
+def test_direct_write_then_close_is_durable(tmp_path) -> None:
+    """SS1: a write made directly through a read-write handle then close() must PERSIST.
+
+    close() commits before closing, so an uncommitted direct write is flushed, not silently
+    rolled back — the round-trip reopen sees the row."""
+    out = _persist_scenario(tmp_path)
+    store = RunStore.open_persisted(out)
+    store.write_edit_log(V.EditLog(edit_id="e-direct", ordinal=999,
+                                   edit_kind=V.EditKind.UPDATE))
+    store.close()   # must flush the pending write rather than discard it
+
+    reopened = RunStore.open_persisted(out, read_only=True)
+    try:
+        assert reopened.connection.execute(
+            "SELECT COUNT(*) FROM edit_log WHERE edit_id = 'e-direct'").fetchone()[0] == 1
+    finally:
+        reopened.close()
+
+
+def test_close_is_idempotent(tmp_path) -> None:
+    """close() may run twice (explicit close then context-exit); the second is a no-op and
+    must not raise (commit() on an already-closed connection would)."""
+    out = _persist_scenario(tmp_path)
+    store = RunStore.open_persisted(out)
+    store.close()
+    store.close()   # second call: no-op, no ProgrammingError
+    assert out.exists()
+
+
 def test_identifier_type_is_free_text() -> None:
     """identifier_type carries no closed CHECK: a preset may name any kind (e.g. bssid),
     which the store accepts and round-trips verbatim."""

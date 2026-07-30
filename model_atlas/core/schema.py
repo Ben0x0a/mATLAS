@@ -162,7 +162,6 @@ def _table_specs() -> "list[dict[str, Any]]":
         {"name": "source", "dataclass": V.Source, "pk": "source_id",
          "not_null": ["run_id", "input_file_path"],
          "fks": {"run_id": ("run", "run_id")},
-         "enum_checks": {"source_tier": V.SourceTier},
          "unique": [("run_id", "input_file_path", "inner_path", "subunit")],
          "indexes": [("ix_source_fp", ("fingerprint_sha256",))]},
         {"name": "preset", "dataclass": V.Preset, "pk": "preset_id",
@@ -176,12 +175,9 @@ def _table_specs() -> "list[dict[str, Any]]":
         {"name": "raw_record", "dataclass": V.RawRecord, "pk": "raw_record_id",
          "not_null": ["source_id", "line_no", "raw_json"],
          "fks": {"source_id": ("source", "source_id")},
-         "enum_checks": {"recovery_state": V.RecordState,
-                         "recovery_source": V.RecoverySource},
          "unique": [("source_id", "line_no")]},
         # -- Layer 1: assertion ----------------------------------------------
-        {"name": "activity", "dataclass": V.Activity, "pk": "activity_id",
-         "enum_checks": {"kind": V.ActivityKind}},
+        {"name": "activity", "dataclass": V.Activity, "pk": "activity_id"},
         {"name": "activity_record", "dataclass": V.ActivityRecord,
          "pk": "activity_record_id",
          "not_null": ["activity_id", "raw_record_id"],
@@ -190,31 +186,27 @@ def _table_specs() -> "list[dict[str, Any]]":
          "unique": [("activity_id", "raw_record_id")]},
         {"name": "entity", "dataclass": V.Entity, "pk": "entity_id",
          "not_null": ["identifier_type", "type"],
-         # identifier_type carries NO enum CHECK: it is a free string (a preset may name any
-         # kind; IdentifierType only lists the ones the normaliser knows). NOT NULL still
-         # holds — every entity states a kind, defaulting to 'none'.
-         "enum_checks": {"type": V.EntityType, "concerns_origin": V.Origin},
+         # identifier_type carries NO enum CHECK: it is annotated ``str`` (a free string — a
+         # preset may name any kind; IdentifierType only lists the ones the normaliser knows),
+         # so the derived coverage attaches none. NOT NULL still holds — every entity states a
+         # kind, defaulting to 'none'.
          "indexes": [("ix_entity_norm", ("identifier_type", "identifier")),
                      ("ix_entity_concerns", ("concerns_uid",))]},
         {"name": "spatial_expression", "dataclass": V.SpatialExpression,
-         "pk": "spatial_expression_id", "not_null": ["referential"],
-         "enum_checks": {"referential": V.SpatialReferential}},
+         "pk": "spatial_expression_id", "not_null": ["referential"]},
         {"name": "spatial_component", "dataclass": V.SpatialComponent,
          "pk": "spatial_component_id",
          "not_null": ["spatial_expression_id", "ordinal", "part"],
          "fks": {"spatial_expression_id":
                  ("spatial_expression", "spatial_expression_id")},
-         "enum_checks": {"spatial_role": V.SpatialRole},
          "unique": [("spatial_expression_id", "ordinal")]},
         {"name": "temporal_expression", "dataclass": V.TemporalExpression,
-         "pk": "temporal_expression_id", "not_null": ["kind"],
-         "enum_checks": {"kind": V.TemporalKind, "referential": V.TemporalReferential}},
+         "pk": "temporal_expression_id", "not_null": ["kind"]},
         {"name": "temporal_component", "dataclass": V.TemporalComponent,
          "pk": "temporal_component_id",
          "not_null": ["temporal_expression_id", "ordinal", "part"],
          "fks": {"temporal_expression_id":
                  ("temporal_expression", "temporal_expression_id")},
-         "enum_checks": {"temporal_role": V.TemporalRole},
          "unique": [("temporal_expression_id", "ordinal")]},
         {"name": "assertion", "dataclass": V.Assertion, "pk": "assertion_id",
          "not_null": ["raw_record_id", "preset_id", "output_ordinal", "entity_id",
@@ -230,11 +222,6 @@ def _table_specs() -> "list[dict[str, Any]]":
          # The owned corners + the entity are 1:1 with the assertion (§2 guard: two
          # assertions may never share a corner row or an entity row).
          "unique_cols": ["entity_id", "spatial_expression_id", "temporal_expression_id"],
-         "enum_checks": {"entity_origin": V.Origin, "entity_role": V.EntityRole,
-                         "entity_position_link": V.EntityPositionLink,
-                         "entity_time_link": V.EntityTimeLink,
-                         "spatial_temporal_link": V.SpatialTemporalLink,
-                         "deleted": V.RecordState},
          "unique": [("raw_record_id", "preset_id", "output_ordinal")],
          "indexes": [("ix_assertion_ch", ("content_hash",)),
                      ("ix_assertion_cd", ("claim_digest",)),
@@ -265,7 +252,6 @@ def _table_specs() -> "list[dict[str, Any]]":
          "unique": [("assertion_id", "method")]},
         {"name": "edit_log", "dataclass": V.EditLog, "pk": "edit_id",
          "not_null": ["ordinal"],
-         "enum_checks": {"edit_kind": V.EditKind},
          "unique_cols": ["ordinal"]},   # a monotonic UNIQUE journal position
     ]
 
@@ -302,11 +288,21 @@ _POSSIBLE_SAME_EVIDENCE_VIEW = (
 
 # --- table builder ---------------------------------------------------------
 
-def _column_ddl(name: str, sql_type: str, spec: dict[str, Any]) -> str:
-    """The full column clause: ``name TYPE [PK] [NOT NULL] [UNIQUE] [REFERENCES] [CHECK]``."""
+def _column_ddl(name: str, sql_type: str, spec: dict[str, Any],
+                enum_type: type[Enum] | None) -> str:
+    """The full column clause: ``name TYPE [PK] [NOT NULL] [UNIQUE] [REFERENCES] [CHECK]``.
+
+    ``enum_type`` (when not None) is the closed vocabulary this column is derived to belong
+    to — passed in by ``_build_table`` from the dataclass annotation, never a hand-kept map.
+    """
     parts = [name, sql_type]
     if name == spec["pk"]:
         parts.append("PRIMARY KEY")
+        # A TEXT (non-INTEGER) PRIMARY KEY still permits NULL in SQLite. Ids are always
+        # derived (never None), so mark it NOT NULL as defence-in-depth: a None id must fail
+        # at write time in a forensic store, not store silently as a NULL primary key.
+        if sql_type == "TEXT":
+            parts.append("NOT NULL")
     if name in spec.get("not_null", ()):
         parts.append("NOT NULL")
     if name in spec.get("unique_cols", ()):
@@ -314,7 +310,6 @@ def _column_ddl(name: str, sql_type: str, spec: dict[str, Any]) -> str:
     fk = spec.get("fks", {}).get(name)
     if fk is not None:
         parts.append(f"REFERENCES {fk[0]}({fk[1]})")
-    enum_type = spec.get("enum_checks", {}).get(name)
     if enum_type is not None:
         parts.append(_enum_check(name, enum_type))
     return " ".join(parts)
@@ -326,9 +321,10 @@ def _build_table(spec: dict[str, Any]) -> str:
     HOW: the dataclass fields give the (name, type) columns in declaration order; any
     ``extra_columns`` are spliced in and the whole is re-ordered by ``column_order`` when
     the physical column order must differ from the dataclass (entity.raw_identifier). Every
-    structural key referenced by the spec (pk, not_null, fks, unique, enum_checks, indexes)
-    is checked to name a real column, so a rename on either side raises here rather than
-    silently emitting a table missing a constraint.
+    structural key referenced by the spec (pk, not_null, fks, unique, indexes) is checked to
+    name a real column, so a rename on either side raises here rather than silently emitting a
+    table missing a constraint. Enum CHECKs are not a spec key — they are derived per column
+    from the dataclass annotation (``_enum_of``), so coverage cannot drift.
     """
     hints = _hints(spec["dataclass"])
     columns: dict[str, str] = {name: _sql_type(tp) for name, tp in hints.items()}
@@ -342,7 +338,15 @@ def _build_table(spec: dict[str, Any]) -> str:
         f"{set(order) ^ set(columns)}")
     _assert_columns_exist(spec, set(columns))
 
-    column_lines = [_column_ddl(name, columns[name], spec) for name in order]
+    # Enum CHECK coverage is DERIVED from the dataclass annotations (``_enum_of`` is the
+    # column->Enum registry the model already carries), NOT a hand-maintained per-table map
+    # that could drift: a newly added Enum-typed field therefore gets its membership CHECK
+    # automatically and can never silently ship unconstrained (the recovery_source footgun).
+    # DDL-only extra_columns have no annotation, so they carry no enum (None).
+    enum_types: dict[str, type[Enum] | None] = {
+        name: (_enum_of(hints[name]) if name in hints else None) for name in columns}
+    column_lines = [_column_ddl(name, columns[name], spec, enum_types[name])
+                    for name in order]
     for unique_cols in spec.get("unique", []):
         column_lines.append(f"UNIQUE ({', '.join(unique_cols)})")
     body = ",\n    ".join(column_lines)
@@ -360,7 +364,6 @@ def _assert_columns_exist(spec: dict[str, Any], columns: set[str]) -> None:
     referenced |= set(spec.get("not_null", ()))
     referenced |= set(spec.get("unique_cols", ()))
     referenced |= set(spec.get("fks", {}))
-    referenced |= set(spec.get("enum_checks", {}))
     for unique_cols in spec.get("unique", []):
         referenced |= set(unique_cols)
     for _, index_cols in spec.get("indexes", []):

@@ -880,9 +880,15 @@ UTC_OFFSET_UNKNOWN = "N/A"
 
 
 # --- Type & unit metadata (drives cast inference + unit conversion) -------
-# A model column's type is a property of the model, declared once here, so a preset
-# never has to restate `cast: float` on every numeric mapping. These describe the
-# INTEGRATION columns, which is where unit conversion always conceptually belonged.
+# A model field's type is a property of the model, declared once here, so a preset never
+# has to restate `cast: float` / `cast: int` on a numeric mapping. ``column_cast`` is keyed
+# on the ASSIGNABLE field name — what a preset writes in `to:` (presets/spec.py
+# ASSIGNABLE_FIELDS) — because that is exactly the string its one caller
+# (presets/resolve.py) passes. For the float metrics the assignable name happens to equal
+# the integration column; for the integer fields it does NOT (the assignable names are
+# ``multiplicity`` / ``time_accuracy_us_lower`` / ``_upper``, whereas the downstream write
+# columns are ``lower_accuracy_us`` / ``upper_accuracy_us``), so the set must hold the
+# ASSIGNABLE names or the int branch never fires for a field a preset can map.
 
 _FLOAT_COLUMNS: frozenset[str] = frozenset({
     "latitude_wgs84", "longitude_wgs84", "altitude_m",
@@ -891,14 +897,20 @@ _FLOAT_COLUMNS: frozenset[str] = frozenset({
     "horizontal_speed_accuracy_kmh", "vertical_speed_accuracy_kmh",
     "heading_deg", "heading_accuracy_deg", "beam_azimuth_deg", "beam_width_deg",
 })
+# The integer-typed assignable fields a preset may map: multiplicity (on the assertion) and
+# the two per-bound source-stated timing uncertainties. Keyed on the assignable NAME (see the
+# block comment above), so e.g. a source value 2.0 for ``multiplicity`` coerces to int 2.
 _INT_COLUMNS: frozenset[str] = frozenset({
-    "lower_accuracy_us", "upper_accuracy_us", "record_rank"})
+    "multiplicity", "time_accuracy_us_lower", "time_accuracy_us_upper"})
 
 
 def column_cast(column: str) -> type | None:
-    """The python type a column's value should be coerced to, or None for free text.
+    """The python type an assignable field's value should be coerced to, or None for free text.
 
-    Used by the assembly engine to apply an implicit cast so presets omit ``cast:``.
+    Used by the preset resolver (``presets/resolve.py``) to apply an implicit cast so a preset
+    need not restate ``cast:`` on a numeric mapping. ``column`` is the assignable field name a
+    preset maps ``to:`` — hence the sets above are keyed on those names, not the downstream
+    write columns.
     """
     if column in _FLOAT_COLUMNS:
         return float

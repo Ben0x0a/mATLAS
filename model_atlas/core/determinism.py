@@ -65,12 +65,41 @@ def _quoted(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+def _is_without_rowid(connection: sqlite3.Connection, table_name: str) -> bool:
+    """True when ``table_name`` is a ``WITHOUT ROWID`` table (it has no ``rowid``).
+
+    HOW: SQLite exposes no boolean for this, and the only authoritative answer is to ask
+    the engine for the rowid — a ``WITHOUT ROWID`` table has no ``rowid`` column, so
+    ``SELECT rowid`` raises ``no such column: rowid`` while every ordinary (rowid) table
+    answers. This is a capability PROBE of the engine, NOT exceptions-as-control-flow over
+    a business outcome: SQLite offers no other interface, so the narrow ``except`` classes
+    exactly one engine fact (and re-raises anything else).
+    WHY not the CREATE TABLE substring (the previous approach): matching ``"WITHOUT ROWID"``
+    in the schema text false-NEGATIVES on non-canonical spacing (``WITHOUT  ROWID`` — double
+    space / newline / comment) and false-POSITIVES on the phrase inside a comment or CHECK;
+    both silently pick the wrong enumeration order and shift every ``line_no``.
+    WHY not ``PRAGMA index_list`` ``origin='pk'``: an ordinary rowid table with a TEXT or
+    composite PRIMARY KEY ALSO exposes an ``origin='pk'`` auto-index, so that signal cannot
+    tell a rowid table from a rowid-less one — and mATLAS/evidence tables routinely use TEXT
+    primary keys.
+    """
+    try:
+        connection.execute(f"SELECT rowid FROM {_quoted(table_name)} LIMIT 0")
+    except sqlite3.OperationalError as exc:
+        # Only the missing-rowid case means WITHOUT ROWID; re-raise any other operational
+        # failure rather than misclassify a genuinely unexpected error as rowid-less.
+        if "rowid" in str(exc).lower():
+            return True
+        raise
+    return False
+
+
 def sqlite_enumeration_sql(connection: sqlite3.Connection, table_name: str) -> str:
     """The normative SELECT enumerating a SQLite table's LIVE records (rule 1).
 
     HOW: an ordinary table enumerates in ``rowid`` order; a ``WITHOUT ROWID`` table
-    (its CREATE TABLE text carries the clause, read from ``sqlite_master``) enumerates
-    in primary-key order — PK columns taken in their PK position order from
+    (detected robustly by ``_is_without_rowid`` — a rowid probe, never a schema substring)
+    enumerates in primary-key order — PK columns taken in their PK position order from
     ``PRAGMA table_info`` (column 5 is the 1-based PK position, 0 = not part of the PK).
     WHY pinned: ``line_no`` (and through it every record/assertion id) embeds the
     enumeration position — an unpinned order would shift ids between two runs over the
@@ -82,7 +111,7 @@ def sqlite_enumeration_sql(connection: sqlite3.Connection, table_name: str) -> s
     ).fetchone()
     if row is None:
         raise ValueError(f"no such table: {table_name!r}")
-    if "WITHOUT ROWID" in (row[0] or "").upper():
+    if _is_without_rowid(connection, table_name):
         info = connection.execute(f"PRAGMA table_info({_quoted(table_name)})").fetchall()
         pk_columns = [r[1] for r in sorted(info, key=lambda r: r[5]) if r[5] > 0]
         order = ", ".join(_quoted(column) for column in pk_columns)
@@ -166,15 +195,37 @@ CONTAINER_JOIN = "!"
 
 
 def _has_drive_root(text: str) -> bool:
-    """True for a Windows drive-rooted path once separators are normalised (``C:/…``)."""
-    return len(text) >= 3 and text[0].isalpha() and text[1] == ":" and text[2] == "/"
+    """True for a Windows drive-rooted path once separators are normalised (``C:/…``).
+
+    The drive letter must be an ASCII a-z/A-Z: ``text[0].isalpha()`` alone accepts a
+    non-ASCII "letter" (``Ω:/x``) that is never a real drive root, so the ASCII check
+    keeps a spoofed drive prefix from being read as absolute.
+    """
+    return (len(text) >= 3 and text[0].isascii() and text[0].isalpha()
+            and text[1] == ":" and text[2] == "/")
+
+
+def _is_windows_style(text: str) -> bool:
+    """True for a Windows path whose backslashes are real separators (drive-root or UNC).
+
+    A drive-rooted ``C:\\…`` / ``C:/…`` or a UNC ``\\\\host\\share`` prefix. Everything else
+    (a POSIX path) is treated as backslash-literal — see ``canonical_path``.
+    """
+    if text.startswith("\\\\"):
+        return True                                   # UNC share: \\host\share\…
+    return (len(text) >= 3 and text[0].isascii() and text[0].isalpha()
+            and text[1] == ":" and text[2] in "/\\")
 
 
 def canonical_path(path: str) -> str:
     """Canonicalise a filesystem path for the ``source_id`` natural key (rule 4).
 
-    HOW: NFC-normalise the text, normalise separators to ``/``, then REQUIRE the result
-    to be absolute (a POSIX root or a drive-letter root).
+    HOW: NFC-normalise the text; fold ``\\``->``/`` ONLY for genuinely Windows-style paths
+    (a drive-root or UNC prefix); then REQUIRE the result to be absolute (a POSIX root or a
+    drive-letter root).
+    WHY the conditional fold (not an unconditional one): on POSIX a literal ``\\`` is a legal
+    filename byte, so rewriting it unconditionally would collapse ``/dir/a\\b`` and
+    ``/dir/a/b`` onto one path — two distinct exhibits silently sharing a ``source_id``.
     WHY raise on a relative path instead of absolutising: ``os.path.abspath`` would fold
     the process's working directory into the id — non-determinism smuggled into
     evidence identity. Discovery owns absolutisation (it knows the operator's --input
@@ -182,19 +233,37 @@ def canonical_path(path: str) -> str:
     WHY NFC: macOS volumes serve decomposed (NFD) names — the same exhibit walked on
     two platforms must derive ONE ``source_id``, not two.
     """
-    text = unicodedata.normalize("NFC", path).replace("\\", "/")
+    text = unicodedata.normalize("NFC", path)
+    if _is_windows_style(text):
+        text = text.replace("\\", "/")
     if not (text.startswith("/") or _has_drive_root(text)):
         raise ValueError(f"source paths must be absolute (rule 4): {path!r}")
     return text
+
+
+def _escape_segment(text: str) -> str:
+    """Backslash-escape a container-chain segment so the ``!`` join stays injective.
+
+    HOW: separators are first folded to ``/`` (so no literal ``\\`` remains), then every
+    literal ``!`` becomes ``\\!``. Because the only backslash a segment can now contain is
+    the escape one, ``\\!`` unambiguously marks a within-segment ``!`` and a bare ``!`` is
+    always the join delimiter.
+    WHY: without escaping, ``!`` is forgeable — archive ``a.zip!b`` -> member ``c`` and
+    archive ``a.zip`` -> member ``b!c`` both flatten to ``a.zip!b!c``, one ``inner_path``
+    (and one ``source_id``) for two distinct exhibits. Escaping makes the join reversible,
+    so the two chains derive DIFFERENT strings — and it is this escaped form that feeds
+    ``source_id``.
+    """
+    return text.replace("\\", "/").replace(CONTAINER_JOIN, "\\" + CONTAINER_JOIN)
 
 
 def container_inner_path(chain: Sequence[str]) -> str | None:
     """The chain-inclusive ``inner_path``: the container chain joined with ``!`` (rule 4).
 
     HOW: each element — the outermost container's own name FIRST, then each nested
-    member path (the chain is inclusive) — is NFC-normalised with ``/``
-    separators, then joined with ``CONTAINER_JOIN``. An empty chain (a loose file) has
-    no ``inner_path`` -> None.
+    member path (the chain is inclusive) — is NFC-normalised, then ``!``-escaped
+    (``_escape_segment``, keeping the join injective), then joined with ``CONTAINER_JOIN``.
+    An empty chain (a loose file) has no ``inner_path`` -> None.
     WHY an empty ELEMENT raises: it would silently collapse two different chains onto
     one string ("a!!b" from ("a", "", "b") vs ("a!", "b")) — exactly the forged-key
     class this canonicalisation exists to prevent.
@@ -205,7 +274,7 @@ def container_inner_path(chain: Sequence[str]) -> str | None:
     for element in chain:
         if not element:
             raise ValueError("container chain elements must be non-empty (rule 4)")
-        members.append(unicodedata.normalize("NFC", element).replace("\\", "/"))
+        members.append(_escape_segment(unicodedata.normalize("NFC", element)))
     return CONTAINER_JOIN.join(members)
 
 
