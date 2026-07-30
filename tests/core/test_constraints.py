@@ -309,8 +309,8 @@ def test_a_positionless_claim_survives_projection() -> None:
     """Row 9: a positionless claim vanishes from CSV.
 
     Angle here: the digest pipeline — a claim with NO corner and NO activity still
-    projects (each missing block contributes exactly its two empty header slots: 15
-    slots joined by 14 separators) and yields both digests, so nothing upstream of the
+    projects (each missing block contributes exactly its one presence-flag slot: 12
+    slots joined by 11 separators) and yields both digests, so nothing upstream of the
     flat view can drop it. Store persistence (both corner FKs NULL, row kept):
     test_store.py::test_positionless_claim_persists.
     """
@@ -318,8 +318,9 @@ def test_a_positionless_claim_survives_projection() -> None:
         entity=ids.EntityProjection(None, V.IdentifierType.NONE, V.EntityType.PERSON),
         spatial=None, temporal=None, links=ids.AssertionLinks(),
         deleted=None, multiplicity=None, activity=None)
-    # 4 entity slots + 2 spatial + 2 temporal + 5 links/deleted/multiplicity + 2 activity.
-    assert l1.count(ids.SEP) == 14
+    # 4 entity slots + 1 spatial flag + 1 temporal flag + 5 links/deleted/multiplicity
+    # + 1 activity flag = 12 slots -> 11 separators.
+    assert l1.count(ids.SEP) == 11
     content_hash, claim_digest = ids.digests(fingerprint_sha256="fp", preset_key="k",
                                              line_no=1, output_ordinal=0, l1=l1)
     for digest in (content_hash, claim_digest):

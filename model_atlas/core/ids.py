@@ -45,9 +45,28 @@ _NAMESPACE = uuid.UUID("9c4e7b1a-2d63-5f48-8a17-3b5c6d0e9f21")
 
 # The unit separator (ASCII 0x1F). WHY NOT "|": a "|" can occur inside a real path or
 # value, so joining on it lets a crafted path forge a different split that hashes equal
-# (run_db_schema.md §"id scheme": 'a | in a path forged equal keys'). 0x1F cannot occur
-# in a path, a CSV value, or a normalised identifier, so the split is unforgeable.
+# (run_db_schema.md §"id scheme": 'a | in a path forged equal keys'). 0x1F almost never
+# occurs in a path, a CSV value, or a normalised identifier — but "almost never" is not
+# "never": a pathological source value CAN carry a literal 0x1F, so ``_txt`` ESCAPES it
+# (below) to guarantee it only ever appears as a genuine delimiter.
 SEP = "\x1f"
+
+# The escape introducer (ASCII 0x1B). WHY: to keep the join unforgeable, ``_txt`` must be
+# able to represent a value that itself contains ``SEP`` (or this introducer) without that
+# byte acting as a delimiter. Escaping ``_ESC``→``_ESC _ESC`` and ``SEP``→``_ESC SEP``
+# makes the encoding unambiguous (a bare ``SEP`` is ALWAYS a delimiter, never data), so the
+# token stream is uniquely recoverable and ``l1_projection`` stays injective.
+_ESC = "\x1b"
+
+# Optional-corner presence flags for the L1 projection. WHY two distinct flags: an absent
+# corner and a present-but-empty corner (empty header, no components) must be
+# distinguishable in the projection — otherwise ``_txt(None) == _txt("")`` would collapse
+# them onto the same string. Each optional section starts with one of these at a fixed
+# position, so "absent" (one flag slot, nothing after) can never render like "present with
+# empty fields". These sit in dedicated frame slots a value never occupies, so their exact
+# spelling is free; kept short because they only feed a sha256.
+_CORNER_PRESENT = "+"
+_CORNER_ABSENT = "-"
 
 # Per-table namespace tags (the FIRST join part). Suffixed _NAME because each is a
 # string identifier, not a value (house rule). One tag per run-DB table; the id-scheme
@@ -79,20 +98,28 @@ EDIT_LOG_NAME = "edit_log"
 
 
 def _txt(part: object) -> str:
-    """Render one id/digest part as a stable token.
+    """Render one id/digest part as a stable, SEP-safe token.
 
     HOW: an Enum becomes its ``.value`` (the bare stored token — ``str(member)`` would
     yield e.g. ``"EntityRole.CALLER"`` on this Python, which the demo never stored), a
-    ``None`` becomes the empty string, everything else its ``str()``.
+    ``None`` becomes the empty string, everything else its ``str()``; then the two reserved
+    control bytes are escaped — ``_ESC``→``_ESC _ESC`` FIRST, then ``SEP``→``_ESC SEP`` —
+    so the rendered token can never contain a bare ``SEP``.
     WHY empty-for-None: a missing part must be distinct-but-stable, never the literal
-    "None" that could clash with a real value; and a NULL corner must hash identically
-    whether the caller passes ``None`` or a field left unset.
+    "None" that could clash with a real value.
+    WHY escape: without it a source value carrying a literal ``SEP`` (0x1F) would inject
+    extra delimiter slots and let a structurally DIFFERENT claim hash equal — the join
+    would not be injective (a forged same-claim/corroboration relationship). Escaping the
+    introducer before the separator keeps decoding unambiguous, so the token stream is
+    uniquely recoverable.
     """
     if part is None:
         return ""
     if isinstance(part, Enum):
-        return str(part.value)
-    return str(part)
+        part = part.value
+    # Escape the introducer FIRST, then SEP: order matters so ``_ESC SEP`` in the output
+    # can only mean "escaped SEP", never "escaped _ESC followed by a real delimiter".
+    return str(part).replace(_ESC, _ESC + _ESC).replace(SEP, _ESC + SEP)
 
 
 def id_for(table: str, *parts: object) -> str:
@@ -242,14 +269,20 @@ def canonical_json(obj: object) -> str:
     """Canonical JSON per run_db_schema.md §Determinism rule 5.
 
     HOW: ``json.dumps`` with sorted keys and the tightest separators (no insignificant
-    whitespace), UTF-8-clean via ``ensure_ascii=False``.
+    whitespace), UTF-8-clean via ``ensure_ascii=False``, and ``allow_nan=False``.
+    WHY allow_nan=False: the default (True) emits the non-standard ``NaN``/``Infinity``
+    tokens — invalid JSON that no conformant parser can re-read, and EVERY NaN prints the
+    same ``NaN`` token so distinct not-a-number contexts would collide in the digest.
+    Refusing them makes an accidental float NaN/Inf raise loudly here rather than forge a
+    silently-equal or unverifiable claim.
     WHY no float re-formatting: numeric SOURCE values are captured as STRINGS upstream
     (the assembler keeps the raw text — e.g. "46.2030"), so ``json.dumps`` only ever
     sees a str and can never turn "46.2030" into 46.203. Passing a float here would
     re-format it; the contract is that callers do not — this helper does not defend
     against it because the whole pipeline keeps values as source text (rule 5).
     """
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                      allow_nan=False)
 
 
 def source_order_json(obj: object) -> str:
@@ -384,17 +417,32 @@ def l1_projection(
 
     Order (verbatim from the doc):
       entity (identifier ⟂ identifier_type ⟂ type ⟂ entity_role)
-      ⟂ spatial expression (referential ⟂ spatial_source ⟂ components by ordinal, each
-        part ⟂ spatial_role ⟂ raw_value)
-      ⟂ temporal expression (kind ⟂ referential ⟂ components by ordinal, each
-        part ⟂ temporal_role ⟂ stated_offset ⟂ raw_value)
+      ⟂ spatial expression (presence ⟂ [referential ⟂ spatial_source ⟂ count ⟂
+        components by ordinal, each part ⟂ spatial_role ⟂ raw_value])
+      ⟂ temporal expression (presence ⟂ [kind ⟂ referential ⟂ count ⟂ components by
+        ordinal, each part ⟂ temporal_role ⟂ stated_offset ⟂ raw_value])
       ⟂ the three links ⟂ deleted ⟂ multiplicity
-      ⟂ activity (kind ⟂ canonical context_json)
+      ⟂ activity (presence ⟂ [kind ⟂ canonical context_json])
 
-    A NULL corner contributes exactly two empty slots (its two header fields, no
-    component rows) — WHY: an assertion with no place and one whose place header happens
-    to be empty must be indistinguishable here only if both truly carry nothing, and the
-    two-empty-slot shape is what the demo hashed, so the cross-check pins it.
+    WHY this framing makes the projection INJECTIVE (no two structurally-different claims
+    share an L1 string). Two properties combine:
+      1. ``_txt`` escapes ``SEP``, so a bare ``SEP`` is ALWAYS a delimiter — the token
+         list is uniquely recoverable from the joined string, never smuggled by a value.
+      2. Every variable-length section is FRAMED. The entity block is a fixed 4 slots and
+         the links+flags block a fixed 5, so their boundaries are positional. Each
+         optional corner leads with a presence flag (``_CORNER_PRESENT``/``_CORNER_ABSENT``)
+         at a determined position; a PRESENT spatial/temporal corner then carries an
+         explicit component COUNT before its rows, pinning exactly how many
+         3-slot (spatial) / 4-slot (temporal) rows follow — so the next corner's flag
+         position is unambiguous. Hence the token list partitions back into a unique
+         structured claim.
+    Before this framing, an unframed component could be shifted across the spatial/
+    temporal boundary (no count) and an absent corner rendered like a present-but-empty
+    one (``_txt(None) == _txt("")``); both let a different claim hash equal.
+
+    ABSENT vs PRESENT-BUT-EMPTY is now carried by the presence flag + count, NOT by
+    ``_txt`` — an absent corner emits its flag alone; a present corner with an empty
+    header still emits ``_CORNER_PRESENT`` and (for spatial/temporal) a ``0`` count.
 
     EXCLUDED normatively (never appear below): concerns, concerns_uid, both origin
     columns, raw_identifier, component source_fields, all paths, all *_id/run_id, all
@@ -403,7 +451,7 @@ def l1_projection(
     """
     parts: list[str] = []
 
-    # entity corner: identifier ⟂ identifier_type ⟂ type ⟂ entity_role
+    # entity corner: identifier ⟂ identifier_type ⟂ type ⟂ entity_role (always 4 slots).
     parts += [
         _txt(entity.identifier),
         _txt(entity.identifier_type),
@@ -411,19 +459,30 @@ def l1_projection(
         _txt(links.entity_role),
     ]
 
-    # spatial expression: referential ⟂ spatial_source ⟂ components(part, role, raw)
+    # spatial expression: presence ⟂ [referential ⟂ spatial_source ⟂ count ⟂ rows].
     if spatial is None:
-        parts += ["", ""]   # the two header slots for a missing corner
+        parts += [_CORNER_ABSENT]
     else:
-        parts += [_txt(spatial.referential), _txt(spatial.spatial_source)]
+        # The count frames the component list so it cannot bleed into the temporal corner.
+        parts += [
+            _CORNER_PRESENT,
+            _txt(spatial.referential),
+            _txt(spatial.spatial_source),
+            str(len(spatial.components)),
+        ]
         for c in spatial.components:   # supplied already in ordinal order
             parts += [_txt(c.part), _txt(c.spatial_role), _txt(c.raw_value)]
 
-    # temporal expression: kind ⟂ referential ⟂ components(part, role, stated_offset, raw)
+    # temporal expression: presence ⟂ [kind ⟂ referential ⟂ count ⟂ rows].
     if temporal is None:
-        parts += ["", ""]
+        parts += [_CORNER_ABSENT]
     else:
-        parts += [_txt(temporal.kind), _txt(temporal.referential)]
+        parts += [
+            _CORNER_PRESENT,
+            _txt(temporal.kind),
+            _txt(temporal.referential),
+            str(len(temporal.components)),
+        ]
         for c in temporal.components:
             parts += [
                 _txt(c.part),
@@ -432,7 +491,7 @@ def l1_projection(
                 _txt(c.raw_value),
             ]
 
-    # the three links ⟂ deleted ⟂ multiplicity
+    # the three links ⟂ deleted ⟂ multiplicity (always 5 slots).
     parts += [
         _txt(links.entity_position_link),
         _txt(links.entity_time_link),
@@ -441,12 +500,17 @@ def l1_projection(
         _txt(multiplicity),
     ]
 
-    # activity: kind ⟂ canonical context_json (re-canonicalised so key order can't drift)
+    # activity: presence ⟂ [kind ⟂ canonical context_json] (re-canonicalised so key order
+    # can't drift). No component list, so the presence flag alone frames it.
     if activity is None:
-        parts += ["", ""]
+        parts += [_CORNER_ABSENT]
     else:
         ctx = activity.context
-        parts += [_txt(activity.kind), "" if ctx is None else canonical_json(ctx)]
+        parts += [
+            _CORNER_PRESENT,
+            _txt(activity.kind),
+            "" if ctx is None else canonical_json(ctx),
+        ]
 
     return SEP.join(parts)
 

@@ -205,13 +205,65 @@ def test_component_source_field_is_excluded():
 
 # --- null-corner shape ------------------------------------------------------
 
-def test_missing_corner_contributes_two_empty_slots():
+def test_missing_corner_is_framed_and_distinct_from_a_present_corner():
     # A positionless / timeless claim still projects (the flat rule: one line per
-    # assertion, corners nullable). A None corner and a corner absent must be stable.
+    # assertion, corners nullable). An absent corner emits its presence flag alone.
     l1_no_spatial = _l1(spatial=None)
     assert isinstance(l1_no_spatial, str)
     # It differs from the same claim WITH a spatial corner.
     assert l1_no_spatial != _l1(spatial=_spatial())
+
+
+def test_absent_corner_differs_from_present_but_empty_corner():
+    # Framing must separate "no spatial corner at all" from "a spatial corner whose
+    # header fields happen to be empty" — under the old ["",""] shape both collided
+    # because _txt(None) == _txt(""). The presence flag + count now keeps them distinct.
+    empty_present = ids.SpatialProjection("", "", ())
+    assert _l1(spatial=None) != _l1(spatial=empty_present)
+
+
+# --- INJECTIVITY regression (FIX-03) ----------------------------------------
+
+def test_spatial_heavy_and_temporal_heavy_claims_do_not_collide():
+    # Under the OLD unframed format an absent corner and a present-but-empty corner both
+    # rendered as two empty slots, so a claim carrying ONLY a (present-but-empty) spatial
+    # corner and one carrying ONLY a (present-but-empty) temporal corner produced the
+    # identical middle "" ⟂ "" ⟂ "" ⟂ "" and therefore the SAME claim_digest. The
+    # presence flags + counts must now separate the two structurally-different claims.
+    spatial_heavy = _l1(spatial=ids.SpatialProjection("", "", ()), temporal=None)
+    temporal_heavy = _l1(spatial=None, temporal=ids.TemporalProjection("", "", ()))
+    assert spatial_heavy != temporal_heavy
+    assert ids.claim_digest(spatial_heavy) != ids.claim_digest(temporal_heavy)
+
+
+def test_embedded_separator_in_a_value_cannot_forge_a_collision():
+    # A raw_value carrying a literal SEP (0x1F) used to inject extra delimiter slots, so a
+    # single component whose raw smuggled another component's tokens hashed EQUAL to a
+    # claim that genuinely had that second component. One component with a SEP-laden raw
+    # vs two plain components must now differ (escaping + the component count).
+    smuggled = ids.SpatialProjection(
+        "cell_ref", "cell",
+        (ids.SpatialComponentProjection(
+            "raw_position", "vicinity", f"v1{ids.SEP}p2{ids.SEP}r2{ids.SEP}v2"),),
+    )
+    genuine = ids.SpatialProjection(
+        "cell_ref", "cell",
+        (
+            ids.SpatialComponentProjection("raw_position", "vicinity", "v1"),
+            ids.SpatialComponentProjection("p2", "r2", "v2"),
+        ),
+    )
+    assert _l1(spatial=smuggled) != _l1(spatial=genuine)
+    assert ids.claim_digest(_l1(spatial=smuggled)) != ids.claim_digest(_l1(spatial=genuine))
+
+
+def test_canonical_json_rejects_nan_and_infinity():
+    # A NaN/Infinity in an activity context would serialise to the non-standard NaN/
+    # Infinity token (invalid JSON, and every NaN collides) — allow_nan=False makes it
+    # raise loudly instead of forging a silently-equal or unverifiable claim.
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError):
+            ids.canonical_json({"x": bad})
 
 
 # --- DEMO CROSS-CHECK -------------------------------------------------------

@@ -168,12 +168,27 @@ the deferred analyst graph.
 **The normative L1 projection** — the
 exact field list both digests hash, in order:
 entity (identifier ⟂ identifier_type ⟂ type ⟂ entity_role) ⟂ spatial expression
-(referential ⟂ spatial_source ⟂ components ordered by ordinal, each as
-part ⟂ spatial_role ⟂ raw_value) ⟂ temporal expression (kind ⟂ referential ⟂
-components likewise, each as part ⟂ temporal_role ⟂ stated_offset ⟂ raw_value)
-⟂ the three links ⟂ deleted ⟂ multiplicity ⟂ activity (kind ⟂ canonical
-context_json). (data_source is source-grain — and therefore outside the
-claim-level digests, like every other source attribute.)
+(presence-flag ⟂ [referential ⟂ spatial_source ⟂ component-count ⟂ components ordered
+by ordinal, each as part ⟂ spatial_role ⟂ raw_value]) ⟂ temporal expression
+(presence-flag ⟂ [kind ⟂ referential ⟂ component-count ⟂ components likewise, each as
+part ⟂ temporal_role ⟂ stated_offset ⟂ raw_value]) ⟂ the three links ⟂ deleted ⟂
+multiplicity ⟂ activity (presence-flag ⟂ [kind ⟂ canonical context_json]).
+(data_source is source-grain — and therefore outside the claim-level digests, like
+every other source attribute.)
+
+The projection is **injective** (no two structurally-different claims share an L1
+string) by two rules working together: (a) values are rendered SEP-safe — a value's
+literal `\x1f` (or the `\x1b` escape introducer) is escaped, so a bare `\x1f` is always
+a delimiter and the token stream is uniquely recoverable; (b) every variable-length
+section is **framed** — the entity block is a fixed 4 fields and the links+flags block a
+fixed 5, and each optional corner leads with a presence flag (present / absent) followed,
+for a present spatial/temporal corner, by an explicit **component count** that pins how
+many component rows follow. So a component can never be shifted across the
+spatial/temporal boundary, and an **absent corner** (flag only) can never render like a
+**present-but-empty corner** (flag + empty fields + count 0). Before this framing the
+projection was non-injective: unframed component lists joined by the same separator, and
+`_txt(None) == _txt("")` conflated the two corner cases — either could forge a
+same-claim/corroboration collision.
 **Excluded, normatively**: `concerns`, `concerns_uid` + both origin columns (operator
 input and derived groupings never move an evidence digest), `raw_identifier`
 (format-variant; the normalized identifier already represents the mention — a

@@ -51,7 +51,15 @@ DB = Path(__file__).parent / "matlas_example.sqlite"
 # One namespace per id space keeps two logically distinct rows that happen to share
 # natural-key text from ever colliding (schema §"The id scheme": one namespace per table).
 NS = uuid.UUID("9c4e7b1a-2d63-5f48-8a17-3b5c6d0e9f21")
-SEP = "\x1f"  # unit separator — a delimiter that cannot occur inside a path or a value
+SEP = "\x1f"  # unit separator — the join delimiter
+_ESC = "\x1b"  # escape introducer: _txt escapes _ESC and SEP so a value can never inject
+               # a bare delimiter (keeps l1_projection injective — schema §"L1 projection")
+
+# Optional-corner presence flags (schema §"The normative L1 projection"): an absent corner
+# and a present-but-empty one must render differently, so each optional section leads with
+# one of these; a present spatial/temporal corner also carries its component COUNT.
+_CORNER_PRESENT = "+"
+_CORNER_ABSENT = "-"
 
 # S2 leaf level: CellId.from_lat_lng always returns a level-30 leaf cell.
 S2_LEAF_LEVEL = 30
@@ -65,8 +73,12 @@ def u5(table: str, *parts: object) -> str:
 
 def _txt(part: object) -> str:
     # None becomes the empty string so a missing part is distinct-but-stable, never a
-    # literal "None" that could clash with a real value.
-    return "" if part is None else str(part)
+    # literal "None" that could clash with a real value. Then escape the two reserved
+    # control bytes (introducer first, then SEP) so a value carrying a literal 0x1F can
+    # never inject a delimiter — this is what keeps the join / L1 projection injective.
+    if part is None:
+        return ""
+    return str(part).replace(_ESC, _ESC + _ESC).replace(SEP, _ESC + SEP)
 
 
 def s2_signed_leaf(lat: float, lon: float) -> int:
@@ -90,13 +102,20 @@ def canonical_json(obj: object) -> str:
     """Canonical JSON per the canonical-JSON rule: sorted keys, no insignificant
     whitespace. Float source-text is preserved by keeping numbers as strings upstream,
     so json.dumps never re-formats a value it was given."""
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                      allow_nan=False)
 
 
 def l1_projection(*, entity, spatial, temporal, links, deleted, multiplicity,
                   activity) -> str:
     """The NORMATIVE L1 projection both digests hash (schema §"The normative L1
     projection"), in the exact field order — and only those fields.
+
+    Every variable-length section is FRAMED so the projection is injective: each optional
+    corner leads with a presence flag, and a present spatial/temporal corner carries an
+    explicit component COUNT before its rows (so a component can never shift across the
+    spatial/temporal boundary, and an absent corner never renders like a present-but-empty
+    one). Combined with ``_txt`` escaping SEP, the token stream is uniquely recoverable.
 
     Excluded normatively: concerns / concerns_uid / both origins, raw_identifier,
     component source_fields, all paths, all ids/run_id, all integrations, all analysis.
@@ -105,37 +124,39 @@ def l1_projection(*, entity, spatial, temporal, links, deleted, multiplicity,
     """
     parts: list[str] = []
 
-    # entity corner: identifier ⟂ identifier_type ⟂ type ⟂ entity_role
+    # entity corner: identifier ⟂ identifier_type ⟂ type ⟂ entity_role (always 4 slots)
     parts += [_txt(entity["identifier"]), _txt(entity["identifier_type"]),
               _txt(entity["type"]), _txt(links["entity_role"])]
 
-    # spatial expression: referential ⟂ spatial_source ⟂ components(part, role, raw)
+    # spatial: presence ⟂ [referential ⟂ spatial_source ⟂ count ⟂ components(part,role,raw)]
     if spatial is None:
-        parts += ["", ""]
+        parts += [_CORNER_ABSENT]
     else:
-        parts += [_txt(spatial["referential"]), _txt(spatial["spatial_source"])]
+        parts += [_CORNER_PRESENT, _txt(spatial["referential"]),
+                  _txt(spatial["spatial_source"]), str(len(spatial["components"]))]
         for c in spatial["components"]:  # already ordinal-ordered
             parts += [_txt(c["part"]), _txt(c["spatial_role"]), _txt(c["raw_value"])]
 
-    # temporal expression: kind ⟂ referential ⟂ components(part, role, stated_offset, raw)
+    # temporal: presence ⟂ [kind ⟂ referential ⟂ count ⟂ components(part,role,offset,raw)]
     if temporal is None:
-        parts += ["", ""]
+        parts += [_CORNER_ABSENT]
     else:
-        parts += [_txt(temporal["kind"]), _txt(temporal["referential"])]
+        parts += [_CORNER_PRESENT, _txt(temporal["kind"]),
+                  _txt(temporal["referential"]), str(len(temporal["components"]))]
         for c in temporal["components"]:
             parts += [_txt(c["part"]), _txt(c["temporal_role"]),
                       _txt(c["stated_offset"]), _txt(c["raw_value"])]
 
-    # the three links ⟂ deleted ⟂ multiplicity
+    # the three links ⟂ deleted ⟂ multiplicity (always 5 slots)
     parts += [_txt(links["entity_position_link"]), _txt(links["entity_time_link"]),
               _txt(links["spatial_temporal_link"]), _txt(deleted), _txt(multiplicity)]
 
-    # activity: kind ⟂ canonical context_json
+    # activity: presence ⟂ [kind ⟂ canonical context_json]
     if activity is None:
-        parts += ["", ""]
+        parts += [_CORNER_ABSENT]
     else:
         ctx = activity.get("context_json")
-        parts += [_txt(activity["kind"]),
+        parts += [_CORNER_PRESENT, _txt(activity["kind"]),
                   "" if ctx is None else canonical_json(ctx)]
 
     return SEP.join(parts)
