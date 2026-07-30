@@ -135,6 +135,12 @@ def _parse_file_header(data: bytes | mmap.mmap) -> _FileInfo:
     if page_size == 1:
         # §1.3: a stored page-size of 1 encodes 65536 (the value does not fit in u16).
         page_size = 65536
+    if page_size == 0:
+        # A valid SQLite page size is a power of two in 512..65536; 0 is impossible and
+        # would ZeroDivision the ``len(data) // page_size`` below. Reject with a clean,
+        # typed error (as the bad-magic guard above does) so ``carve_table`` — the public
+        # entry — degrades to "no carved rows" instead of crashing on a crafted header.
+        raise ValueError("not a SQLite database (page size 0)")
     first_freelist_trunk = struct.unpack(">I", data[32:36])[0]
     total_pages = len(data) // page_size
     return _FileInfo(

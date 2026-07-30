@@ -46,6 +46,7 @@ forcing ``table.column`` naming (``full_column_names``); see
 """
 from __future__ import annotations
 
+import contextlib
 import re
 import sqlite3
 
@@ -97,6 +98,13 @@ _ALLOWED_ACTIONS = frozenset(
         sqlite3.SQLITE_FUNCTION,
     }
 )
+
+# SQL functions denied BY NAME even though SQLITE_FUNCTION is otherwise allowed.
+# ``load_extension`` loads and runs native code from an arbitrary path, so it must
+# never pass the read-only boundary — denying it here means it is refused even on a
+# connection where extension loading has been toggled on (belt-and-braces with the
+# explicit ``enable_load_extension(False)`` in ``harden_connection``).
+_DENIED_FUNCTION_NAMES = frozenset({"load_extension"})
 
 
 def _blank_noise(sql: str) -> str:
@@ -171,6 +179,15 @@ def _readonly_authorizer(
     Returning ``SQLITE_DENY`` makes SQLite raise ``OperationalError`` at prepare
     time, which the extraction/preview paths catch — so a denied operation is a
     handled error, never a crash or a mutation of the working copy."""
+    if action == sqlite3.SQLITE_FUNCTION:
+        # For a SQLITE_FUNCTION authorization SQLite passes the function name as the
+        # third callback argument (``arg2``); ``arg1`` is None. Deny the dangerous
+        # ones by name (e.g. load_extension -> native code execution) and allow the
+        # rest — a read-only SELECT legitimately calls abs()/upper()/etc.
+        function_name = arg2 if isinstance(arg2, str) else ""
+        if function_name.lower() in _DENIED_FUNCTION_NAMES:
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
     return sqlite3.SQLITE_OK if action in _ALLOWED_ACTIONS else sqlite3.SQLITE_DENY
 
 
@@ -178,15 +195,29 @@ def harden_connection(conn: sqlite3.Connection) -> None:
     """Prepare ``conn`` to run a custom query read-only with faithful column
     names.
 
-    Two effects, applied in this order (the pragmas must run *before* the
+    Three effects, applied in this order (the pragmas must run *before* the
     authorizer, which would otherwise deny PRAGMA itself):
 
     1. ``short_column_names=OFF`` + ``full_column_names=ON`` make SQLite report
        every output column as ``table.column``. This disambiguates duplicate
        names from joins (e.g. two ``Z_PK``) without an AS rename — the
-       qualifier is the real table/alias name, so no name is invented.
-    2. ``set_authorizer`` installs the read-only gate described above.
+       qualifier is the real table/alias name, so no name is invented. It is
+       deprecated / a no-op on some builds, so ``_fetch`` in the reader still
+       guards against duplicate output column names rather than trusting it.
+    2. ``enable_load_extension(False)`` — extension loading is off by default,
+       but the read-only boundary OWNS that fact explicitly rather than
+       inheriting a default that a future caller might have flipped.
+    3. ``set_authorizer`` installs the read-only gate described above (which
+       also denies ``load_extension`` by name, so the guarantee holds even if
+       (2) were re-enabled downstream).
     """
     conn.execute("PRAGMA short_column_names = OFF")
     conn.execute("PRAGMA full_column_names = ON")
+    # A Python built without extension-loading support omits the method or raises
+    # NotSupportedError — in which case no extension can load anyway, so treat that
+    # as the desired end state rather than an error (a platform-capability guard, not
+    # control flow over an expected outcome).
+    if hasattr(conn, "enable_load_extension"):
+        with contextlib.suppress(sqlite3.NotSupportedError):
+            conn.enable_load_extension(False)
     conn.set_authorizer(_readonly_authorizer)

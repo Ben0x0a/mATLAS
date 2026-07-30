@@ -8,7 +8,7 @@ Depends on: ``model_atlas.core.determinism`` (``sqlite_enumeration_sql``, ``numb
             ``registry``, ``model_atlas.sqlite._sql.quote_identifier`` (the security fix
             below), ``model_atlas.sqlite.sql_query`` (``validate_custom_sql``/``harden_connection``
             for the custom-SQL path), ``model_atlas.sqlite.dedup.merge_with_source`` (the
-            unchanged two-pass origin-labelling algorithm), ``model_atlas.sqlite.carve``
+            multiset two-pass origin-labelling algorithm), ``model_atlas.sqlite.carve``
             (freelist + free-space carving of deleted rows), and ``pandas`` (the shape
             ``merge_with_source`` operates on).
 
@@ -22,7 +22,10 @@ table path (a custom SQL join has no single table/schema to carve) and reads the
 RAW bytes directly — never the staging copy or SQLite's row API, which only see live rows.
 
 Ported from ``sources/readers/sqlite_reader.py``: the WAL/journal two-pass
-merge algorithm (``merge_with_source``) is reused UNCHANGED. What differs is the row
+merge (``merge_with_source``) keeps the same two-pass SHAPE but now matches the passes by
+VALUE MULTISET, so two genuinely-distinct rows with identical column values BOTH survive
+(observation semantics) while only the true cross-pass overlap is coalesced — see
+``model_atlas.sqlite.dedup``. What else differs from the old engine is the row
 FETCH: the old engine's reader ran a bare ``SELECT * FROM table`` with no explicit order,
 relying on SQLite's incidental scan order. Rule 1 requires a PINNED order (``rowid``, or
 primary-key order for a ``WITHOUT ROWID`` table), so this reader builds its own two-pass
@@ -48,6 +51,7 @@ import logging
 import shutil
 import sqlite3
 import tempfile
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -102,6 +106,21 @@ def _sidecar_recovery_source(sidecar_label: str) -> RecoverySource:
     return RecoverySource.UNKNOWN
 
 
+def _carve_recovery_source(carve_tag: str) -> RecoverySource:
+    """The ``RecoverySource`` for a carved row: FREELIST or FREESPACE by tag, UNKNOWN for
+    any unrecognised tag.
+
+    WHY a fallback rather than ``RecoverySource(carve_tag)``: the direct enum lookup RAISES
+    on an unknown value, which — inside the per-row carve loop — would abort the whole read
+    and lose the already-merged LIVE rows. A future carve tag must degrade to UNKNOWN, not
+    kill the read (mirrors ``_sidecar_recovery_source``)."""
+    if carve_tag == RecoverySource.FREELIST.value:
+        return RecoverySource.FREELIST
+    if carve_tag == RecoverySource.FREESPACE.value:
+        return RecoverySource.FREESPACE
+    return RecoverySource.UNKNOWN
+
+
 @contextlib.contextmanager
 def _prepared_copy(
     db_path: Path, siblings: dict[str, Path], *, include_sidecars: bool,
@@ -133,6 +152,20 @@ def _fetch(conn: sqlite3.Connection, sql: str) -> tuple[list[dict[str, Any]], li
     # a dict does not. The envelope is applied once, after the merge, in iter_records.
     cursor = conn.execute(sql)
     columns = [description[0] for description in cursor.description]
+    # A row is keyed by column NAME (dict), so two output columns sharing a name would
+    # silently collapse under dict(zip(...)) — one side's data lost. This happens on a
+    # self-join SELECT * whose table-qualified naming (see harden_connection) still repeats
+    # a name — e.g. an old build where full_column_names is a no-op, or duplicate literals
+    # like ``SELECT id, id``. Reject it with a clear error rather than drop a column: a
+    # faithful extractor must never silently discard evidence, and (AS being forbidden) the
+    # user's recourse is to project the columns explicitly.
+    duplicates = sorted({name for name, count in Counter(columns).items() if count > 1})
+    if duplicates:
+        raise ValueError(
+            f"query returned duplicate output column name(s) {duplicates}: two columns "
+            f"with the same name would collapse and lose data. Project the columns "
+            f"explicitly so every output name is unique (renaming with AS is not allowed)."
+        )
     rows = [dict(zip(columns, record)) for record in cursor.fetchall()]
     return rows, columns
 
@@ -193,9 +226,16 @@ class SqliteReader:
             )
         columns = db_only_columns
 
+        # dtype=object on BOTH frames: without it, an integer column carrying a NULL in
+        # one pass is promoted int64 -> float64 by pandas, which loses precision above
+        # 2**53 (a large id would collide with its neighbour, and a committed row would
+        # mis-match its own sidecar re-read). Object dtype keeps every value as its native
+        # Python type (int stays int, None stays None), so the merge compares true values
+        # and an integer cell is yielded as an int, never a float. Both frames MUST share
+        # the dtype so the two passes align — see model_atlas.sqlite.dedup.
         merged = merge_with_source(
-            pd.DataFrame(db_only_rows, columns=columns),
-            pd.DataFrame(with_sidecars_rows, columns=columns),
+            pd.DataFrame(db_only_rows, columns=columns, dtype=object),
+            pd.DataFrame(with_sidecars_rows, columns=columns, dtype=object),
             sidecar_label=sidecar_label,
         )
 
@@ -225,10 +265,28 @@ class SqliteReader:
         # one continuing sequence behind the live rows. Only the table path carves (a
         # custom SQL join has no single schema); the carver reads `source`'s raw bytes,
         # never the staging copy. The carver's freelist/freespace tag becomes the row's
-        # recovery_source (its colname values ARE the enum values — a direct mapping).
+        # recovery_source via _carve_recovery_source (an unknown tag -> UNKNOWN, never a
+        # raise), and the whole pass is isolated so a carve failure cannot lose live rows.
         if table is not None and params.get("carve", True):
-            for carved in carve_table(source, str(table), columns=columns):
-                carved[_RECOVERY_SOURCE_KEY] = RecoverySource(carved.pop(CARVE_SOURCE_COLNAME))
+            # Carving is BEST-EFFORT and ADDITIONAL. Any failure — a table name that will
+            # not pass carve's strict identifier quoting, a corrupt page-size header, an
+            # unexpected byte layout — must degrade to "no carved rows" and NEVER lose the
+            # live + sidecar-recovered rows already merged above. Losing recoverable
+            # deleted rows is regrettable; losing LIVE evidence to a carve bug is not
+            # acceptable, so the whole pass is isolated. (carve_table returns a fully
+            # materialised list, so the call runs to completion inside this guard.)
+            try:
+                carved_rows = carve_table(source, str(table), columns=columns)
+            except Exception as exc:  # noqa: BLE001 - best-effort recovery must not abort the read
+                log.warning(
+                    f"carve pass failed for table {table!r} in {source}: {exc} — "
+                    f"continuing with live + sidecar-recovered rows only"
+                )
+                carved_rows = []
+            for carved in carved_rows:
+                carved[_RECOVERY_SOURCE_KEY] = _carve_recovery_source(
+                    carved.pop(CARVE_SOURCE_COLNAME)
+                )
                 recovered.append(carved)
 
         for line_no, fields, is_recovered in numbered_records(live, recovered):

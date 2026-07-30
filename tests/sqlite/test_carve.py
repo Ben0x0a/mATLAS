@@ -14,8 +14,12 @@ analyst would treat a carved id column as unreliable.
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
+import struct
 from pathlib import Path
+
+import pytest
 
 from model_atlas.core.vocabularies import RecordState, RecoverySource
 from model_atlas.ingest.readers.sqlite_reader import SqliteReader
@@ -23,6 +27,8 @@ from model_atlas.sqlite.carve import (
     CARVE_SOURCE_COLNAME,
     FREELIST_SOURCE_NAME,
     FREESPACE_SOURCE_NAME,
+    _HEADER_MAGIC,
+    _parse_file_header,
     carve_table,
 )
 
@@ -199,3 +205,43 @@ def test_reader_clean_db_has_no_carved_rows(tmp_path: Path) -> None:
     records = list(SqliteReader().iter_records(db, "locations"))
     assert [r.recovery_state for r in records] == [RecordState.LIVE, RecordState.LIVE]
     assert [r.fields["id"] for r in records] == [1, 2]
+
+
+# --- FIX-01: a carve failure must never abort the live read -----------------
+
+def test_reader_carve_failure_keeps_all_live_rows(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A table whose name contains a `"` makes carve's strict identifier quoting RAISE
+    # (the live read tolerates it via quote-doubling). The carve pass must degrade to
+    # "no carved rows" — with a logged warning — while EVERY live row is still yielded.
+    db = tmp_path / "quoted.sqlite"
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute('CREATE TABLE "we""ird" (id INTEGER, v TEXT)')
+        conn.executemany('INSERT INTO "we""ird" VALUES (?, ?)', [(1, "a"), (2, "b"), (3, "c")])
+        conn.commit()
+    finally:
+        conn.close()
+
+    with caplog.at_level(logging.WARNING):
+        records = list(SqliteReader().iter_records(db, 'we"ird'))
+
+    assert [r.fields["id"] for r in records] == [1, 2, 3]  # ALL live rows survived
+    assert all(r.recovery_state == RecordState.LIVE for r in records)
+    assert any("carve pass failed" in message for message in caplog.messages)
+
+
+def _header_with_page_size(page_size: int) -> bytes:
+    """A 100-byte SQLite database header carrying ``page_size`` at bytes 16:18."""
+    header = bytearray(100)
+    header[: len(_HEADER_MAGIC)] = _HEADER_MAGIC
+    struct.pack_into(">H", header, 16, page_size)
+    return bytes(header)
+
+
+def test_parse_file_header_page_size_zero_raises_valueerror_not_zerodivision() -> None:
+    # A crafted header with page_size == 0 must NOT ZeroDivision the total-pages maths;
+    # it degrades to a clean, typed ValueError (which carve_table's caller isolates).
+    with pytest.raises(ValueError):
+        _parse_file_header(_header_with_page_size(0))
