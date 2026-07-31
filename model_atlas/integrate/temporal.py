@@ -217,6 +217,17 @@ def _offset_tag(offset_hours: float) -> str:
     return f"{sign}{hours:02d}:{mins:02d}"
 
 
+def _offset_is_applied(offset: float | str | None) -> bool:
+    """True when a REAL numeric offset was applied to reach UTC (a float).
+
+    WHY a distinct predicate: the three-state offset contract (float / None /
+    UTC_OFFSET_UNKNOWN) means "an offset was applied" is *offset is a float* — the
+    ``None`` (absolute-UTC epoch) and the ``UTC_OFFSET_UNKNOWN`` (assumed) states are
+    NOT applied offsets. ``bool`` is excluded because ``True``/``False`` are ints.
+    """
+    return isinstance(offset, (int, float)) and not isinstance(offset, bool)
+
+
 def _bound_cells(unix_us: int | None,
                  offset: float | str | None) -> tuple[str, int | None, int | None]:
     """The convenience cells for ONE bound: (datetime_iso, date µs, time-of-day µs).
@@ -236,7 +247,7 @@ def _bound_cells(unix_us: int | None,
     """
     if unix_us is None:
         return "", None, None
-    known = isinstance(offset, (int, float)) and not isinstance(offset, bool)
+    known = _offset_is_applied(offset)
     applied = float(offset) if known else 0.0
     local_us = unix_us + int(round(applied * _US_PER_HOUR))
     local = _UNIX_EPOCH + dt.timedelta(microseconds=local_us)
@@ -362,6 +373,17 @@ class _TemporalMethodBase:
     def _decode_bound(self, expression: TemporalExpressionBundle, side: str) -> _Bound:
         raise NotImplementedError
 
+    def _method_string(self, lower: _Bound, upper: _Bound) -> str:
+        """The stored method string for THIS row, given its decoded bounds.
+
+        Default: the static ``method`` — a Method whose identity does not depend on
+        what the bounds turned out to be. ``DatetimeCombineMethod`` overrides it: its
+        zone-rule tail must name what was ACTUALLY applied to a bound (tz-localise when
+        an offset was applied, assume-utc when UTC was assumed), so a third party can
+        reconstruct the derivation rather than read a tail chosen purely on config.
+        """
+        return self.method
+
     def integrate(self, expression: TemporalExpressionBundle) -> V.TimespanIntegration | None:
         """Decode both bounds and build the ONE integration row (no store access).
 
@@ -371,20 +393,28 @@ class _TemporalMethodBase:
         lower = self._decode_bound(expression, _LOWER_PART_NAME)
         upper = self._decode_bound(expression, _UPPER_PART_NAME)
         # An instant is one clock reading: both bounds carry it (the interval
-        # degenerates to [t, t]), so a lone lower fills the upper — the worked
-        # examples' shape, and what interval queries expect.
+        # degenerates to [t, t]), so a lone decoded bound fills the other — the worked
+        # examples' shape, and what interval queries expect. Symmetric on purpose: an
+        # instant whose ONLY decoded bound is the upper (the lower failed to parse, or
+        # the value was recorded under the 'upper' part) must still collapse to [t, t];
+        # a one-directional copy would leave a half-empty [NULL, t] that lower-bound and
+        # interval queries misread as open-below instead of the point t.
         kind = _value_of(expression.expression.kind)
-        if kind == _INSTANT_KIND_NAME and upper.unix_us is None and lower.unix_us is not None:
-            upper = lower
+        if kind == _INSTANT_KIND_NAME:
+            if upper.unix_us is None and lower.unix_us is not None:
+                upper = lower
+            elif lower.unix_us is None and upper.unix_us is not None:
+                lower = upper
         if lower.unix_us is None and upper.unix_us is None:
             return None
         lower_iso, lower_date, lower_time = _bound_cells(lower.unix_us, lower.offset)
         upper_iso, upper_date, upper_time = _bound_cells(upper.unix_us, upper.offset)
         expression_id = expression.expression.temporal_expression_id
+        method_string = self._method_string(lower, upper)
         return V.TimespanIntegration(
-            timespan_integration_id=ids.timespan_integration_id(expression_id, self.method),
+            timespan_integration_id=ids.timespan_integration_id(expression_id, method_string),
             temporal_expression_id=expression_id,
-            method=self.method,
+            method=method_string,
             lower_unix_utc_us=lower.unix_us,
             upper_unix_utc_us=upper.unix_us,
             lower_datetime_iso=lower_iso,
@@ -513,23 +543,35 @@ class _ClockMethodBase(_TemporalMethodBase):
         self._format = datetime_format
         self.time_accuracy_us = time_accuracy_us
 
-    def _parse(self, text: str) -> dt.datetime | None:
-        """Parse the verbatim text to a datetime (aware when it carries an offset).
+    def _try_parse(self, text: str) -> dt.datetime | None:
+        """Parse the verbatim text to a datetime (aware when it carries an offset), or
+        None — WITHOUT logging. A configured strptime format wins (the local_string
+        referential — the caller knows the source's spelling); otherwise ISO-8601.
 
-        A configured strptime format wins (the local_string referential — the caller
-        knows the source's spelling); otherwise ISO-8601. Unparseable -> None + a
-        warning, never a raise: one bad cell must not sink the expression.
+        WHY a silent variant: ``applies_to`` probes the value to decide whether it
+        carries its own offset, and a probe must not emit a bound-skipped warning; the
+        logging wrapper ``_parse`` is for the decode path where a failure IS a skip.
         """
         if self._format is not None:
             try:
                 return dt.datetime.strptime(text, self._format)
             except ValueError:
+                return None
+        return parse_iso8601(text)
+
+    def _parse(self, text: str) -> dt.datetime | None:
+        """``_try_parse`` plus the bound-skipped warning on failure.
+
+        Unparseable -> None + a warning, never a raise: one bad cell must not sink the
+        expression.
+        """
+        parsed = self._try_parse(text)
+        if parsed is None:
+            if self._format is not None:
                 _LOG.warning(f"value {text!r} does not match format {self._format!r}; "
                              f"bound skipped")
-                return None
-        parsed = parse_iso8601(text)
-        if parsed is None:
-            _LOG.warning(f"unparseable ISO-8601 value {text!r}; bound skipped")
+            else:
+                _LOG.warning(f"unparseable ISO-8601 value {text!r}; bound skipped")
         return parsed
 
 
@@ -567,8 +609,14 @@ class TzLocaliseMethod(_ClockMethodBase):
             if parse_zone_token(component.stated_offset) is not None:
                 return True
             text = _raw_text(component)
-            if text is not None and self._format is None:
-                parsed = parse_iso8601(text)
+            if text is not None:
+                # Probe the value for its OWN offset under WHATEVER parse the method uses
+                # (a configured %z format, else ISO-8601). WHY not gate on
+                # ``self._format is None``: a local_string parsed via a %z format still
+                # carries a real offset, and declining it here dumps the bound on
+                # AssumeUtc, which honours the offset yet mis-stamps it ``assume_utc`` —
+                # the value-borne offset would be applied under the wrong method name.
+                parsed = self._try_parse(text)
                 if parsed is not None and parsed.tzinfo is not None:
                     return True
         return False
@@ -624,16 +672,22 @@ class DatetimeCombineMethod(_TemporalMethodBase):
 
     The L1 assembler keeps a bound spanning a date column and a time column as TWO
     verbatim component rows (``lower_date`` + ``lower_time``); this method combines
-    them into one naive clock, then resolves the zone through the same ladder as
+    them into one clock, then resolves the zone through the same ladder as
     TzLocalise (each bound's ``stated_offset`` — the time component's first, else
-    the date's). A date with no time column is decoded at midnight; its accuracy is
-    NOT invented (day-granularity is representation, not a stated uncertainty) — it stays
-    unset unless the method carries a source-provided one. A time with no date cannot be
-    anchored to an instant — that bound stays absent (empty cells), never invented.
+    the date's). A value carrying its OWN inline offset (a time cell like
+    ``02:20:31+01:00``) is honoured as parsed, exactly like TzLocalise's value-borne
+    branch — never dropped by a bare ``%H:%M:%S`` strptime. A date with no time column
+    is decoded at midnight; its accuracy is NOT invented (day-granularity is
+    representation, not a stated uncertainty) — it stays unset unless the method carries
+    a source-provided one. A time with no date cannot be anchored to an instant — that
+    bound stays absent (empty cells), never invented.
 
     The method string is a composite (the demo's ``+`` convention): the combine
     rule plus the zone rule it delegates to, e.g.
-    ``datetime_combine/1.0+tz_localize/1.0/tzdb=2026a``.
+    ``datetime_combine/1.0+tz_localize/1.0/tzdb=2026a``. The tail names what was
+    ACTUALLY applied — tz-localise when an offset was applied to a bound (a configured
+    zone OR a value-borne/stated offset), assume-utc only when UTC was truly assumed —
+    so the audit stamp is reconstructable, never ``assume_utc`` over an applied offset.
     """
 
     name = "datetime_combine"
@@ -646,17 +700,54 @@ class DatetimeCombineMethod(_TemporalMethodBase):
         self._time_format = time_format
         self.time_accuracy_us = time_accuracy_us
 
+    def _tail(self, applied: bool) -> str:
+        """The zone-rule fragment this composite delegates to: tz-localise when an
+        offset was applied (a configured zone OR a bound's own offset), else assume-utc."""
+        if self._zone is not None or applied:
+            return f"{TzLocaliseMethod.name}/1.0/tzdb={_TZDB_VERSION}"
+        return f"{AssumeUtcMethod.name}/1.0"
+
     @property
     def method(self) -> str:
-        tail = (f"{TzLocaliseMethod.name}/1.0/tzdb={_TZDB_VERSION}"
-                if self._zone is not None else f"{AssumeUtcMethod.name}/1.0")
-        return f"{self.name}/{self.version}+{tail}"
+        # The static default (config-based, no bounds yet): the applied-offset
+        # refinement happens in ``_method_string`` once the bounds are decoded, so id
+        # and stamp agree on the row that actually ran.
+        return f"{self.name}/{self.version}+{self._tail(applied=False)}"
+
+    def _method_string(self, lower: _Bound, upper: _Bound) -> str:
+        applied = _offset_is_applied(lower.offset) or _offset_is_applied(upper.offset)
+        return f"{self.name}/{self.version}+{self._tail(applied)}"
 
     def applies_to(self, expression: TemporalExpressionBundle) -> bool:
         split_parts = {side + suffix
                        for side in (_LOWER_PART_NAME, _UPPER_PART_NAME)
                        for suffix in (_DATE_SUFFIX_NAME, _TIME_SUFFIX_NAME)}
         return any(component.part in split_parts for component in expression.components)
+
+    def _combine_parse(self, date_text: str, time_text: str | None) -> dt.datetime | None:
+        """Parse the date⊕time pair to a datetime (aware if a cell carries an inline
+        offset), or None.
+
+        HOW: try the bare configured formats first; on failure retry with a trailing
+        ``%z`` so a value like ``02:20:31+01:00`` parses to an AWARE datetime instead of
+        raising and dropping the whole bound. WHY the bare attempt first: a bare ``%z``
+        REQUIRES an offset and would reject the common offset-less cell, so it can only
+        be the fallback, never the primary parse.
+        """
+        if time_text is not None:
+            text = f"{date_text} {time_text}"
+            fmt = f"{self._date_format} {self._time_format}"
+        else:
+            text = date_text
+            fmt = self._date_format
+        try:
+            return dt.datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+        try:
+            return dt.datetime.strptime(text, fmt + "%z")
+        except ValueError:
+            return None
 
     def _decode_bound(self, expression: TemporalExpressionBundle, side: str) -> _Bound:
         date_component = _component(expression, side + _DATE_SUFFIX_NAME)
@@ -670,19 +761,19 @@ class DatetimeCombineMethod(_TemporalMethodBase):
                 _LOG.warning(f"time-of-day {time_text!r} has no date column to anchor "
                              f"it; bound skipped")
             return _ABSENT_BOUND
-        try:
-            if time_text is not None:
-                naive = dt.datetime.strptime(f"{date_text} {time_text}",
-                                             f"{self._date_format} {self._time_format}")
-            else:
-                naive = dt.datetime.strptime(date_text, self._date_format)
-            # Accuracy is a source-provided uncertainty, never derived from the date's
-            # day-granularity (that is representation resolution, not an accuracy claim).
-            accuracy = self._bound_accuracy(expression, side)
-        except ValueError:
+        parsed = self._combine_parse(date_text, time_text)
+        if parsed is None:
             _LOG.warning(f"date/time pair ({date_text!r}, {time_text!r}) does not match "
                          f"({self._date_format!r}, {self._time_format!r}); bound skipped")
             return _ABSENT_BOUND
+        # Accuracy is a source-provided uncertainty, never derived from the date's
+        # day-granularity (that is representation resolution, not an accuracy claim).
+        accuracy = self._bound_accuracy(expression, side)
+        if parsed.tzinfo is not None:
+            # The value carried its OWN inline offset — honoured as parsed (like
+            # TzLocalise's value-borne branch); nothing assumed, nothing dropped.
+            return _Bound(datetime_to_us(parsed),
+                          parsed.utcoffset().total_seconds() / 3600, accuracy)
         # The bound's stated offset: the time component's when present (the clock
         # column is where sources state zones), falling back to the date's.
         stated = None
@@ -691,7 +782,7 @@ class DatetimeCombineMethod(_TemporalMethodBase):
         elif date_component is not None:
             stated = date_component.stated_offset
         raw = date_text if time_text is None else f"{date_text} {time_text}"
-        unix_us, offset = _resolve_naive(naive, stated, self._zone, raw)
+        unix_us, offset = _resolve_naive(parsed, stated, self._zone, raw)
         return _Bound(unix_us, offset, accuracy)
 
 

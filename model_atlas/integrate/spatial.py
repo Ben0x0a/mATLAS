@@ -40,6 +40,7 @@ future implementation cannot miss it.
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Mapping, Protocol, Sequence
@@ -129,11 +130,22 @@ def _parse_float(part: str, raw_value: str) -> float:
     producing a row without that column would hide the bug (no-silent-loss).
     """
     try:
-        return float(raw_value)
+        value = float(raw_value)
     except ValueError as exc:
         raise ValueError(
             f"spatial part {part!r} carries a non-numeric raw value {raw_value!r}; "
             f"the preset mapped a non-numeric source column onto a numeric part") from exc
+    # HOW: bare float() also parses 'inf'/'nan'/'infinity' (and underscore/whitespace
+    # forms), so a non-finite result must be rejected explicitly. WHY loudly, like the
+    # non-numeric case: a non-finite magnitude is bogus evidence — an 'inf' speed would
+    # be stamped as a real value, and 'nan'/'inf' under latitude/longitude crashes deep
+    # in s2sphere's from_lat_lng assertion, aborting integration of every later
+    # expression rather than failing this one cleanly.
+    if not math.isfinite(value):
+        raise ValueError(
+            f"spatial part {part!r} carries a non-finite raw value {raw_value!r}; "
+            f"a nan/inf value is not a valid coordinate or metric magnitude")
+    return value
 
 
 # --- the Method protocol (docs/refactor_plan.md §3) --------------------------

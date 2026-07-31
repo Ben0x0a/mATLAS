@@ -304,6 +304,52 @@ def test_datetime_combine_with_zone_localises_and_stamps_tzdb(store) -> None:
     assert row["method"].startswith("datetime_combine/1.0+tz_localize/1.0/tzdb=")
 
 
+def test_instant_collapse_is_symmetric_when_only_the_upper_decodes(store) -> None:
+    # An instant recorded SOLELY under the upper part (the lower failed to parse, or the
+    # value lived in the 'upper' column) must still collapse to [t, t]; a one-directional
+    # copy would leave [NULL, t] that lower-bound/interval queries misread as open-below.
+    bundle = _bundle(store, "upper-only", "instant", "unix_epoch_s",
+                     [("upper", None, "1773450680")])
+    integrate_expression(store, bundle, epoch_methods())
+    row = _row(store, bundle)
+    assert row["upper_unix_utc_us"] == 1_773_450_680_000_000
+    assert row["lower_unix_utc_us"] == row["upper_unix_utc_us"]      # collapsed downward
+    assert row["lower_datetime_iso"] == row["upper_datetime_iso"]
+    assert row["utc_offset_hours_lower"] == row["utc_offset_hours_upper"]
+
+
+def test_datetime_combine_honours_an_inline_time_offset_and_stamps_tz(store) -> None:
+    # A time cell carrying its OWN +01:00 must decode (not be dropped by a bare
+    # %H:%M:%S strptime) AND — zone-less — be stamped tz_localize, never assume_utc,
+    # because an offset was in fact applied for the bound (audit accuracy).
+    bundle = _bundle(store, "combine-inline", "instant", "local_string", [
+        ("lower_date", None, "2026-03-14"),
+        ("lower_time", None, "02:20:31+01:00"),
+    ])
+    integrate_expression(store, bundle, [DatetimeCombineMethod()])
+    row = _row(store, bundle)
+    assert row["lower_unix_utc_us"] == _us(2026, 3, 14, 1, 20, 31)   # 02:20:31 +1
+    assert float(row["utc_offset_hours_lower"]) == 1.0
+    assert row["lower_datetime_iso"] == "2026-03-14T02:20:31.000000+01:00"
+    assert row["method"].startswith("datetime_combine/1.0+tz_localize/1.0/tzdb=")
+    assert "assume_utc" not in row["method"]
+
+
+def test_zoneless_format_borne_offset_is_stamped_tz_localize_not_assume_utc(store) -> None:
+    # 3(b): a local_string parsed through a %z format carries a real offset; with NO zone
+    # configured it must still dispatch to tz_localize (the offset is applied), not fall
+    # through to assume_utc, which would honour the offset yet mis-stamp the derivation.
+    methods = standard_methods(datetime_format="%d.%m.%Y %H:%M:%S %z")
+    bundle = _bundle(store, "fmt-offset", "instant", "local_string",
+                     [("lower", None, "14.03.2026 02:20:31 +0100")])
+    written = integrate_expression(store, bundle, methods)
+    assert written is not None
+    assert written.method.startswith("tz_localize/")     # not assume_utc
+    row = _row(store, bundle)
+    assert float(row["utc_offset_hours_lower"]) == 1.0
+    assert row["lower_unix_utc_us"] == _us(2026, 3, 14, 1, 20, 31)
+
+
 def test_datetime_combine_date_only_decodes_at_midnight_without_inventing_accuracy(store) -> None:
     bundle = _bundle(store, "dateonly", "instant", "local_string",
                      [("lower_date", None, "2026-03-14")])

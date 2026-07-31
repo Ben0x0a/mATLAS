@@ -184,6 +184,35 @@ def test_non_numeric_raw_value_raises_loudly() -> None:
         PassthroughWgs84().integrate(expression)
 
 
+@pytest.mark.parametrize("raw", ["inf", "-inf", "Infinity", "nan"])
+def test_non_finite_metric_raw_value_raises_not_bogus_magnitude(raw: str) -> None:
+    # Some devices emit 'inf' for an unknown speed/accuracy: bare float() would parse it
+    # and silently stamp horizontal_speed_kmh = inf as evidence. It must raise instead.
+    expression = SpatialExpressionInput(
+        "sx-test", "unknown", {"horizontal_speed_kmh": raw})
+    with pytest.raises(ValueError):
+        UnitConvert().integrate(expression)
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf"])
+def test_non_finite_coordinate_raises_before_s2sphere(raw: str) -> None:
+    # 'nan'/'inf' under a coordinate must raise the documented ValueError HERE, not crash
+    # deep in s2sphere.from_lat_lng (an AssertionError that would abort the whole pass).
+    expression = SpatialExpressionInput(
+        "sx-test", "epsg:4326", {"latitude_wgs84": raw, "longitude_wgs84": "6.14"})
+    with pytest.raises(ValueError):
+        PassthroughWgs84().integrate(expression)
+
+
+def test_finite_float_still_parses() -> None:
+    # The guard rejects only non-finite values — an ordinary coordinate is untouched.
+    expression = SpatialExpressionInput(
+        "sx-test", "epsg:4326",
+        {"latitude_wgs84": "46.2030", "longitude_wgs84": "6.1430"})
+    assert PassthroughWgs84().integrate(expression) == {
+        "latitude_wgs84": 46.2030, "longitude_wgs84": 6.1430}
+
+
 # --- every row has a method; no coordinates -> no index row --------------------
 
 def test_every_integration_row_is_method_stamped() -> None:
