@@ -36,15 +36,13 @@ from ufdr_parser.const import (
     TAG_MODEL,
 )
 from ufdr_parser.models import FlatRecord, flatten_model
+from ufdr_parser.scan import find_decoded_data
 from ufdr_parser.source_lookup import SourceEntry, parse_extra_info
 
 log = logging.getLogger(__name__)
 
 Item = FlatRecord | SourceEntry
 
-# Section we start parsing at; everything before it (header + taggedFiles) is skipped.
-_DECODED_MARKER = b"<decodedData"
-_CHUNK = 8 * 1024 * 1024
 # Synthetic root so a fragment beginning at <decodedData> is well-formed and namespaced.
 # The report's own trailing </project> closes it (we read to EOF).
 _SYNTHETIC_ROOT = f'<?xml version="1.0" encoding="utf-8"?><project xmlns="{NS}">'.encode()
@@ -130,22 +128,17 @@ def iter_block_models(stream: BinaryIO) -> "Iterator[FlatRecord]":
 def _skip_to_decoded_data(stream: BinaryIO) -> BinaryIO:
     """Return a stream positioned at ``<decodedData>`` under a synthetic namespaced root.
 
-    Reads ``stream`` forward (cheap byte scan, no XML build) until the decodedData marker,
-    then chains the synthetic root + the marker-onward bytes ahead of the rest of stream.
+    Reads ``stream`` forward (CDATA-aware byte scan, no XML build) via the shared
+    ``find_decoded_data`` until the real decodedData element, then chains the synthetic root +
+    the marker-onward bytes ahead of the rest of stream. Sharing the finder with the scanner
+    means a literal ``<decodedData`` inside skipped taggedFiles CDATA cannot mis-anchor here.
     """
-    carry = b""
-    overlap = len(_DECODED_MARKER) - 1
-    while True:
-        chunk = stream.read(_CHUNK)
-        if not chunk:
-            # No decodedData (e.g. an empty/odd report): yield a valid, empty document.
-            log.warning("no <decodedData> section found; nothing to parse")
-            return ChainedReader(_SYNTHETIC_ROOT + b"</project>", stream)
-        data = carry + chunk
-        index = data.find(_DECODED_MARKER)
-        if index != -1:
-            return ChainedReader(_SYNTHETIC_ROOT + data[index:], stream)
-        carry = data[-overlap:]
+    tail, _offset = find_decoded_data(stream)
+    if not tail:
+        # No decodedData (e.g. an empty/odd report): yield a valid, empty document.
+        log.warning("no <decodedData> section found; nothing to parse")
+        return ChainedReader(_SYNTHETIC_ROOT + b"</project>", stream)
+    return ChainedReader(_SYNTHETIC_ROOT + tail, stream)
 
 
 def _purge(elem: "etree._Element") -> None:

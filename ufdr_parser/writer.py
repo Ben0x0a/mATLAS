@@ -22,7 +22,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 from ufdr_parser.const import (
     COL_MAIN_UUID,
@@ -45,13 +45,13 @@ class CsvSink:
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
-        self._pending: list[tuple[int, str, str | None, str | None, str]] = []
+        self._pending: list[tuple[int, str, str | None, str | None, str | None, str]] = []
         # (level, model_type) -> ordered field names (dict used as an ordered set).
         self._field_order: dict[tuple[int, str], dict[str, None]] = {}
         conn.execute(
             "CREATE TABLE IF NOT EXISTS records ("
             "seq INTEGER PRIMARY KEY AUTOINCREMENT, level INTEGER, model_type TEXT, "
-            "id TEXT, parent_id TEXT, fields_json TEXT)"
+            "id TEXT, parent_id TEXT, top_id TEXT, fields_json TEXT)"
         )
         # Group lookups (flush + parallel merge) filter by (level, model_type); index it so
         # a flush does not full-scan the spill once per output file.
@@ -68,6 +68,7 @@ class CsvSink:
                 record.model_type,
                 record.model_id,
                 record.parent_id,
+                record.top_id,
                 json.dumps(record.fields, ensure_ascii=False),
             )
         )
@@ -78,8 +79,8 @@ class CsvSink:
         if not self._pending:
             return
         self._conn.executemany(
-            "INSERT INTO records (level, model_type, id, parent_id, fields_json) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO records (level, model_type, id, parent_id, top_id, fields_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             self._pending,
         )
         self._pending.clear()
@@ -100,15 +101,17 @@ class CsvSink:
     def groups(self, out_dir: Path, base: str) -> list["GroupSpec"]:
         """The per-(level, type) write jobs: filename + full header, in stable order."""
         out_dir = Path(out_dir)
+        keys = sorted(self._field_order)
+        filenames = group_filenames(keys, base)
         specs: list[GroupSpec] = []
-        for level, model_type in sorted(self._field_order):
-            header = (
-                id_columns(level)
-                + list(self._field_order[(level, model_type)])
-                + list(SOURCE_COLUMNS)
+        for level, model_type in keys:
+            field_names = list(self._field_order[(level, model_type)])
+            header, column_map = group_columns(level, field_names)
+            specs.append(
+                GroupSpec(
+                    level, model_type, header, out_dir / filenames[(level, model_type)], column_map
+                )
             )
-            filename = f"{base}_{LEVEL_FILE_PREFIX[level]}{model_type}.csv"
-            specs.append(GroupSpec(level, model_type, header, out_dir / filename))
         return specs
 
     def flush(
@@ -149,17 +152,84 @@ class CsvSink:
 
 @dataclass(frozen=True)
 class GroupSpec:
-    """One CSV write job: which (level, type) goes to which file with which header."""
+    """One CSV write job: which (level, type) goes to which file with which header.
+
+    ``column_map`` maps a raw field name to its CSV column, renaming any that would collide
+    with an injected identity/source column (see ``group_columns``).
+    """
 
     level: int
     model_type: str
     header: list[str]
     path: Path
+    column_map: dict[str, str]
 
 
 def id_columns(level: int) -> list[str]:
     """The identity columns written ahead of a record's fields, by nesting level."""
     return [COL_UUID] if level == LEVEL_TOP else [COL_SUB_UUID, COL_MAIN_UUID]
+
+
+def group_filenames(
+    keys: Iterable[tuple[int, str]], base: str
+) -> dict[tuple[int, str], str]:
+    """Assign each ``(level, model_type)`` group a UNIQUE CSV filename.
+
+    HOW: the legacy name is ``<base>_<LEVEL_FILE_PREFIX[level]><model_type>.csv``; this is kept
+    when unique, but on a collision the level is spelled out (``__L<level>``) and, if that too
+    is taken, a counter is appended, so two distinct groups never share a path. Keys are sorted
+    first so the assignment is deterministic across serial and parallel runs.
+    WHY: the prefix is concatenated straight onto the type, so a top-level ``SMS`` (prefix "")
+    and a level-1 ``S`` (prefix "SM") both map to ``<base>_SMS.csv``; the second ``open("w")``
+    then truncates the first and one type's rows vanish while ``files``/``record_count`` no
+    longer reconcile — silent data loss this guarantees against.
+    """
+    used: set[str] = set()
+    result: dict[tuple[int, str], str] = {}
+    for level, model_type in sorted(keys):
+        stem = f"{base}_{LEVEL_FILE_PREFIX[level]}{model_type}"
+        candidate = f"{stem}.csv"
+        if candidate in used:
+            candidate = f"{stem}__L{level}.csv"
+            counter = 1
+            while candidate in used:
+                counter += 1
+                candidate = f"{stem}__L{level}_{counter}.csv"
+        used.add(candidate)
+        result[(level, model_type)] = candidate
+    return result
+
+
+def group_columns(
+    level: int, field_names: Iterable[str]
+) -> tuple[list[str], dict[str, str]]:
+    """Build a group's full CSV header and its ``{raw field name: column name}`` map.
+
+    HOW: the header is the identity columns + the field columns + the source columns; a field
+    whose name collides with a reserved injected column (an identity or ``source_*`` column) is
+    renamed to ``<name>#2`` (then #3, ...), and the map records that rename so the row writer
+    places the value under the renamed column. WHY: without this, a model ``<field name="uuid">``
+    both duplicates the ``uuid`` header AND, via ``row.update(fields)``, overwrites the injected
+    model id, so the identity column no longer holds the real id. Reserving the injected names
+    (rather than prefixing them) keeps the established, preset-facing column names intact while
+    still capturing the colliding field losslessly under its ``#n`` name.
+    """
+    reserved = list(id_columns(level)) + list(SOURCE_COLUMNS)
+    used = set(reserved)
+    column_map: dict[str, str] = {}
+    field_columns: list[str] = []
+    for name in field_names:
+        column = name
+        if column in used:
+            index = 2
+            while f"{name}#{index}" in used:
+                index += 1
+            column = f"{name}#{index}"
+        used.add(column)
+        column_map[name] = column
+        field_columns.append(column)
+    header = list(id_columns(level)) + field_columns + list(SOURCE_COLUMNS)
+    return header, column_map
 
 
 def write_rows(
@@ -168,27 +238,36 @@ def write_rows(
     level: int,
     model_type: str,
     resolve: "Callable[[str | None], object | None]",
+    column_map: dict[str, str],
 ) -> int:
     """Append one group's rows (no header) from ``records``, joining each to its source.
 
     Shared by the serial flush and the parallel merge so the row format has one definition.
     Rows are emitted in ``seq`` order (document order within a connection).
+
+    HOW the injected columns survive a name clash: each field value is placed under its mapped
+    column (``column_map``), so a field named like an identity/source column lands on its ``#n``
+    column and never overwrites the injected value; the source columns are written LAST. WHY
+    ``resolve(top_id)``: ``<extraInfos>`` is keyed by TOP-LEVEL model ids, so a nested row must
+    look its source up by the id of its tree root (its own id resolves to nothing → blank
+    source), letting every child inherit its parent's source.
     """
     cursor = records_conn.execute(
-        "SELECT id, parent_id, fields_json FROM records "
+        "SELECT id, parent_id, top_id, fields_json FROM records "
         "WHERE level = ? AND model_type = ? ORDER BY seq",
         (level, model_type),
     )
     count = 0
-    for model_id, parent_id, fields_json in cursor:
+    for model_id, parent_id, top_id, fields_json in cursor:
         row: dict[str, str | None] = {}
         if level == LEVEL_TOP:
             row[COL_UUID] = model_id
         else:
             row[COL_SUB_UUID] = model_id
             row[COL_MAIN_UUID] = parent_id
-        row.update(json.loads(fields_json))
-        entry = resolve(model_id)
+        for name, value in json.loads(fields_json).items():
+            row[column_map.get(name, name)] = value
+        entry = resolve(top_id)
         if entry is not None:
             row.update(entry.as_columns())
         csv_writer.writerow(row)
@@ -215,6 +294,8 @@ def write_group(
     """Write one (level, type) CSV from a single ``records`` connection."""
     fh, csv_writer = open_group_writer(spec.path, spec.header)
     try:
-        return write_rows(csv_writer, records_conn, spec.level, spec.model_type, resolve)
+        return write_rows(
+            csv_writer, records_conn, spec.level, spec.model_type, resolve, spec.column_map
+        )
     finally:
         fh.close()

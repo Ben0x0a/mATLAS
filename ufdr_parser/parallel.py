@@ -31,14 +31,14 @@ from ufdr_parser.archive import (
     open_seekable,
     report_compression,
 )
-from ufdr_parser.const import LEVEL_FILE_PREFIX, SOURCE_COLUMNS
 from ufdr_parser.reader import BlockRangeReader, extra_infos_stream, iter_block_models
 from ufdr_parser.scan import index_model_types
 from ufdr_parser.source_lookup import SourceIndex, index_source_stream, resolve_from_conn
 from ufdr_parser.writer import (
     CsvSink,
     GroupSpec,
-    id_columns,
+    group_columns,
+    group_filenames,
     open_group_writer,
     write_group,
     write_rows,
@@ -257,21 +257,20 @@ def _merge(
         for r in results
     }
     out = ParallelDumpResult(source_count=source_count)
+    # Unique per-group filenames + injected-column-safe headers, built exactly as the serial
+    # path does (one source of truth) so the two flushes stay byte-for-byte equivalent.
+    filenames = group_filenames(field_union.keys(), base)
     try:
         resolve = partial(resolve_from_conn, source_conn)
         for (level, model_type) in sorted(field_union):
-            header = (
-                id_columns(level)
-                + list(field_union[(level, model_type)])
-                + list(SOURCE_COLUMNS)
-            )
-            filename = f"{base}_{LEVEL_FILE_PREFIX[level]}{model_type}.csv"
+            header, column_map = group_columns(level, list(field_union[(level, model_type)]))
+            filename = filenames[(level, model_type)]
             handle, csv_writer = open_group_writer(out_dir / filename, header)
             total = 0
             try:
                 for spill_path in group_spills[(level, model_type)]:
                     total += write_rows(
-                        csv_writer, spill_conns[spill_path], level, model_type, resolve
+                        csv_writer, spill_conns[spill_path], level, model_type, resolve, column_map
                     )
             finally:
                 handle.close()

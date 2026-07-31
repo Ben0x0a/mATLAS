@@ -34,6 +34,11 @@ LOCAL_MODEL_TYPE = "modelType"
 LOCAL_MODEL_FIELD = "modelField"
 LOCAL_MULTI_MODEL_FIELD = "multiModelField"
 
+# Separator used to join a field's multiple ``<value>`` children into one cell (a field can
+# carry more than one value; keeping only the first would silently drop evidence). Consumed
+# by models._field_value.
+MULTI_VALUE_SEPARATOR = "; "
+
 # Record levels: a top-level model, a 1:1/1:many child, and a grandchild.
 LEVEL_TOP = 0
 LEVEL_SUB = 1

@@ -46,4 +46,30 @@ def test_multimodelfield_child() -> None:
     assert party.level == 1
     assert party.parent_id == "call1"
     assert party.top_type == "Call"
+    assert party.top_id == "call1"          # tree root id, used to inherit the source
     assert party.fields["Identifier"] == "+34123"
+
+
+# FIX-18 #4: a field with several <value> children must keep them all, not just the first.
+_MULTI_VALUE_REPORT = """<?xml version="1.0" encoding="utf-8"?>
+<project xmlns="http://pa.cellebrite.com/report/2.0" name="mv">
+  <decodedData>
+    <modelType type="Chat">
+      <model type="Chat" id="chat1">
+        <field name="Participants" type="String">
+          <value type="String"><![CDATA[alice]]></value>
+          <value type="String"><![CDATA[bob]]></value>
+          <value type="String"><![CDATA[carol]]></value>
+        </field>
+      </model>
+    </modelType>
+  </decodedData>
+  <extraInfos/>
+</project>
+"""
+
+
+def test_multi_value_field_joins_all_values() -> None:
+    items = list(iter_items(io.BytesIO(_MULTI_VALUE_REPORT.encode("utf-8"))))
+    chat = next(i for i in items if isinstance(i, FlatRecord) and i.model_type == "Chat")
+    assert chat.fields["Participants"] == "alice; bob; carol"

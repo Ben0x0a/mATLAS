@@ -33,6 +33,37 @@ def _is_zip(path: Path) -> bool:
         return False
 
 
+def _find_report_entry(zf: zipfile.ZipFile) -> str | None:
+    """Locate the ``report.xml`` entry in a .ufdr, tolerating case and a subfolder.
+
+    HOW: prefer an exact top-level ``report.xml``; otherwise accept any entry whose basename
+    is ``report.xml`` case-insensitively (zip paths always use ``/``). WHY: some acquisitions
+    store the report under a case variant or nested in a case/subfolder, and an exact top-level
+    match alone would reject an archive that does contain a valid report.
+    """
+    names = zf.namelist()
+    if REPORT_ENTRY_NAME in names:
+        return REPORT_ENTRY_NAME
+    target = REPORT_ENTRY_NAME.lower()
+    for name in names:
+        if name.rsplit("/", 1)[-1].lower() == target:
+            return name
+    return None
+
+
+def _require_report_entry(zf: zipfile.ZipFile, path: Path) -> str:
+    """The report entry name, or a clear ``ValueError`` if the archive has none.
+
+    Every zip-facing helper resolves the entry through here (one source of truth) so a missing
+    report raises the SAME ``ValueError`` on every path — never a bare ``KeyError`` from a
+    downstream ``getinfo``/``open`` — which would otherwise leak as an unhandled crash.
+    """
+    name = _find_report_entry(zf)
+    if name is None:
+        raise ValueError(f"{path}: no {REPORT_ENTRY_NAME} entry in the archive")
+    return name
+
+
 @contextlib.contextmanager
 def open_report(path: Path) -> Iterator[BinaryIO]:
     """Yield a readable binary stream over the report XML.
@@ -47,10 +78,9 @@ def open_report(path: Path) -> Iterator[BinaryIO]:
     if _is_zip(path):
         zf = zipfile.ZipFile(path)
         try:
-            if REPORT_ENTRY_NAME not in zf.namelist():
-                raise ValueError(f"{path}: no {REPORT_ENTRY_NAME} entry in the archive")
-            log.info(f"Streaming {REPORT_ENTRY_NAME} from archive {path}")
-            with zf.open(REPORT_ENTRY_NAME) as stream:
+            entry = _require_report_entry(zf, path)
+            log.info(f"Streaming {entry} from archive {path}")
+            with zf.open(entry) as stream:
                 yield stream
         finally:
             zf.close()
@@ -65,7 +95,7 @@ def report_size(path: Path) -> int:
     path = Path(path)
     if _is_zip(path):
         with zipfile.ZipFile(path) as zf:
-            return zf.getinfo(REPORT_ENTRY_NAME).file_size
+            return zf.getinfo(_require_report_entry(zf, path)).file_size
     return path.stat().st_size
 
 
@@ -85,7 +115,9 @@ def report_compression(path: Path) -> str:
     if not _is_zip(path):
         return KIND_PLAIN
     with zipfile.ZipFile(path) as zf:
-        info = zf.getinfo(REPORT_ENTRY_NAME)
+        # Resolve (and PRESENCE-check) the entry first, so a report-less archive raises the
+        # same ValueError as the serial path instead of a bare KeyError from getinfo.
+        info = zf.getinfo(_require_report_entry(zf, path))
         return KIND_STORED if info.compress_type == zipfile.ZIP_STORED else KIND_DEFLATE
 
 
@@ -101,8 +133,9 @@ def open_seekable(path: Path, kind: str) -> Iterator[BinaryIO]:
         with path.open("rb") as stream:
             yield stream
     elif kind == KIND_STORED:
-        with zipfile.ZipFile(path) as zf, zf.open(REPORT_ENTRY_NAME) as stream:
-            yield stream
+        with zipfile.ZipFile(path) as zf:
+            with zf.open(_require_report_entry(zf, path)) as stream:
+                yield stream
     else:
         raise ValueError(f"open_seekable does not support kind={kind!r}; extract first")
 
@@ -110,6 +143,8 @@ def open_seekable(path: Path, kind: str) -> Iterator[BinaryIO]:
 def extract_report(path: Path, dest: Path) -> Path:
     """Stream report.xml out of a zip to ``dest`` (used for DEFLATE archives)."""
     path, dest = Path(path), Path(dest)
-    with zipfile.ZipFile(path) as zf, zf.open(REPORT_ENTRY_NAME) as src, dest.open("wb") as out:
-        shutil.copyfileobj(src, out, length=8 * 1024 * 1024)
+    with zipfile.ZipFile(path) as zf:
+        entry = _require_report_entry(zf, path)
+        with zf.open(entry) as src, dest.open("wb") as out:
+            shutil.copyfileobj(src, out, length=8 * 1024 * 1024)
     return dest

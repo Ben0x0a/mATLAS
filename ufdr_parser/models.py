@@ -8,10 +8,12 @@ This preserves the legacy UFEDParser decomposition, made single-pass:
   - level 0: the top-level model  (id -> ``uuid``)
   - level 1: a ``modelField`` (1:1) or ``multiModelField`` (1:many) child model
   - level 2: the same one level deeper (a grandchild model)
-A child carries its own id (``sub-uuid``) and its immediate parent's id (``main-uuid``);
-``top_type`` is the level-0 model type, used for relation tracking and ``--models``
-filtering. Only direct ``<field>`` children populate a record's own columns, so each
-nested model's fields stay on its own row (never flattened into the parent).
+A child carries its own id (``sub-uuid``), its immediate parent's id (``main-uuid``) and the
+id of the level-0 model at the root of its tree (``top_id``); ``top_type`` is the level-0
+model type, used for relation tracking and ``--models`` filtering. ``top_id`` lets a nested
+row inherit its top-level model's source entry (``<extraInfos>`` is keyed by top-level ids).
+Only direct ``<field>`` children populate a record's own columns, so each nested model's
+fields stay on its own row (never flattened into the parent).
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ from ufdr_parser.const import (
     LOCAL_MODEL,
     LOCAL_MODEL_FIELD,
     LOCAL_MULTI_MODEL_FIELD,
+    MULTI_VALUE_SEPARATOR,
     TAG_VALUE,
 )
 
@@ -37,6 +40,7 @@ class FlatRecord:
     level: int
     model_type: str
     top_type: str
+    top_id: str | None      # id of the level-0 model at the root of this record's tree
     model_id: str | None
     parent_id: str | None
     # field name -> scalar value (None for an <empty/> field). mutable default would be
@@ -52,9 +56,17 @@ def _local(tag: object) -> str | None:
 
 
 def _field_value(field_elem: "etree._Element") -> str | None:
-    """The text of a ``<field>``'s direct ``<value>``; None for ``<empty/>`` or missing."""
-    value = field_elem.find(TAG_VALUE)
-    return value.text if value is not None else None
+    """Join every ``<value>`` of a ``<field>`` into one cell; None for ``<empty/>``/missing.
+
+    HOW: gather each direct ``<value>``'s full text with ``itertext`` (so text split by an
+    inline child element is not truncated), then join the values with MULTI_VALUE_SEPARATOR.
+    WHY: a field can carry several ``<value>`` children; returning only the first silently
+    dropped the rest, losing evidence with no trace. A single-value field is unchanged.
+    """
+    values = field_elem.findall(TAG_VALUE)
+    if not values:
+        return None
+    return MULTI_VALUE_SEPARATOR.join("".join(value.itertext()) for value in values)
 
 
 def flatten_model(
@@ -63,11 +75,15 @@ def flatten_model(
     level: int = LEVEL_TOP,
     parent_id: str | None = None,
     top_type: str | None = None,
+    top_id: str | None = None,
 ) -> Iterator[FlatRecord]:
     """Yield the record for ``elem`` then, depth-first, its child/grandchild models."""
     model_type = elem.get("type") or ""
     model_id = elem.get("id")
     effective_top = top_type if top_type is not None else model_type
+    # At the top level the model IS its own tree root; children inherit the same top id so
+    # every nested row can resolve the source keyed under the top-level model.
+    effective_top_id = top_id if top_id is not None else model_id
 
     fields: dict[str, str | None] = {}
     child_models: list["etree._Element"] = []
@@ -86,6 +102,7 @@ def flatten_model(
         level=level,
         model_type=model_type,
         top_type=effective_top,
+        top_id=effective_top_id,
         model_id=model_id,
         parent_id=parent_id,
         fields=fields,
@@ -96,5 +113,9 @@ def flatten_model(
     if level < LEVEL_SUBSUB:
         for sub in child_models:
             yield from flatten_model(
-                sub, level=level + 1, parent_id=model_id, top_type=effective_top
+                sub,
+                level=level + 1,
+                parent_id=model_id,
+                top_type=effective_top,
+                top_id=effective_top_id,
             )

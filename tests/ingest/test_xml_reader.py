@@ -16,7 +16,7 @@ from model_atlas.ingest.readers.xml_reader import XmlReader, get_dialect, sniff_
 from ufdr_parser.const import NS
 
 # A minimal Cellebrite report: a Location (1:1 Position->Coordinate, Address->StreetAddress)
-# and a Call (1:many Parties, which must be skipped by the inline flatten), with a matching
+# and a Call (1:many Parties, inlined as indexed Parties.N.* columns), with a matching
 # extraInfos id->source block.
 _REPORT = """<?xml version="1.0" encoding="utf-8"?>
 <project xmlns="http://pa.cellebrite.com/report/2.0" name="t">
@@ -105,12 +105,15 @@ def test_xml_reader_subunits_and_records_in_document_order(tmp_path: Path) -> No
     assert record.fields["source_table"] == "ZRTCLLOCATION"
 
 
-def test_xml_multimodelfield_is_skipped(tmp_path: Path) -> None:
+def test_xml_multimodelfield_is_inlined_on_the_parent_row(tmp_path: Path) -> None:
+    # FIX-21 CB3: multiModelField (1:many) children are the only place nested evidence is
+    # captured for the pipeline (nothing re-reads the report), so they must surface here.
     source = _report(tmp_path)
     [record] = list(XmlReader().iter_records(source, "Call"))
     assert record.fields["Direction"] == "Outgoing"
     assert record.fields["source_table"] == "ZCALLRECORD"
-    assert not any(k.startswith("Parties") or k == "Identifier" for k in record.fields)
+    # The single Party surfaces under an indexed prefix on the Call's row.
+    assert record.fields["Parties.0.Identifier"] == "+34"
 
 
 def test_xml_peek_fields_and_cache_reused_across_models(tmp_path: Path) -> None:
@@ -135,3 +138,70 @@ def test_xml_requires_a_model_type(tmp_path: Path) -> None:
     source = _report(tmp_path)
     with pytest.raises(ValueError):
         next(XmlReader().iter_records(source, None))
+
+
+# FIX-21 #1: verbatim capture must not lose repeated field names, and a model <field> named
+# like an injected forensic attribute must not overwrite the captured attribute.
+_CLOBBER_REPORT = """<?xml version="1.0" encoding="utf-8"?>
+<project xmlns="http://pa.cellebrite.com/report/2.0" name="t">
+  <decodedData>
+    <modelType type="Note">
+      <model type="Note" id="note1" deleted_state="Intact">
+        <field name="Body" type="String"><value type="String"><![CDATA[first]]></value></field>
+        <field name="Body" type="String"><value type="String"><![CDATA[second]]></value></field>
+        <field name="uuid" type="String"><value type="String"><![CDATA[not-the-real-id]]></value></field>
+      </model>
+    </modelType>
+  </decodedData>
+  <extraInfos/>
+</project>
+"""
+
+
+def test_xml_duplicate_and_attribute_named_fields_are_kept_losslessly(tmp_path: Path) -> None:
+    path = tmp_path / "clobber.xml"
+    path.write_text(_CLOBBER_REPORT, encoding="utf-8")
+    [record] = list(XmlReader().iter_records(path, "Note"))
+    # Both values of the repeated <field name="Body"> survive (no clobber).
+    assert record.fields["Body"] == "first"
+    assert record.fields["Body#2"] == "second"
+    # The injected forensic uuid keeps the real model id; the colliding field is disambiguated.
+    assert record.fields["uuid"] == "note1"
+    assert record.fields["uuid#2"] == "not-the-real-id"
+    assert record.fields["deleted_state"] == "Intact"
+
+
+def test_xml_multimodelfield_keeps_every_party(tmp_path: Path) -> None:
+    report = _REPORT.replace(
+        '<multiModelField name="Parties" type="Party">\n'
+        '          <model type="Party" id="p1"><field name="Identifier" type="String">'
+        '<value type="String"><![CDATA[+34]]></value></field></model>\n'
+        '        </multiModelField>',
+        '<multiModelField name="Parties" type="Party">\n'
+        '          <model type="Party" id="p1"><field name="Identifier" type="String">'
+        '<value type="String"><![CDATA[+34]]></value></field></model>\n'
+        '          <model type="Party" id="p2"><field name="Identifier" type="String">'
+        '<value type="String"><![CDATA[+49]]></value></field></model>\n'
+        '        </multiModelField>',
+    )
+    path = tmp_path / "twoparties.xml"
+    path.write_text(report, encoding="utf-8")
+    [record] = list(XmlReader().iter_records(path, "Call"))
+    assert record.fields["Parties.0.Identifier"] == "+34"
+    assert record.fields["Parties.1.Identifier"] == "+49"
+
+
+def test_ufdr_workdir_path_with_special_chars_reads(tmp_path: Path) -> None:
+    # FIX-21 #3: a work-dir path with '#'/'?'/'%' must not break the read-only source URI.
+    from model_atlas.ingest.readers.xml_specifics.cellebrite_xml_reports import (
+        CellebriteDialect,
+    )
+
+    source = _report(tmp_path)
+    work_dir = tmp_path / "case #1 ? 50%"
+    work_dir.mkdir()
+    dialect = CellebriteDialect()
+    prep = dialect.prepare(lambda: source.open("rb"), work_dir)
+    frame, _columns = dialect.read_model(prep, "Location")
+    # The source join (which opens the file: URI in the '#'-bearing work dir) succeeded.
+    assert frame.iloc[0]["source_table"] == "ZRTCLLOCATION"

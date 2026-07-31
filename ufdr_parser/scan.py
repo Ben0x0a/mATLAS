@@ -35,6 +35,76 @@ _MARKERS = re.compile(
 _CARRY = 64
 _TYPE_ATTR = re.compile(rb'\btype="([^"]*)"')
 
+# CDATA-aware skip of everything before <decodedData> (header + taggedFiles). Only these
+# three tokens matter while hunting the section start.
+_CDATA_OPEN = b"<![CDATA["
+_CDATA_CLOSE = b"]]>"
+_SKIP_MARKERS = re.compile(rb"<!\[CDATA\[|\]\]>|<decodedData")
+# Enough trailing bytes to re-see a boundary-split ``<decodedData`` or CDATA delimiter.
+_SKIP_CARRY = 16
+
+
+def _scan_for_decoded(data: bytes, in_cdata: bool) -> tuple[int, bool, int]:
+    """Find the first ``<decodedData`` in ``data`` that lies OUTSIDE a CDATA section.
+
+    Returns ``(hit, in_cdata, consumed)``: ``hit`` is the index of a genuine ``<decodedData``
+    (or -1 if none is confirmed in this buffer); ``in_cdata`` is the CDATA state after
+    classifying ``data[:consumed]``; ``consumed`` is how many leading bytes are fully
+    classified, so the caller carries ``data[consumed:]`` into the next chunk.
+
+    HOW: walk the interleaved CDATA-open / CDATA-close / decodedData tokens in document order,
+    flipping ``in_cdata`` on each delimiter; the first decodedData seen outside CDATA wins.
+    WHY: the skipped taggedFiles region is scanned by a cheap plain byte find in the legacy
+    code, so a literal ``<decodedData`` inside a CDATA section (or attribute text) there would
+    be mistaken for the real element and anchor the whole parse at the wrong offset — silently
+    corrupting every record. Advancing ``consumed`` past classified bytes (never re-scanning
+    them) keeps this linear over the marker-sparse taggedFiles region.
+    """
+    consumed = 0
+    for match in _SKIP_MARKERS.finditer(data):
+        token = match.group()
+        if in_cdata:
+            if token == _CDATA_CLOSE:
+                in_cdata = False
+                consumed = match.end()
+            continue
+        if token == _CDATA_OPEN:
+            in_cdata = True
+            consumed = match.end()
+        elif token == _CDATA_CLOSE:
+            consumed = match.end()  # a stray ]]> outside CDATA: ignore, keep advancing
+        else:  # <decodedData outside CDATA — the real anchor
+            return match.start(), in_cdata, match.start()
+    # No hit: keep only a small tail (a boundary-split token is re-seen next chunk); never
+    # re-scan already-classified bytes, or the marker-sparse taggedFiles scan turns O(n^2).
+    consumed = max(consumed, len(data) - _SKIP_CARRY)
+    return -1, in_cdata, consumed
+
+
+def find_decoded_data(stream: BinaryIO) -> tuple[bytes, int]:
+    """Read ``stream`` from its position to the real ``<decodedData`` element start.
+
+    Returns ``(tail, offset)``: ``tail`` is the already-read buffer from the marker onward (the
+    marker plus whatever trailing bytes arrived in the same chunk) and ``offset`` is the
+    marker's absolute byte offset. When no decodedData is found, returns ``(b"", bytes_read)``.
+    CDATA-aware (see ``_scan_for_decoded``), so a marker-like string in the skipped region
+    cannot mis-anchor parsing. Shared by ``index_model_types`` here and the reader's
+    ``_skip_to_decoded_data`` so both locate the section by one definition.
+    """
+    carry = b""
+    base = 0
+    in_cdata = False
+    while True:
+        chunk = stream.read(_CHUNK)
+        if not chunk:
+            return b"", base + len(carry)
+        data = carry + chunk
+        hit, in_cdata, consumed = _scan_for_decoded(data, in_cdata)
+        if hit != -1:
+            return data[hit:], base + hit
+        carry = data[consumed:]
+        base += consumed
+
 
 @dataclass(frozen=True)
 class ModelTypeBlock:
@@ -65,28 +135,28 @@ def index_model_types(stream: BinaryIO) -> DecodedIndex:
     decoded_end: int | None = None
     extra_start: int | None = None
 
-    carry = b""
-    base = 0  # absolute offset of carry[0]
+    # CDATA-aware skip of the header + taggedFiles to the real <decodedData> element. WHY not a
+    # plain byte find: a literal ``<decodedData`` inside taggedFiles CDATA/attribute text would
+    # otherwise mis-anchor the whole scan (see find_decoded_data / _scan_for_decoded).
+    tail, decoded_start = find_decoded_data(stream)
+    if not tail:
+        # No decodedData (empty/odd report): nothing to index.
+        return DecodedIndex(blocks=(), decoded_end=decoded_start, extra_info_start=None)
+
+    carry = tail  # already holds the bytes from the <decodedData marker onward
+    base = decoded_start  # absolute offset of carry[0]
     in_cdata = False
-    in_decoded = False  # before decodedData we only hunt the section start (cheap)
+    first_pass = True  # the seeded tail is the first buffer; do not read before using it
 
     while True:
-        chunk = stream.read(_CHUNK)
-        if not chunk:
-            break
+        if first_pass:
+            chunk = b""
+            first_pass = False
+        else:
+            chunk = stream.read(_CHUNK)
+            if not chunk:
+                break
         data = carry + chunk
-        # Phase 1: cheaply skip taggedFiles. It is CDATA-dense but irrelevant, so we just
-        # plain-find <decodedData and avoid paying the regex/CDATA cost over ~73% of the file.
-        if not in_decoded:
-            hit = data.find(b"<decodedData")
-            if hit == -1:
-                carry = data[-_CARRY:]
-                base += len(data) - len(carry)
-                continue
-            in_decoded = True
-            # Re-enter the regex scan from the decodedData marker within this chunk.
-            data = data[hit:]
-            base += hit
         last_consumed = 0  # end offset (in data) of the last marker we fully handled
         deferred = False
         for match in _MARKERS.finditer(data):
