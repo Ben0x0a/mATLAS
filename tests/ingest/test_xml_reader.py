@@ -67,6 +67,29 @@ def test_sniff_namespace_selects_cellebrite() -> None:
     assert get_dialect("urn:unknown") is None
 
 
+def test_sniff_namespace_takes_the_root_not_a_child() -> None:
+    # FIX-08 #6: a root WITHOUT a namespace must not be mis-typed from a namespaced child.
+    doc = b'<?xml version="1.0"?><root><child xmlns="urn:child"/></root>'
+    assert sniff_namespace(doc) is None
+
+
+def test_large_leading_comment_does_not_hide_the_root_namespace(tmp_path: Path) -> None:
+    # FIX-08 #6: the root's xmlns sits behind a >8 KB comment. A fixed 8 KB head would miss it
+    # and drop the whole report; the reader grows its window until the root tag is complete.
+    padding = "y" * 20000
+    big = _REPORT.replace(
+        '<project xmlns="http://pa.cellebrite.com/report/2.0" name="t">',
+        f'<!-- {padding} -->\n<project xmlns="http://pa.cellebrite.com/report/2.0" name="t">',
+        1,
+    )
+    path = tmp_path / "big.xml"
+    path.write_text(big, encoding="utf-8")
+    # A fixed 8 KB slice cannot see past the comment...
+    assert sniff_namespace(big.encode("utf-8")[:8192]) is None
+    # ...but the reader grows the window, dispatches to Cellebrite, and reads the models.
+    assert XmlReader().subunits(path) == ["Location", "Call"]
+
+
 def test_xml_reader_subunits_and_records_in_document_order(tmp_path: Path) -> None:
     source = _report(tmp_path)
     reader = XmlReader()

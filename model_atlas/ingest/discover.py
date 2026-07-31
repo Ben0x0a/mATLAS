@@ -77,8 +77,18 @@ class FileFound:
     file: SourceFile
 
 
-def _is_sidecar(name: str) -> bool:
-    return name.endswith(SIBLING_SUFFIXES)
+def _sidecar_base(name: str) -> str | None:
+    """The sibling db name a ``-wal`` / ``-shm`` / ``-journal`` file pairs with, or None when
+    ``name`` is not a sidecar at all.
+
+    WHY the base name and not a bool: a sidecar is only redundant with the db read when its db
+    is actually present; an ORPHANED sidecar (a partial acquisition, or an unrelated
+    ``*-journal``) has no sibling db, so it must be emitted as a normal file rather than
+    dropped — a forensic walk must leave no input traceless."""
+    for suffix in SIBLING_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return None
 
 
 def _cd_sha256_from_path(path: Path) -> str:
@@ -106,12 +116,29 @@ def _walk_container(
     max_container_depth: int,
     should_skip: Callable[[str], bool],
 ) -> Iterator[ArchiveFound | FileFound]:
-    for file in container.files():
-        if _is_sidecar(file.name):
-            log.debug(f"Skipping SQLite sidecar during discovery: {file.logical_path}")
-            continue
-        # Re-anchor the file onto the full container chain (outermost..innermost).
-        file = SourceFile(containers=prefix + (container,), logical_path=file.logical_path)
+    # Materialise the listing so an orphaned sidecar can be told from a live one: a sidecar is
+    # only skippable when its db sibling is ALSO present in this container.
+    files = list(container.files())
+    present = {str(candidate.logical_path) for candidate in files}
+    for file in files:
+        sidecar_base = _sidecar_base(file.name)
+        if sidecar_base is not None:
+            sibling_db = str(file.logical_path.with_name(sidecar_base))
+            if sibling_db in present:
+                # A live -wal/-shm/-journal beside its db: the SQLite reader handles it via the
+                # db (two-pass merge), so it is not a source of its own — skip it.
+                log.debug(f"Skipping SQLite sidecar beside its db during discovery: {file.logical_path}")
+                continue
+            # else: an ORPHAN sidecar (no sibling db) or an unrelated *-journal — fall through
+            # and emit it as a normal file so its bytes are fingerprinted, never dropped.
+            log.debug(f"Orphan sidecar with no sibling db, emitting as a file: {file.logical_path}")
+        # Re-anchor the file onto the full container chain (outermost..innermost), keeping the
+        # entry_index so a zip leaf still resolves to its OWN entry (duplicate-path handling).
+        file = SourceFile(
+            containers=prefix + (container,),
+            logical_path=file.logical_path,
+            entry_index=file.entry_index,
+        )
         if depth < max_container_depth and detect_source_format(file) == "archive":
             yield from _open_nested(file, container, prefix, depth, max_container_depth, should_skip)
             continue

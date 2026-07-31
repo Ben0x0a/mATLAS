@@ -18,6 +18,7 @@ where no reader ships for them.
 from __future__ import annotations
 
 import logging
+import re
 import zipfile
 from typing import TYPE_CHECKING, BinaryIO, Callable
 
@@ -37,20 +38,26 @@ SQLITE_MAGIC = b"SQLite format 3\x00"
 BPLIST_MAGIC = b"bplist00"
 ZIP_MAGIC = b"PK\x03\x04"
 
+# A namespace declaration on the root element — the positive signal that a "<"-leading text
+# file is REALLY XML (as opposed to a CSV whose first field merely starts with "<"). Matched
+# in the head window alongside the "<?xml" declaration.
+_XMLNS_MARKER = re.compile(rb"xmlns(:[\w.-]+)?\s*=")
+
 # Formats a preset may target (a reader exists for each). ``xml`` covers forensic XML
 # reports (Cellebrite UFED, AXIOM, …), discriminated further by namespace in the selector.
 TARGETABLE_FORMATS: frozenset[str] = frozenset({"csv", "excel", "sqlite", "xml"})
 
 
 def _looks_like_excel(names: list[str]) -> bool:
-    """A zip is an xlsx workbook when it carries the OOXML spreadsheet part."""
-    has_content_types = "[Content_Types].xml" in names
-    for name in names:
-        if name == "xl/workbook.xml":
-            return True
-        if name.startswith("xl/") and has_content_types:
-            return True
-    return False
+    """A zip is an xlsx workbook when it carries the authoritative OOXML workbook part
+    ``xl/workbook.xml``.
+
+    WHY only this part, not ``[Content_Types].xml`` + ANY ``xl/`` entry (the old, looser
+    test): that looser rule classifies a non-workbook or partial OOXML archive (docx/pptx
+    fragments, or a zip that merely happens to hold an ``xl/`` folder) as ``excel``, so its
+    leaf files are never walked — a silent loss. Every real xlsx contains ``xl/workbook.xml``,
+    so it is the one unambiguous marker."""
+    return "xl/workbook.xml" in names
 
 
 def _strip_bom(head: bytes) -> bytes:
@@ -79,13 +86,24 @@ def detect_format(
         return "excel" if _looks_like_excel(names) else "archive"
 
     text = _strip_bom(head).lstrip()
+    lowered = suffix.lower()
     if text.startswith(b"<?xml") or text.startswith(b"<"):
         window = text[:512].lower()
         if b"<!doctype plist" in window or b"<plist" in window:
             return "plist"
+        # Only classify as XML when the head is REALLY XML — an XML declaration or a root
+        # namespace declaration. WHY: the old ``startswith(b"<")`` claimed XML for ANY
+        # "<"-leading text, so a .csv whose first field starts with "<" was handed to the XML
+        # reader, which raised and dropped a perfectly readable CSV (a forensic silent loss).
+        if text.startswith(b"<?xml") or _XMLNS_MARKER.search(window) is not None:
+            return "xml"
+        # A "<"-leading text file that is not obviously XML: let the CSV/TSV suffix win; only a
+        # markup-looking file with no such suffix stays ``xml`` (surfaced to the reader, which
+        # a missing dialect turns into a warning — not a crash).
+        if lowered in (".csv", ".tsv"):
+            return "csv"
         return "xml"
 
-    lowered = suffix.lower()
     if lowered in (".csv", ".tsv"):
         return "csv"
     return None

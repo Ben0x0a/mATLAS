@@ -264,23 +264,36 @@ def _write_archive(
 ) -> None:
     """Record one archive encounter: the ``archive`` row (path-keyed) + a ``run_archive``
     link. The archive row is written once per path (UNIQUE(path)); the link
-    marks whether this run skipped it (opt-in, preset-scoped)."""
+    marks whether this run skipped it (opt-in, preset-scoped).
+
+    Cross-run idempotency (mirrors ``_ingest_subunit``'s source-level guard): the ``archive``
+    row is path-keyed, so re-appending the SAME archive to an existing case already has its
+    row. A plain INSERT would then collide on UNIQUE(path) and ABORT the whole append BEFORE
+    the source-level guard runs — breaking append of any zip/UFDR input. So the row is written
+    only when absent; the ``run_archive`` link is ALWAYS written (its id carries the fresh
+    ``run_id``, so it is new every run and never collides)."""
     archive_id = ids.archive_id(event.path)
     report.archives += 1
     if event.skipped:
         report.archives_skipped += 1
-    if archive_id not in written:
+    if archive_id in written:
+        return  # already recorded in THIS run (a within-run duplicate encounter)
+    written.add(archive_id)
+    # A real cross-run existence check keyed on archive identity (path-derived), not the
+    # in-memory ``written`` set alone — the set is empty at the start of every run.
+    already_present = store.connection.execute(
+        "SELECT 1 FROM archive WHERE archive_id = ?", (archive_id,)).fetchone()
+    if already_present is None:
         store.write_archive(
             Archive(archive_id=archive_id, path=event.path, cd_sha256=event.cd_sha256)
         )
-        store.write_run_archive(
-            RunArchive(
-                run_archive_id=ids.run_archive_id(run_id, archive_id),
-                run_id=run_id, archive_id=archive_id, parsed_at=_now_iso(),
-                skipped=1 if event.skipped else 0,
-            )
+    store.write_run_archive(
+        RunArchive(
+            run_archive_id=ids.run_archive_id(run_id, archive_id),
+            run_id=run_id, archive_id=archive_id, parsed_at=_now_iso(),
+            skipped=1 if event.skipped else 0,
         )
-        written.add(archive_id)
+    )
 
 
 def _ingest_file(

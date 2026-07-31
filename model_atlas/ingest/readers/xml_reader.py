@@ -11,8 +11,11 @@ Depends on: ``model_atlas.core.vocabularies`` (``RecordState``), ``model_atlas.i
             readers.base``/``registry``, and the standard library only (dialects pull in
             lxml/ufdr_parser, imported lazily so this module stays light).
 
-Ported from ``sources/readers/xml_reader.py``: the dialect Protocol/registry,
-``sniff_namespace`` and the per-report prepare/cache shape are kept verbatim. What is
+Ported from ``sources/readers/xml_reader.py``: the dialect Protocol/registry and the
+per-report prepare/cache shape are kept verbatim. ``sniff_namespace`` is now ROOT-specific
+(it reads the default xmlns of the root element, not the first element that carries one) and
+the reader grows its read window until the root start-tag is complete, so a root whose xmlns
+sits far into the document is not missed (which would drop the whole report). What is
 DROPPED (deliberately, not an oversight) is the old reader's staging-tier machinery
 (``STAGING_TIER``, ``acquire_source``/``container.finalize``): discover/containers
 has not landed, so ``source`` here is already a plain, real path on disk — there is no
@@ -58,7 +61,16 @@ SOURCE_COLUMNS: tuple[str, ...] = (
     "source_offset",
 )
 
-_XMLNS_DEFAULT = re.compile(rb'<\w[\w:.-]*\b[^>]*?\bxmlns\s*=\s*"([^"]+)"', re.DOTALL)
+# The DEFAULT namespace attribute (``xmlns="..."``) — NOT ``xmlns:prefix``, which declares a
+# prefixed namespace rather than the element's own default. Applied to the ROOT start-tag only.
+_XMLNS_DEFAULT_ATTR = re.compile(rb'\bxmlns\s*=\s*"([^"]+)"')
+
+# Grow the sniff window up to this bound while hunting the complete root start-tag; read it in
+# these chunks. WHY grow rather than a fixed 8 KB head: a root whose xmlns sits past the first
+# 8 KB (many namespace attributes, a large DOCTYPE) would otherwise sniff as None and the whole
+# report would be dropped.
+_ROOT_TAG_SEARCH_CAP = 1024 * 1024
+_ROOT_TAG_READ_CHUNK = 64 * 1024
 
 
 def _local(tag: object) -> str | None:
@@ -66,13 +78,91 @@ def _local(tag: object) -> str | None:
     return tag.rpartition("}")[2] if isinstance(tag, str) else None
 
 
-def sniff_namespace(head: bytes) -> str | None:
-    """Return the default namespace declared on the first element, or None.
+def _tag_end(data: bytes, start: int) -> int:
+    """Index of the ``>`` that closes the start-tag beginning at ``start``, or -1 when the tag
+    is not yet complete in ``data``. A ``>`` inside a quoted attribute value is skipped, so an
+    attribute value containing ``>`` does not truncate the tag."""
+    quote: bytes | None = None
+    for j in range(start, len(data)):
+        char = data[j:j + 1]
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in (b'"', b"'"):
+            quote = char
+        elif char == b">":
+            return j
+    return -1
 
-    Reads only the head of the document, so it is cheap even for a 32 GB report.
+
+def _root_start_tag(data: bytes) -> bytes | None:
+    """The ROOT element's opening tag bytes (``<name ...>``), or None when the prolog/root tag
+    is not yet fully present (or ``data`` is not XML).
+
+    HOW: skip the prolog — the XML declaration / processing instructions (``<? .. ?>``),
+    comments (``<!-- .. -->``) and declarations/DOCTYPE (``<! .. >``) — then return the first
+    real element's start-tag up to its closing ``>``. WHY the root specifically: the namespace
+    that discriminates the dialect is the ROOT's default xmlns, and picking the first element
+    that merely happens to carry an xmlns could select a CHILD's — the wrong dialect."""
+    index, size = 0, len(data)
+    while index < size:
+        while index < size and data[index:index + 1].isspace():
+            index += 1
+        if index >= size:
+            return None
+        if data[index:index + 1] != b"<":
+            return None  # a non-markup first byte: not XML
+        if data.startswith(b"<?", index):          # <?xml ...?> or a processing instruction
+            end = data.find(b"?>", index)
+            if end == -1:
+                return None
+            index = end + 2
+            continue
+        if data.startswith(b"<!--", index):        # a comment
+            end = data.find(b"-->", index)
+            if end == -1:
+                return None
+            index = end + 3
+            continue
+        if data.startswith(b"<!", index):          # a DOCTYPE / other declaration
+            end = data.find(b">", index)
+            if end == -1:
+                return None
+            index = end + 1
+            continue
+        end = _tag_end(data, index)                # the root element's own start-tag
+        return data[index:end + 1] if end != -1 else None
+    return None
+
+
+def sniff_namespace(head: bytes) -> str | None:
+    """The default namespace declared on the ROOT element in ``head``, or None.
+
+    Root-specific (never the first element that happens to carry an xmlns), so a root without a
+    namespace is not mis-typed from a namespaced child. Operates on whatever bytes it is given
+    — the reader grows that window until the root tag is complete (see ``_sniff_root_namespace``).
     """
-    match = _XMLNS_DEFAULT.search(head)
+    tag = _root_start_tag(head)
+    if tag is None:
+        return None
+    match = _XMLNS_DEFAULT_ATTR.search(tag)
     return match.group(1).decode("utf-8", "replace") if match else None
+
+
+def _sniff_root_namespace(open_stream: OpenStream) -> str | None:
+    """Grow the read window until the ROOT start-tag is complete, then sniff its default
+    namespace. Bounded by ``_ROOT_TAG_SEARCH_CAP`` so a report with no complete root tag (or a
+    non-XML file) cannot read unboundedly."""
+    with open_stream() as stream:
+        buffer = b""
+        while len(buffer) < _ROOT_TAG_SEARCH_CAP:
+            chunk = stream.read(_ROOT_TAG_READ_CHUNK)
+            if not chunk:
+                break
+            buffer += chunk
+            if _root_start_tag(buffer) is not None:
+                return sniff_namespace(buffer)
+        return sniff_namespace(buffer)
 
 
 @runtime_checkable
@@ -184,9 +274,7 @@ class XmlReader:
             return cached
 
         open_stream: OpenStream = lambda: source.open("rb")  # noqa: E731 - trivial factory
-        with open_stream() as stream:
-            head = stream.read(8192)
-        namespace = sniff_namespace(head)
+        namespace = _sniff_root_namespace(open_stream)
         dialect = self._dialect_for(namespace)
         if dialect is None:
             raise ValueError(

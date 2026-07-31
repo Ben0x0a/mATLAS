@@ -124,6 +124,27 @@ def test_csv_rejects_a_subunit() -> None:
         next(CsvReader().iter_records(Path("unused"), "sheet1"))
 
 
+def test_csv_bom_does_not_corrupt_the_first_column_name(tmp_path: Path) -> None:
+    # FIX-08 #1: an Excel-exported CSV starts with a UTF-8 BOM; it must be stripped, not glued
+    # to the first header cell, so iter_records and peek_fields agree on column 1's name.
+    path = tmp_path / "bom.csv"
+    path.write_bytes(b"\xef\xbb\xbfId,Name\n1,Alice\n")
+    [record] = list(CsvReader().iter_records(path, None))
+    assert record.fields == {"Id": "1", "Name": "Alice"}     # "Id", never "﻿Id"
+    assert CsvReader().peek_fields(path) == {"Id", "Name"}   # the two paths now agree
+
+
+def test_csv_quoted_control_char_not_split_into_phantom_lines(tmp_path: Path) -> None:
+    # FIX-08 #7: a quoted field containing a vertical tab (\x0b) must stay ONE record. The old
+    # str.splitlines() split on it and fabricated a phantom physical line, mis-parsing the row.
+    path = tmp_path / "vt.csv"
+    path.write_bytes(b'a,b\n"x\x0by",2\n')
+    recs = list(CsvReader().iter_records(path, None))
+    assert len(recs) == 1
+    assert recs[0].fields == {"a": "x\x0by", "b": "2"}
+    assert recs[0].line_no == 1
+
+
 # --- Excel --------------------------------------------------------------------
 
 def test_excel_reader_reads_requested_sheet_in_sheet_row_order(tmp_path: Path) -> None:
@@ -150,6 +171,17 @@ def test_excel_requires_a_sheet(tmp_path: Path) -> None:
     _xlsx(tmp_path / "b.xlsx", {"Data": (["a"], [[1]])})
     with pytest.raises(ValueError):
         next(ExcelReader().iter_records(tmp_path / "b.xlsx", None))
+
+
+def test_excel_mid_blank_row_keeps_the_true_sheet_line_no(tmp_path: Path) -> None:
+    # FIX-08 #4: line_no is the TRUE sheet row. A blank row keeps ITS number (3) and shifts
+    # nothing — not an enumerate offset over a frame that might collapse the blank away.
+    _xlsx(tmp_path / "b.xlsx", {"Data": (["a", "b"], [[1, 2], [None, None], [3, 4]])})
+    recs = list(ExcelReader().iter_records(tmp_path / "b.xlsx", "Data"))
+    assert [r.line_no for r in recs] == [2, 3, 4]
+    assert recs[0].fields == {"a": "1", "b": "2"}
+    assert recs[1].fields == {"a": "", "b": ""}      # the mid blank row: empty cells, still present
+    assert recs[2].fields == {"a": "3", "b": "4"}
 
 
 # --- SQLite ---------------------------------------------------------------
@@ -264,3 +296,30 @@ def test_sqlite_reread_yields_identical_line_no_sequence(tmp_path: Path) -> None
     first = [(r.line_no, r.recovery_state) for r in SqliteReader().iter_records(db, "t")]
     second = [(r.line_no, r.recovery_state) for r in SqliteReader().iter_records(db, "t")]
     assert first == second
+
+
+# --- ZipContainer: duplicate-path entries (FIX-08 #2) -------------------------
+
+@pytest.mark.filterwarnings("ignore:Duplicate name:UserWarning")
+def test_duplicate_zip_entries_each_resolve_to_their_own_bytes(tmp_path: Path) -> None:
+    import hashlib
+    import io
+    import zipfile
+
+    from model_atlas.ingest.containers import ZipContainer
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("dup.csv", b"first")
+        zf.writestr("dup.csv", b"second")     # a SECOND member with the SAME normalised path (intended)
+    zip_path = tmp_path / "d.zip"
+    zip_path.write_bytes(buffer.getvalue())
+
+    container = ZipContainer(path=zip_path)
+    files = list(container.files())
+    assert len(files) == 2                     # both entries enumerated, neither shadowed
+    hashes = [container.content_sha256(file) for file in files]
+    # Each duplicate-path entry resolves to its OWN bytes (via entry_index), not both to the
+    # first name-match — so the second file's bytes are never silently dropped.
+    assert hashes == [hashlib.sha256(b"first").hexdigest(),
+                      hashlib.sha256(b"second").hexdigest()]

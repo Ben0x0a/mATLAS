@@ -333,7 +333,19 @@ def assemble_source(
     if activity_ordinals is None:
         activity_ordinals = {}
 
-    source_fields = list(records[0].fields.keys())
+    # Seed the resolver from the UNION of field names across ALL records, not record[0]
+    # alone. WHY: a heterogeneous JSON/JSONL source can introduce a column only in a LATER
+    # record; seeding from the first record would resolve that column to None and silently
+    # drop its values for the whole source (a forensic tool must never drop an input). HOW:
+    # first-seen order across the ordered records is deterministic, so the resolver — and
+    # every glob it may expand — stays reproducible run to run.
+    source_fields: list[str] = []
+    seen_fields: set[str] = set()
+    for record in records:
+        for name in record.fields:
+            if name not in seen_fields:
+                seen_fields.add(name)
+                source_fields.append(name)
     resolve = make_resolver(source_fields)
     ctx = PipeContext(lookup_tables=preset.lookup_tables, patterns=preset.patterns)
     preset_values = _preset_values(preset, selector)
@@ -376,25 +388,46 @@ def assemble_source(
             )
 
         shared: dict[str, Any] = {}
+        # Spatial parts mapped under ``common:`` become COMPONENTS shared by every assertion
+        # of this record (a ``common:`` coordinate is the record's base place) — resolved
+        # once here, not per template.
+        shared_components: list[tuple[str, str | None, str | None]] = []
         for spec in common_scalar:
             shared[spec.model_field], _ = _resolve_field(
                 spec, row, report.warnings, resolve, file_values, row_env, ctx, preset_values)
         for spec in common_verbatim:
-            shared[spec.model_field], _ = _resolve_verbatim(
+            value, source_col = _resolve_verbatim(
                 spec, row, resolve, file_values, row_env, ctx, preset_values)
-        # Run-level entity / linked_entity OVERRIDE the preset value when supplied.
-        if row_env.entity:
+            if spec.model_field in V.STANDARD_SPATIAL_PARTS:
+                # A ``common:``-mapped spatial part is a real corner, not a scalar: emit it as
+                # a component (mirroring the per-template loop) so a shared coordinate yields a
+                # spatial_expression rather than vanishing. An absent value is NO row —
+                # nothing invented.
+                if not _is_missing(value):
+                    shared_components.append((spec.model_field, source_col, _text(value)))
+            else:
+                shared[spec.model_field] = value
+        # Run-level entity / linked_entity OVERRIDE the preset value whenever the operator
+        # supplied one — INCLUDING an empty string or a call-form that resolves to nothing.
+        # WHY apply on ``entity is not None`` (the operator param) rather than truthiness:
+        # entity_origin / concerns_origin are tagged OPERATOR_PARAM on exactly that test, so
+        # the APPLIED value must key on the same condition — otherwise ``--entity ""`` tags a
+        # preset value it never actually replaced (origin lies about provenance).
+        if entity is not None:
             shared[_ENTITY_NAME] = row_env.entity
-        if row_env.linked_entity:
+        if linked_entity is not None:
             shared[_LINKED_ENTITY_NAME] = row_env.linked_entity
 
         # data_source at SOURCE grain: resolved once, from the first record
         # that yields one, and only REPORTED — the source row is the L0 writer's to set.
         if report.data_source is None:
-            data_source = _norm(shared.get(DATA_SOURCE_NAME))
-            if data_source is None:
-                data_source = _norm(shared.get(RAW_SOURCE_PATH_NAME))
-            if data_source is not None:
+            # The NA sentinel (a mapping that evaluated to no-match) is NOT a real path, so
+            # it must leave the source row NULL rather than stamp literal "N/A". Treat it as
+            # missing here — both for the primary key and the legacy fallback.
+            data_source = shared.get(DATA_SOURCE_NAME)
+            if _is_missing(data_source) or data_source is NA_SENTINEL:
+                data_source = shared.get(RAW_SOURCE_PATH_NAME)
+            if not _is_missing(data_source) and data_source is not NA_SENTINEL:
                 report.data_source = str(data_source)
 
         # --- activity (+ its ONE ingest link) -------------------------------
@@ -440,9 +473,10 @@ def assemble_source(
             for spec in scalar_specs:
                 holder[spec.model_field], _ = _resolve_field(
                     spec, row, report.warnings, resolve, file_values, row_env, ctx, preset_values)
-            # Spatial component candidates: (part, source_field, raw_value) in the
-            # template's declaration order (the ordinal order — it feeds the digest).
-            components: list[tuple[str, str | None, str | None]] = []
+            # Spatial component candidates: (part, source_field, raw_value) in ordinal order
+            # (it feeds the digest) — the record's shared ``common:`` corners FIRST, then
+            # this template's own declaration order after them.
+            components: list[tuple[str, str | None, str | None]] = list(shared_components)
             for spec in verbatim_specs:
                 value, source_col = _resolve_verbatim(
                     spec, row, resolve, file_values, row_env, ctx, preset_values)
@@ -476,11 +510,15 @@ def _split_specs(specs: Sequence[FieldSpec]) -> tuple[list[FieldSpec], list[Fiel
     """Partition mapped fields into (scalar, verbatim-resolved).
 
     Verbatim resolution (no pipe/unit/cast — the L1 no-conversion invariant) applies to
-    the spatial part fields (they become component raw_values) and to the two entity
-    text fields (``raw_identifier`` / ``concerns`` are "as written in the source").
+    the spatial part fields (they become component raw_values), the two entity text fields
+    (``raw_identifier`` / ``concerns`` are "as written in the source"), and the per-bound
+    time-accuracy fields (their raw µs text is L1 evidence, parsed at L2 — matching the
+    spatial accuracy corner and ``integrate.temporal._stated_accuracy``'s verbatim-at-L1
+    contract; a preset that attaches a pipe/unit to the field must NOT convert it here).
     Everything else — links, roles, kinds, context, deleted, labels — resolves through
     the full old tail, where a lookup pipe maps tokens rather than converting values."""
-    verbatim_names = {_ENTITY_NAME, _LINKED_ENTITY_NAME}
+    verbatim_names = {_ENTITY_NAME, _LINKED_ENTITY_NAME,
+                      TIME_ACCURACY_US_LOWER_NAME, TIME_ACCURACY_US_UPPER_NAME}
     scalar: list[FieldSpec] = []
     verbatim: list[FieldSpec] = []
     for spec in specs:
@@ -591,13 +629,19 @@ def _emit_assertion(
     lower_value, lower_col = _resolve_ref(time_spec.lower, row, resolve, file_values, env, preset_values)
     lower_value = _apply_extract(lower_value, time_spec.lower_extract, ctx)
     bounds: list[tuple[str, str | None, str | None, str | None]] = []
-    if not _is_missing(lower_value):
+    # Track which SIDES actually produced a bound, so each accuracy component can be gated on
+    # ITS OWN bound existing (below) rather than on the total bound count — a malformed
+    # interval missing one bound must not orphan or drop the other side's accuracy.
+    have_lower = not _is_missing(lower_value)
+    have_upper = False
+    if have_lower:
         part = _text(flat.get(TEMPORAL_PART_LOWER_NAME)) or "lower"
         bounds.append((part, _text(flat.get(TEMPORAL_ROLE_LOWER_NAME)), lower_col, _text(lower_value)))
     if time_spec.kind == "interval":
         upper_value, upper_col = _resolve_ref(time_spec.upper, row, resolve, file_values, env, preset_values)
         upper_value = _apply_extract(upper_value, time_spec.upper_extract, ctx)
         if not _is_missing(upper_value):
+            have_upper = True
             part = _text(flat.get(TEMPORAL_PART_UPPER_NAME)) or "upper"
             bounds.append((part, _text(flat.get(TEMPORAL_ROLE_UPPER_NAME)), upper_col, _text(upper_value)))
 
@@ -633,12 +677,16 @@ def _emit_assertion(
         # Source-stated per-bound accuracy: an OPTIONAL verbatim component per side (parallel
         # to the _date/_time split parts), carrying no offset/role/source_field — the raw µs
         # text is the evidence, parsed at L2. Only present when the preset mapped it, so an
-        # accuracy-free expression gains no component and its claim_digest is unchanged. An
-        # upper accuracy needs an upper bound to qualify (an instant carries only the lower).
+        # accuracy-free expression gains no component and its claim_digest is unchanged.
+        have_side = {_LOWER_SIDE_NAME: have_lower, _UPPER_SIDE_NAME: have_upper}
         for side, field_name in ((_LOWER_SIDE_NAME, TIME_ACCURACY_US_LOWER_NAME),
                                  (_UPPER_SIDE_NAME, TIME_ACCURACY_US_UPPER_NAME)):
             accuracy_raw = _text(flat.get(field_name))
-            if accuracy_raw is None or (side == _UPPER_SIDE_NAME and len(bounds) < 2):
+            # Gate on THIS side's bound existing, not on len(bounds): an accuracy whose bound
+            # is absent (a malformed interval, or an instant's upper) is written for neither
+            # side — it is a value L2 could never read, so emitting it would only move the
+            # claim_digest for no observable claim.
+            if accuracy_raw is None or not have_side[side]:
                 continue
             accuracy_part = side + _ACCURACY_PART_SUFFIX
             store.write_temporal_component(V.TemporalComponent(

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,28 @@ from model_atlas.ingest.readers.base import RawRecord
 from model_atlas.ingest.readers.registry import register_reader
 
 log = logging.getLogger(__name__)
+
+# Physical-line boundaries are CR / LF / CRLF ONLY — never ``str.splitlines()``, which also
+# breaks on \v \f \x1c-\x1e, NEL (\x85) and the Unicode line/paragraph separators; any of
+# those inside a QUOTED field would fabricate phantom physical lines and mis-parse the row.
+_PHYSICAL_LINE_RE = re.compile(r"\r\n|\r|\n")
+
+
+def _split_physical_lines(text: str) -> list[str]:
+    """Split ``text`` into physical lines on CR/LF/CRLF only.
+
+    HOW: ``re.split`` on the CR/LF/CRLF pattern, then drop the single trailing empty element a
+    final line terminator produces — so the result matches ``str.splitlines()``' line count
+    (a file ending in one newline is NOT a trailing blank record) while, unlike splitlines,
+    never splitting on the other control/Unicode separators a quoted cell may legitimately
+    contain."""
+    if not text:
+        return []
+    lines = _PHYSICAL_LINE_RE.split(text)
+    # A trailing terminator yields one extra "" that splitlines() would not; drop exactly it.
+    if lines and lines[-1] == "" and text[-1] in "\r\n":
+        lines.pop()
+    return lines
 
 
 def _parse_line(line: str, delimiter: str) -> list[str]:
@@ -58,17 +81,25 @@ class CsvReader:
         params = params or {}
         delimiter = params.get("delimiter", ",")
         encoding = params.get("encoding", "utf-8")
+        # Match peek_fields (which decodes utf-8-sig): read plain UTF-8 as utf-8-sig so a
+        # leading BOM is stripped rather than glued to the first header cell (an Excel-exported
+        # CSV starts with a UTF-8 BOM). Without this the selector pre-filter and the emitted
+        # records disagree on column 1's name, mis-naming it for every such file. utf-8-sig
+        # decodes BOM-less UTF-8 identically, so this is safe; a non-UTF-8 encoding is honoured.
+        if encoding.lower().replace("_", "-") in ("utf-8", "utf8"):
+            encoding = "utf-8-sig"
         skip_rows = int(params.get("skip_rows", 0) or 0)
         header_row = int(params.get("header_row", 0) or 0)
         # Rule 2's header_lines: every physical line up to and including the header line,
         # i.e. the skipped junk lines plus the header line itself.
         header_lines = skip_rows + header_row + 1
 
-        # newline="": let the csv module see raw line endings; splitlines() below then
-        # gives one element per physical line with the terminator stripped, matching what
-        # csv_data_line_numbers expects (rule 2 numbers physical lines, not csv records).
+        # newline="": let this reader see raw line endings; _split_physical_lines below then
+        # gives one element per physical line (CR/LF/CRLF only) with the terminator stripped,
+        # matching what csv_data_line_numbers expects (rule 2 numbers physical lines, not csv
+        # records) — without splitlines()' over-splitting on control/Unicode separators.
         with source.open("r", encoding=encoding, newline="") as handle:
-            physical_lines = handle.read().splitlines()
+            physical_lines = _split_physical_lines(handle.read())
 
         header_index = skip_rows + header_row
         header_text = physical_lines[header_index] if header_index < len(physical_lines) else ""

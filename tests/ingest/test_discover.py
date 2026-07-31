@@ -246,6 +246,47 @@ def test_persisted_run_db_is_refused(tmp_path: Path) -> None:
             raise AssertionError("expected SelfIngestionError for a persisted run DB")
 
 
+# --- FIX-11 #1: archive re-append idempotency -------------------------------
+
+def test_reappending_the_same_archive_to_a_case_is_idempotent(tmp_path: Path) -> None:
+    # The archive row is path-keyed (UNIQUE(path)); re-appending the SAME zip to an existing
+    # case must NOT collide and abort the append. The existing archive row is skipped, this
+    # run's run_archive link is still recorded, and the already-present source is skipped.
+    zip_path = tmp_path / "a.zip"
+    zip_path.write_bytes(_zip_of({"x.csv": _csv_bytes()}))
+    with RunStore() as store:
+        first = ingest_input(zip_path, store, case_number="C1")
+        second = ingest_input(zip_path, store, case_number="ignored-on-append",
+                              existing_case_id=first.case_id)     # must not raise
+        archives = store.connection.execute("SELECT COUNT(*) FROM archive").fetchone()[0]
+        run_archives = store.connection.execute("SELECT COUNT(*) FROM run_archive").fetchone()[0]
+        sources = store.connection.execute("SELECT COUNT(*) FROM source").fetchone()[0]
+    assert first.case_id == second.case_id
+    assert archives == 1                         # one path -> one archive row across both runs
+    assert run_archives == 2                     # each run records its OWN encounter link
+    assert second.sources_already_in_case == 1   # the source is recognised + skipped
+    assert sources == 1                          # not re-ingested
+
+
+# --- FIX-08 #3: orphan sidecar handling -------------------------------------
+
+def test_orphan_sidecar_emitted_but_live_sidecar_skipped(tmp_path: Path) -> None:
+    folder = tmp_path / "acq"
+    folder.mkdir()
+    (folder / "main.csv").write_bytes(_csv_bytes())            # a real source...
+    (folder / "main.csv-wal").write_bytes(b"junk wal")         # ...its live -wal sibling: skipped
+    (folder / "lonely.sqlite-journal").write_bytes(b"orphan")  # an ORPHAN sidecar: must be emitted
+    with RunStore() as store:
+        report = ingest_input(folder, store, case_number="C1")
+        names = {Path(r["input_file_path"]).name for r in _sources(store)}
+    # only the csv is a source — the live -wal beside its sibling was skipped as a sidecar...
+    assert names == {"main.csv"}
+    assert report.sources == 1
+    # ...but the orphan -journal (no sibling db) reached the writer (no reader -> surfaced
+    # unreadable), never silently dropped during the walk.
+    assert report.skipped_unreadable == 1
+
+
 def test_plain_sqlite_is_not_flagged_as_a_run_db(tmp_path: Path) -> None:
     db = tmp_path / "plain.sqlite"
     db.write_bytes(_sqlite_bytes())

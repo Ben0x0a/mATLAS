@@ -768,3 +768,110 @@ def test_multiplicity_stored_and_null_means_one() -> None:
     with _assembled(spec_plain, records) as (store, _, _):
         # R15: an unmapped multiplicity is NULL — which reads as 1, nothing invented.
         assert _one(store, "SELECT multiplicity FROM assertion")["multiplicity"] is None
+
+
+# --- FIX-11: writer-correctness / silent-loss fixes ---------------------------
+
+def test_common_mapped_coordinate_produces_a_spatial_corner() -> None:
+    # FIX-11 #2: latitude/longitude mapped under common: must emit a spatial COMPONENT shared
+    # by the assertion, not vanish into `shared` — otherwise the position and its digest are lost.
+    spec = _preset("common_coords", common=[
+        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+        _f("latitude_wgs84", "field(lat)"), _f("longitude_wgs84", "field(lon)"),
+    ], assertions=[AssertionTemplate(
+        fields=tuple(_links("at", "observed_at", "instant")),
+        temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
+    )])
+    records = _records({"lat": "46.2", "lon": "6.1", "ts": "1773450680"})
+    with _assembled(spec, records) as (store, _, _):
+        comps = _rows(store, "SELECT * FROM spatial_component ORDER BY ordinal")
+        assert [(c["part"], c["source_field"], c["raw_value"]) for c in comps] == [
+            ("latitude_wgs84", "lat", "46.2"), ("longitude_wgs84", "lon", "6.1")]
+        sx = _one(store, "SELECT * FROM spatial_expression")
+        assert sx["referential"] == "epsg:4326"          # derived from the shared lat/lon parts
+        assertion = _one(store, "SELECT * FROM assertion")
+        assert assertion["spatial_expression_id"] is not None
+        assert assertion["claim_digest"] is not None     # a real placed assertion, not placeless
+
+
+def test_resolver_picks_up_a_field_present_only_in_a_later_record() -> None:
+    # FIX-11 #3: a column absent from record[0] but present in a LATER record must still resolve
+    # (heterogeneous JSON/JSONL) — seeding the resolver from record[0] alone would drop it.
+    spec = _preset("hetero", common=[
+        _f("entity", "field(imei)"), _f("identifier_type", "const(msisdn)"),
+        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+    ], assertions=[AssertionTemplate(
+        fields=tuple(_links("references", "event_at", "instant")),
+        temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
+    )])
+    # 'imei' appears ONLY in the second record.
+    records = _records({"ts": "1773450680"},
+                       {"imei": "352099001761481", "ts": "1773450681"})
+    with _assembled(spec, records) as (store, _, _):
+        idents = [row["raw_identifier"] for row in _rows(
+            store,
+            "SELECT e.raw_identifier FROM entity e "
+            "JOIN assertion a ON a.entity_id = e.entity_id "
+            "JOIN raw_record r ON r.raw_record_id = a.raw_record_id ORDER BY r.line_no")]
+    # record 1 has no imei (None); record 2's late-only imei resolves, not silently dropped.
+    assert idents == [None, "352099001761481"]
+
+
+def test_unmatched_data_source_yields_null_not_na_text() -> None:
+    # FIX-11 #4: a data_source conditional that evaluates to no-match must leave the reported
+    # value None, never the literal "N/A" stamped onto the source row.
+    spec, records, _ = _example_cache()
+    spec = replace(spec, common=(*spec.common,
+                                 _f("data_source", 'if field(ZSPEED) == "nope" then const(x)')))
+    with _assembled(spec, records) as (store, report, _):
+        assert report.data_source is None
+
+
+def test_empty_operator_entity_blanks_the_value_and_tags_it_consistently() -> None:
+    # FIX-11 #5: --entity "" is an explicit operator choice. The old guard tagged origin
+    # operator_param while SKIPPING the empty override, so the stored value stayed the preset's
+    # while the origin lied. Now the empty value is applied AND tagged (consistent provenance).
+    spec, records, _ = _example_anpr()   # its preset maps entity: field(plate) -> "GE 123 456"
+    with _assembled(spec, records, entity="") as (store, _, _):
+        entity = _one(store, "SELECT * FROM entity")
+        assert entity["raw_identifier"] == ""            # the operator's blank, not the preset value
+        assert _one(store, "SELECT entity_origin FROM assertion")["entity_origin"] \
+            == "operator_param"
+
+
+# --- FIX-02: per-bound accuracy component guard -------------------------------
+
+def _acc_interval_spec_records(with_lower_acc: bool):
+    """An interval preset whose LOWER bound is MISSING (no 'start') but UPPER present, with the
+    upper accuracy mapped (+ the lower accuracy too when ``with_lower_acc``)."""
+    fields = [_f("time_accuracy_us_upper", "field(acc_hi)")]
+    if with_lower_acc:
+        fields.insert(0, _f("time_accuracy_us_lower", "field(acc_lo)"))
+    spec = _preset("acc_interval", common=[
+        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+    ], assertions=[AssertionTemplate(
+        fields=tuple([*fields, *_links("at", "observed_at", "continuous_during_interval")]),
+        temporal=(_time("interval", "field(start)", "field(end)", epoch="unix_s"),),
+    )])
+    records = _records({"end": "1773450681", "acc_lo": "500000", "acc_hi": "1000000"})
+    return spec, records
+
+
+def test_malformed_interval_gates_accuracy_per_side() -> None:
+    # FIX-02: lower bound missing, upper present, BOTH accuracies mapped. The lower accuracy must
+    # NOT be written as an orphan (no lower bound); the upper accuracy IS written; and the
+    # claim_digest equals the same record WITHOUT the stray lower-accuracy mapping.
+    spec, records = _acc_interval_spec_records(with_lower_acc=True)
+    with _assembled(spec, records) as (store, _, _):
+        parts = [(c["part"], c["raw_value"])
+                 for c in _rows(store, "SELECT * FROM temporal_component ORDER BY ordinal")]
+        assert ("upper", "1773450681") in parts
+        assert ("upper_accuracy", "1000000") in parts
+        assert not any(part == "lower_accuracy" for part, _ in parts)   # no orphan
+        digest_with = _one(store, "SELECT claim_digest FROM assertion")["claim_digest"]
+
+    spec2, records2 = _acc_interval_spec_records(with_lower_acc=False)
+    with _assembled(spec2, records2) as (store, _, _):
+        digest_without = _one(store, "SELECT claim_digest FROM assertion")["claim_digest"]
+    # The malformed lower accuracy contributed nothing to identity, as it must not.
+    assert digest_with == digest_without

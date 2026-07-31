@@ -54,6 +54,11 @@ class SourceFile:
 
     containers: tuple["Container", ...]      # outermost .. innermost
     logical_path: PurePosixPath              # path inside the INNERMOST container, no leading slash
+    # For a zip leaf: the exact ``infolist()`` index this file was enumerated from, so two
+    # members sharing a normalised path each resolve to their OWN entry rather than both
+    # collapsing to the first name-match (a silent drop of the second's bytes). None for a
+    # filesystem file or a SourceFile built by path alone (e.g. a sibling lookup).
+    entry_index: int | None = None
 
     @property
     def name(self) -> str:
@@ -207,11 +212,15 @@ class ZipContainer:
 
     def files(self) -> Iterable[SourceFile]:
         with self._zipfile() as zf:
-            for info in zf.infolist():
+            # enumerate the WHOLE infolist so entry_index is the true infolist position (dir
+            # entries are skipped but still consume an index), letting _resolve_info map each
+            # leaf back to its exact entry — see the duplicate-path handling there.
+            for index, info in enumerate(zf.infolist()):
                 if info.is_dir():
                     continue
                 norm = info.filename.replace("\\", "/").lstrip("/")
-                yield SourceFile(containers=(self,), logical_path=PurePosixPath(norm))
+                yield SourceFile(
+                    containers=(self,), logical_path=PurePosixPath(norm), entry_index=index)
 
     def _find_info(self, zf: zipfile.ZipFile, logical_path: PurePosixPath) -> zipfile.ZipInfo:
         target = str(logical_path)
@@ -220,10 +229,23 @@ class ZipContainer:
                 return info
         raise FileNotFoundError(f"{target!r} not found in {self.root_label}")
 
+    def _resolve_info(self, zf: zipfile.ZipFile, file: SourceFile) -> zipfile.ZipInfo:
+        """The SPECIFIC entry a leaf ``file`` denotes.
+
+        HOW: when the file carries the ``entry_index`` that ``files()`` stamped, return exactly
+        that ``infolist()`` entry; otherwise fall back to first-match by normalised name. WHY:
+        two members with the same normalised path would otherwise BOTH resolve to the first
+        name-match, so the second's bytes are silently dropped — resolving by the enumerated
+        index makes leaf reads 1:1 with the entries the walk yielded. A SourceFile built by
+        path alone (a sibling lookup) has no index and keeps the name-match path."""
+        if file.entry_index is not None:
+            return zf.infolist()[file.entry_index]
+        return self._find_info(zf, file.logical_path)
+
     def open(self, file: SourceFile) -> BinaryIO:
         zf = self._zipfile()
         try:
-            info = self._find_info(zf, file.logical_path)
+            info = self._resolve_info(zf, file)
             return _ClosingZipStream(zf.open(info), zf)
         except BaseException:
             zf.close()
@@ -268,7 +290,7 @@ class ZipContainer:
 
     def content_sha256(self, file: SourceFile) -> str:
         with self._zipfile() as zf:
-            return self._hash_entry(zf, self._find_info(zf, file.logical_path), None)
+            return self._hash_entry(zf, self._resolve_info(zf, file), None)
 
     def sibling_sha256(self, file: SourceFile) -> dict[str, str]:
         found: dict[str, str] = {}
@@ -288,7 +310,7 @@ class ZipContainer:
         conventional names so the SQLite reader finds them by the standard naming rule."""
         dest = dest_dir / file.name
         with self._zipfile() as zf:
-            self._hash_entry(zf, self._find_info(zf, file.logical_path), dest)
+            self._hash_entry(zf, self._resolve_info(zf, file), dest)
             for _key, suffix in zip(SIBLING_KEYS, SIBLING_SUFFIXES):
                 sib_path = file.logical_path.with_name(file.name + suffix)
                 try:
