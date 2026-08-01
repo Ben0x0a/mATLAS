@@ -50,12 +50,19 @@ def _local_iso(unix_us: Any, offset_hours: Any) -> str:
     """
     if is_blank(unix_us):
         return ""
+    # WHY the arithmetic is INSIDE the guard: a far-out-of-range int64 epoch-micros (a corrupt
+    # or adversarial value) overflows datetime's year range in the timedelta add / astimezone
+    # step and raises OverflowError (OSError on some platforms) — NOT a TypeError/ValueError.
+    # Left un-caught it escapes into run_exporters' broad skip and drops the ENTIRE .kml,
+    # losing every valid row's placemark for one bad timestamp; catching it yields an empty
+    # time cell for just that row. (timedelta-from-epoch already avoids fromtimestamp's own
+    # narrower range trap; this guards the residual datetime-range overflow.)
     try:
         microseconds = int(unix_us)
-    except (TypeError, ValueError):
+        tz = timezone(timedelta(hours=as_float(offset_hours) or 0.0))
+        return (UNIX_EPOCH + timedelta(microseconds=microseconds)).astimezone(tz).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
         return ""
-    tz = timezone(timedelta(hours=as_float(offset_hours) or 0.0))
-    return (UNIX_EPOCH + timedelta(microseconds=microseconds)).astimezone(tz).isoformat()
 
 
 class KmlExporter:

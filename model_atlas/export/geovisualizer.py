@@ -50,7 +50,13 @@ import pandas as pd
 from model_atlas.core.flat_view import build_flat_view
 from model_atlas.core.store import RunStore
 from model_atlas.export import CSV_DELIMITER
-from model_atlas.export._shared import UNIX_EPOCH, as_float, clean, is_blank
+from model_atlas.export._shared import (
+    UNIX_EPOCH,
+    as_float,
+    clean,
+    guard_object_cells,
+    is_blank,
+)
 from model_atlas.export.csv_flat import ExportContext
 from model_atlas.export.registry import register_exporter
 
@@ -109,13 +115,20 @@ def _local_timestamp(unix_us: Any, offset_hours: Any) -> str:
     non-numeric offset falls back to UTC — flagged by ``_geovis_description``."""
     if is_blank(unix_us):
         return ""
+    # WHY the arithmetic is INSIDE the guard: a far-out-of-range int64 epoch-micros (a corrupt
+    # or adversarial value) overflows datetime's year range in the timedelta add / astimezone
+    # step and raises OverflowError (OSError on some platforms) — NOT a TypeError/ValueError.
+    # Left un-caught it escapes into run_exporters' broad skip and drops the ENTIRE
+    # GeoVisualizer CSV, losing every valid row for one bad timestamp; catching it yields an
+    # empty timestamp cell for just that row. (timedelta-from-epoch already avoids
+    # fromtimestamp's own narrower range trap; this guards the residual datetime-range overflow.)
     try:
         microseconds = int(unix_us)
-    except (TypeError, ValueError):
+        tz = timezone(timedelta(hours=as_float(offset_hours) or 0.0))
+        local = (UNIX_EPOCH + timedelta(microseconds=microseconds)).astimezone(tz)
+        return local.strftime("%d.%m.%Y %H:%M:%S.%f") + _offset_suffix(local.utcoffset())
+    except (TypeError, ValueError, OverflowError, OSError):
         return ""
-    tz = timezone(timedelta(hours=as_float(offset_hours) or 0.0))
-    local = (UNIX_EPOCH + timedelta(microseconds=microseconds)).astimezone(tz)
-    return local.strftime("%d.%m.%Y %H:%M:%S.%f") + _offset_suffix(local.utcoffset())
 
 
 # The description's first part when the emitted bound's offset is unknown: the shown
@@ -246,10 +259,15 @@ class GeovisualizerExporter:
                     "Precision": _num_or_blank(row.get("horizontal_accuracy_m")),
                 })
         out_frame = pd.DataFrame(rows, columns=list(_GEOVIS_COLUMNS))
+        # Neutralise spreadsheet formula injection before writing: MINIMAL quoting gives even
+        # less protection than the flat CSV's QUOTE_NONNUMERIC, so an attacker-controlled
+        # Target/Description/... beginning ``=``/``+``/``-``/``@`` would execute on open in the
+        # GeoVisualizer's Excel-adjacent importer. guard_object_cells prefixes such text cells
+        # with a guard apostrophe; numeric Latitude/Longitude/Precision cells stay untouched.
         # ';' delimiter (Excel default) and MINIMAL quoting: a field is quoted only if
         # it contains the delimiter or a quote (the Description is single-line, joined
         # with ' | ', so needs no quoting).
-        out_frame.to_csv(
+        guard_object_cells(out_frame).to_csv(
             path, index=False, sep=CSV_DELIMITER, quoting=csv.QUOTE_MINIMAL, encoding="utf-8-sig")
         return path
 

@@ -43,6 +43,7 @@ import pandas as pd
 from model_atlas.core.flat_view import build_flat_view
 from model_atlas.core.store import RunStore
 from model_atlas.export import CSV_DELIMITER
+from model_atlas.export._shared import guard_object_cells
 
 log = logging.getLogger(__name__)
 
@@ -101,13 +102,16 @@ class CsvFlatExporter:
     def _write(self, frame: pd.DataFrame, path: Path) -> Path:
         """Write one frame as a utf-8-sig, ';'-delimited, QUOTE_NONNUMERIC CSV.
 
-        QUOTE_NONNUMERIC quotes every non-numeric field, so a value containing the
-        delimiter, a newline or a leading '=' (a spreadsheet formula trigger) can never
-        break the column structure of a forensic export; the numeric-dtype columns the
-        flat view restored stay unquoted so they read as numbers.
+        QUOTE_NONNUMERIC quotes every non-numeric field, so a value containing the delimiter
+        or a newline can never break the column STRUCTURE of the export; the numeric-dtype
+        columns the flat view restored stay unquoted so they read as numbers. Quoting alone,
+        however, does NOT stop formula EXECUTION — Excel strips the quotes on open and still
+        evaluates a leading ``=``/``+``/``-``/``@`` cell — so ``guard_object_cells`` first
+        prefixes any such text cell with a guard apostrophe (the OWASP mitigation), forcing
+        the spreadsheet to treat it as inert text. Numeric cells are left untouched.
         """
         log.info(f"Writing flat CSV: path={path} rows={len(frame)} columns={len(frame.columns)}")
-        frame.to_csv(
+        guard_object_cells(frame).to_csv(
             path, index=False, sep=CSV_DELIMITER,
             quoting=csv.QUOTE_NONNUMERIC, encoding="utf-8-sig",
         )
