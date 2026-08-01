@@ -26,7 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTreeWidget,
@@ -43,14 +43,27 @@ _LOG_COLUMNS: tuple[str, ...] = (
 )
 
 
-class DbEditController:
+class DbEditController(QObject):
     """Build and drive the Database Edit panel inside ``parent``.
 
     The constructor only builds widgets (no DB is opened), so it is safe to construct
     headless with an offscreen parent QWidget; call :meth:`open_database` to load a DB.
+
+    A ``QObject`` (like MainController / SpatiotemporalController), NOT a plain class: the
+    async "Open database" flow connects bound-method callbacks (``_apply_opened`` /
+    ``_on_open_failed``) to the ``TaskRunner`` worker signals, and Qt only queues those onto
+    the GUI thread when the receiver is a QObject living there. As a plain class the callbacks
+    ran via a DIRECT connection on the WORKER thread, so ``_open_editing_api`` opened the
+    sqlite/EditApi connection off-thread and ``_populate`` mutated the tree/table widgets
+    cross-thread; a later in-place edit on the GUI thread then raised sqlite3.ProgrammingError
+    (SQLite object used from another thread). Being a QObject keeps the connection and all
+    widget work on the GUI thread.
     """
 
     def __init__(self, parent: QWidget, *, runner: TaskRunner | None = None) -> None:
+        # Parent this QObject to the tab widget so its lifetime is tied to the panel and its
+        # bound-method callbacks are affine to the GUI thread (they must run there).
+        super().__init__(parent)
         # The runner drives the one long op (reading all rows). Reuse the caller's if given
         # (so the app shares a single lifecycle-managed runner); otherwise own one parented to
         # the panel so its threads are cleaned up with the widget.
@@ -58,6 +71,9 @@ class DbEditController:
         self._runner = runner or TaskRunner(parent)
         self._api: EditApi | None = None
         self._path: Path | None = None
+        # The path of an in-flight async open, so the finished callback can be a bound method
+        # (queued to the GUI thread) rather than a lambda (which would run on the worker thread).
+        self._pending_open_path: Path | None = None
         self._current_table: str | None = None
         self._current_row_id: str | None = None
         self._field_edits: dict[str, QLineEdit] = {}
@@ -158,18 +174,27 @@ class DbEditController:
     def _open_async(self, path: Path) -> None:
         """Read the display snapshot off the GUI thread, then open the editing connection.
 
-        The worker opens and closes its OWN EditApi (a connection never crosses a thread);
-        on success the GUI thread opens its editing EditApi and populates from the snapshot.
+        The worker opens and closes its OWN EditApi (a connection never crosses a thread); on
+        success the GUI thread opens its editing EditApi and populates from the snapshot.
+
+        The success/failure callbacks MUST be BOUND METHODS of this QObject, not lambdas: Qt
+        only queues a slot onto the GUI thread when it can see a QObject receiver, so a bound
+        method of a GUI-thread QObject is marshalled there, whereas a lambda connects as a
+        DirectConnection and would run on the worker thread — opening the sqlite/EditApi
+        connection off-thread and mutating the tree/table widgets cross-thread. The target path
+        is stashed so ``_apply_opened`` needs no wrapping lambda to carry it.
         """
+        self._pending_open_path = path
         self.open_button.setEnabled(False)
         self._runner.run(
-            lambda: _read_snapshot(path),
-            lambda snapshot: self._apply_opened(path, snapshot),
+            lambda: _read_snapshot(path),   # worker-thread read: opens/closes its OWN connection
+            self._apply_opened,
             self._on_open_failed)
 
-    def _apply_opened(self, path: Path, snapshot: dict[str, Any]) -> None:
+    def _apply_opened(self, snapshot: dict[str, Any]) -> None:
+        assert self._pending_open_path is not None   # set by _open_async before the run
         self.open_button.setEnabled(True)
-        self._open_editing_api(path)
+        self._open_editing_api(self._pending_open_path)
         self._populate(snapshot["tables"], snapshot["log"])
 
     def _on_open_failed(self, message: str) -> None:

@@ -117,10 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
     process_parser.add_argument(
         "--root-prefix-depth",
         type=int,
-        default=1,
+        default=None,
         help=(
             "How many leading path segments a selector 'path' may skip so /private/... "
-            "matches filesystem1/private/... (the acquisition's root wrapper). Default 1."
+            "matches filesystem1/private/... (the acquisition's root wrapper). Unset falls "
+            "back to matlas_config.toml [discovery].root_prefix_depth (default 1), matching "
+            "the GUI — so the same config yields the same selectors on both frontends."
         ),
     )
     process_parser.add_argument(

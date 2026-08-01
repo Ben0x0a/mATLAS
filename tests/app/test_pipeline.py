@@ -86,6 +86,23 @@ def test_run_writes_case_db_csv_and_sidecars(tmp_path: Path) -> None:
     assert trace["sources"][0]["source_file"] == "cached.csv"
 
 
+def test_refuses_to_overwrite_a_non_matlas_file_at_the_output_path(tmp_path: Path) -> None:
+    # A pre-existing NON-mATLAS file at exactly <output>/<name>.matlas.sqlite must NOT be
+    # silently destroyed: on CREATE, store.persist() unlinks the target before VACUUM INTO, so
+    # a run there would delete an unrelated/corrupt file. The pipeline refuses instead.
+    out = tmp_path / "out"
+    out.mkdir()
+    stray = out / "merged.matlas.sqlite"
+    payload = b"not a sqlite database at all"
+    stray.write_bytes(payload)
+
+    with pytest.raises(FileExistsError, match="not a mATLAS case database"):
+        process(_fixture_folder(tmp_path), _GOLDEN, out, linked_entity=_LINKED)
+
+    # The stray file is untouched (byte-for-byte) — nothing was deleted or overwritten.
+    assert stray.read_bytes() == payload
+
+
 def test_folder_and_zip_runs_agree_on_evidence_digests(tmp_path: Path) -> None:
     folder_result = process(_fixture_folder(tmp_path), _GOLDEN, tmp_path / "out_folder",
                             linked_entity=_LINKED)

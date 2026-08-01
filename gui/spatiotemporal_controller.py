@@ -75,8 +75,12 @@ class _PersistedRunView:
 
     def __init__(self, path: str | Path) -> None:
         # URI form with mode=ro: the file must exist AND is opened read-only, so the
-        # connection physically cannot write to the persisted evidence DB.
-        self._connection = sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True)
+        # connection physically cannot write to the persisted evidence DB. The path is
+        # percent-encoded via Path.as_uri() (an absolute file: URI) BEFORE the query string is
+        # appended, so a folder carrying a URI-significant character (#, ?, %) — e.g. "Case #3"
+        # — is not mis-parsed by SQLite's URI parser into a bogus path + fragment.
+        self._connection = sqlite3.connect(
+            f"{Path(path).absolute().as_uri()}?mode=ro", uri=True)
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -141,12 +145,16 @@ class SpatiotemporalController(QObject):
     file never edits gui.app / main_window.ui / accessibility.py.
     """
 
-    def __init__(self, parent_tab: QWidget) -> None:
+    def __init__(self, parent_tab: QWidget, *, runner: TaskRunner | None = None) -> None:
         # Parent this QObject to the tab so its lifetime (and the TaskRunner's threads)
         # is tied to the tab widget's.
         super().__init__(parent_tab)
         self._parent_tab = parent_tab
-        self._runner = TaskRunner(self)
+        # Reuse the caller's shared runner when given (so the app's single lifecycle-managed
+        # runner — the one waited on aboutToQuit — also covers this panel's concomitance query;
+        # quitting mid-query would otherwise destroy an unwaited QThread and abort on exit).
+        # Fall back to an own runner parented here for standalone/headless construction.
+        self._runner = runner or TaskRunner(self)
         # Progress reporting: the worker emits phase names through this thread-safe
         # bridge; a queued connection marshals each onto the GUI thread (see gui.worker).
         self._progress = ProgressBridge(self)

@@ -51,7 +51,7 @@ from gui.db_edit_controller import DbEditController
 from gui.spatiotemporal_controller import SpatiotemporalController
 from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
-from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler
+from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler, remove_gui_log_handler
 from model_atlas.app.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
 from model_atlas.app.config import get_settings
 from model_atlas.export.registry import available_exporters, load_builtin_exporters
@@ -147,7 +147,17 @@ class MainController(QObject):
         self._run_timer.timeout.connect(self._tick_running_animation)
         if app is not None:
             app.aboutToQuit.connect(self._runner.wait_all)
+            # Detach the root-logger GUI handler on teardown (AFTER wait_all, so records emitted
+            # while workers drain still reach the log). Without this, a record logged after the
+            # window/log_edit is destroyed would append to a deleted widget and crash.
+            app.aboutToQuit.connect(self._detach_log_handler)
         QTimer.singleShot(0, self._load_presets_async)
+
+    def _detach_log_handler(self) -> None:
+        """Remove the GUI log handler from the root logger so no post-teardown record touches
+        the destroyed log widget (mirrors the test fixture's teardown)."""
+        remove_gui_log_handler(self._log_handler)
+        self._log_handler = None
 
     def _load_ui(self) -> QMainWindow:
         loader = QUiLoader()
@@ -262,7 +272,10 @@ class MainController(QObject):
                 placeholder.setParent(None)
                 placeholder.deleteLater()
         self._db_edit_controller = DbEditController(self.database_edit_tab, runner=self._runner)
-        self._spatiotemporal_controller = SpatiotemporalController(self.spatiotemporal_tab)
+        # Share the app's single lifecycle-managed runner with the spatiotemporal panel too, so
+        # its concomitance query is waited on aboutToQuit (see SpatiotemporalController).
+        self._spatiotemporal_controller = SpatiotemporalController(
+            self.spatiotemporal_tab, runner=self._runner)
 
     def _configure_exports(self) -> None:
         """Populate the 'Additional export' button with a checkable menu, one item per registered
@@ -655,6 +668,26 @@ class MainController(QObject):
             "One preset will be applied without filename selector filtering." if visible else ""
         )
 
+    def _reject_if_blank(self, text: str, message: str) -> bool:
+        """Show ``message`` and return True when ``text`` is blank; a no-op returning False
+        otherwise. Both run modes validate a required source/output field this way."""
+        if not text:
+            self._show_error(message)
+            return True
+        return False
+
+    def _start_run(self) -> None:
+        """The run-preamble shared by both modes: enter the running state, forget the last
+        output folder, reset the open-output button and apply the current log level.
+
+        Extracted from ``_run_process`` / ``_run_ufdr_dump`` (which repeated it verbatim);
+        each keeps its own MODE-specific validation before calling this. Called only AFTER all
+        validation passes, so a rejected run never leaves the UI stuck in the running state."""
+        self._set_running(True)
+        self._last_output_folder = None
+        self.open_output_folder_button.setEnabled(False)
+        self._apply_log_level()
+
     def _run_process(self) -> None:
         # Dump mode (the "Dump full UFDR" toggle) runs the standalone UFDR parser instead of
         # the transform pipeline: no presets/entity/exports apply, so it branches out here
@@ -666,14 +699,12 @@ class MainController(QObject):
         source = self.source_edit.text().strip()
         output = self.output_edit.text().strip()
         preset_root = self._preset_root()
-        if not source:
-            self._show_error("Choose a source file or folder.")
+        if self._reject_if_blank(source, "Choose a source file or folder."):
             return
         if preset_root is None:
             self._show_error("Choose a preset folder or YAML file.")
             return
-        if not output:
-            self._show_error("Choose an output folder.")
+        if self._reject_if_blank(output, "Choose an output folder."):
             return
         entity = self.entity_edit.text().strip() or None
         linked_entity = self.linked_entity_edit.text().strip()
@@ -694,12 +725,9 @@ class MainController(QObject):
             return
         single_preset = self._single_preset_for_selector_skip(selected_mode, selected_paths)
 
-        self._set_running(True)
-        self._last_output_folder = None
-        self.open_output_folder_button.setEnabled(False)
+        self._start_run()
         # Read the checked exporters on the GUI thread; the worker only uses this captured list.
         exports = self._selected_exports()
-        self._apply_log_level()
 
         # Build the process() keyword arguments once; they are identical across preset modes,
         # which differ only in how the presets path is resolved (see _resolve_presets_path).
@@ -792,22 +820,17 @@ class MainController(QObject):
         needs only a source file and an output folder (the transform fields are ignored)."""
         source = self.source_edit.text().strip()
         output = self.output_edit.text().strip()
-        if not source:
-            self._show_error("Choose a source .ufdr file.")
+        if self._reject_if_blank(source, "Choose a source .ufdr file."):
             return
         source_path = Path(source).expanduser()
         if not source_path.is_file() or source_path.suffix.lower() != ".ufdr":
             self._show_error("UFDR dump mode needs a .ufdr file as the source.")
             return
-        if not output:
-            self._show_error("Choose an output folder.")
+        if self._reject_if_blank(output, "Choose an output folder."):
             return
         output_path = Path(output).expanduser()
 
-        self._set_running(True)
-        self._last_output_folder = None
-        self.open_output_folder_button.setEnabled(False)
-        self._apply_log_level()
+        self._start_run()
 
         def task() -> "DumpSummary":
             # Lazy import: the UFDR parser and its streaming readers load only when a dump is

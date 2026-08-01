@@ -39,6 +39,19 @@ def test_read_case_counts_grows_across_create_then_append(tmp_path: Path) -> Non
     assert after_append == CaseCounts(runs=2, sources=2, assertions=2)
 
 
+def test_read_case_counts_opens_a_db_under_a_uri_significant_folder(tmp_path: Path) -> None:
+    # A folder carrying a URI-significant character (here '#') must open correctly: the
+    # read-only URI is built with Path.as_uri() percent-encoding, so SQLite's URI parser does
+    # not mistake "Case #3" for a path + fragment. Before the fix this raised.
+    preset = _GOLDEN / "secondary_cached.preset.yaml"
+    out = tmp_path / "Case #3"
+    db = out / "op.matlas.sqlite"
+    process(_write(tmp_path / "a.csv", "46.5", "1001"), preset, out,
+            linked_entity="subject", base_name="op")
+    assert db.is_file()
+    assert read_case_counts(db) == CaseCounts(runs=1, sources=1, assertions=1)
+
+
 def test_format_case_summary() -> None:
     summary = format_case_summary("op", CaseCounts(runs=2, sources=3, assertions=512))
     assert summary == "Case 'op': 2 run(s) · 3 source(s) · 512 assertion(s)"

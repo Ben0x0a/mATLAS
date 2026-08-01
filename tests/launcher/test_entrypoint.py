@@ -83,3 +83,37 @@ def test_profile_run_forwards_root_prefix_depth(monkeypatch, tmp_path):
 
     assert rc == 0
     assert captured["root_prefix_depth"] == 3
+
+
+def test_root_prefix_depth_unset_falls_back_to_config(monkeypatch, tmp_path):
+    """With no --root-prefix-depth flag the CLI forwards None, so process() falls back to the
+    matlas_config.toml value — identical to the GUI (which never sends the arg). Previously the
+    argparse default of 1 was ALWAYS forwarded, overriding an operator's config on the CLI."""
+    import launcher.cli as cli
+
+    captured = {}
+
+    def fake_process(_input, _presets, _output, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            row_counts={}, matched=[], unmatched=[], warnings=[],
+            output_case_db=Path(_output) / "merged.matlas.sqlite",
+            output_csv=None, output_traceability=None,
+            output_warnings=None, output_extras=[],
+        )
+
+    monkeypatch.setattr(cli, "process", fake_process)
+
+    source = tmp_path / "in.csv"
+    source.write_text("a,b\n1,2\n", encoding="utf-8")
+
+    rc = cli.run([
+        "process",
+        "--input", str(source),
+        "--output", str(tmp_path / "out"),
+        "--linked-entity", "subject",
+    ])
+
+    assert rc == 0
+    # None is the "fall back to config" sentinel process() already honours (not the old 1).
+    assert captured["root_prefix_depth"] is None

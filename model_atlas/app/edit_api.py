@@ -58,6 +58,14 @@ assigned. Uniqueness is guaranteed by the ordinal's UNIQUE constraint; determini
 the derivation inside ``core.ids``' namespace/separator discipline. ``save_as_new_row``
 seeds the origin with the original row id (the occurrence it was cloned from);
 ``add_empty_row`` uses a fixed ``"empty_row"`` tag.
+
+A verbatim clone would ALSO duplicate any other UNIQUE value the source row carries, so
+``save_as_new_row`` re-mints those too (``_clone_row``): a non-FK discriminator (e.g. analysis'
+``method`` in ``UNIQUE(assertion_id, method)``) is regenerated, while a UNIQUE tuple made only
+of foreign keys (the 1:1 owned-corner integrations' ``UNIQUE(spatial_expression_id)``) is
+given a FRESH parent occurrence — because pointing the FK at a non-existent id would fail FK
+enforcement, and the model owns the corner the same way the assembler does. Parents are minted
+first (earlier ordinal) so a later rewind stays FK-safe.
 """
 from __future__ import annotations
 
@@ -190,44 +198,112 @@ class EditApi:
     def save_as_new_row(self, table: str, row_id: str, edits: dict[str, Any]) -> str:
         """Clone ``row_id`` with ``edits`` applied as a NEW occurrence; original untouched.
 
-        The one allowed edit path for L0/L1 evidence (and usable on any table). Mints a fresh
-        deterministic id (see the module header), inserts the cloned+edited row, and logs a
-        ``new_row`` entry carrying the FULL row snapshot as canonical JSON. Returns the new id.
+        The one allowed edit path for L0/L1 evidence (and usable on any table). A verbatim clone
+        would duplicate any UNIQUE value the source row carries (an owned-corner FK such as the
+        integration's ``UNIQUE(spatial_expression_id)``, or a natural-key tuple such as analysis'
+        ``UNIQUE(assertion_id, method)``) and the insert would raise ``IntegrityError`` — so the
+        keys are RE-MINTED (see :meth:`_clone_row`): a non-FK discriminator is regenerated, and a
+        UNIQUE tuple made only of foreign keys gets a fresh parent occurrence. Logs a ``new_row``
+        entry per created row (parents first) carrying the FULL snapshot as canonical JSON;
+        returns the new top-row id.
         """
         self._require_table(table)
-        original = self.row(table, row_id)
-        if original is None:
+        if self.row(table, row_id) is None:
             raise KeyError(f"no row {row_id!r} in {table!r}")
         for column in edits:
             self._require_column(table, column)
+        new_id = self._clone_row(table, row_id, edits)
+        self._conn.commit()
+        return new_id
+
+    def _clone_row(self, table: str, source_id: str, edits: dict[str, Any]) -> str:
+        """Insert a fresh, non-colliding occurrence of ``source_id`` (+ ``edits``) into ``table``.
+
+        HOW: copy the source row, apply ``edits``, then make every UNIQUE constraint distinct
+        before minting the pk —
+          * Pass 1 (a UNIQUE tuple that is ENTIRELY foreign keys, e.g. the 1:1 owned-corner
+            integrations' ``UNIQUE(spatial_expression_id)``): the only way to a distinct row is to
+            point at a FRESH parent occurrence — regenerating the FK to a non-existent id would
+            fail FK enforcement. Mint that parent by cloning it recursively (the assembler derives
+            an integration id from a spatial/temporal expression it created; this mirrors that
+            ownership). Parents are minted FIRST so they take an EARLIER ordinal than this row,
+            which keeps a later rewind (deletes in descending-ordinal order) FK-safe: the child is
+            removed before its parent.
+          * Pass 2 (a UNIQUE tuple carrying a NON-FK discriminator, e.g. analysis'
+            ``UNIQUE(assertion_id, method)``): regenerate that discriminator so the FK
+            (``assertion_id``) still references the same real parent.
+        Each pass acts only when the tuple would actually collide, so an ``edits`` value the
+        operator already made distinct is respected. Logs one ``new_row`` entry per created row.
+        WHY not a verbatim clone: ``update`` on evidence directs the operator here, so this path
+        MUST yield an insertable row on exactly the tables it exists for.
+        """
+        original = self.row(table, source_id)
+        if original is None:
+            raise KeyError(f"no row {source_id!r} in {table!r}")
         pk = self._pk(table)
-        ordinal = self._next_ordinal()
-        new_id = ids.id_for(table, row_id, ordinal)
+        fk_map = self._fk_map(table)
+        unique_sets = self._unique_column_sets(table)
         snapshot = dict(original)
         snapshot.update(edits)
+
+        # Pass 1: all-FK UNIQUE tuples -> mint a fresh parent occurrence (earlier ordinal).
+        for cols in unique_sets:
+            if (cols and all(col in fk_map for col in cols)
+                    and self._unique_tuple_collides(table, cols, snapshot)):
+                fk_col = cols[0]
+                parent_table, _ = fk_map[fk_col]
+                snapshot[fk_col] = self._clone_row(parent_table, snapshot[fk_col], {})
+
+        ordinal = self._next_ordinal()
+        new_id = ids.id_for(table, source_id, ordinal)
         snapshot[pk] = new_id   # the new occurrence carries its own fresh identity
+
+        # Pass 2: UNIQUE tuples with a non-FK discriminator -> regenerate that discriminator.
+        for cols in unique_sets:
+            if all(col in fk_map for col in cols):
+                continue   # handled in pass 1 (or a pure-pk unique, which is already fresh)
+            if not self._unique_tuple_collides(table, cols, snapshot):
+                continue
+            non_fk = [col for col in cols if col not in fk_map and col != pk]
+            if non_fk:
+                snapshot[non_fk[0]] = self._fresh_unique_scalar(snapshot[non_fk[0]], ordinal)
+
         self._insert(table, snapshot)
         self._append_log(table=table, row_id=new_id, column=None,
                          old_value=None, new_value=ids.canonical_json(snapshot),
                          edit_kind=V.EditKind.NEW_ROW, ordinal=ordinal)
-        self._conn.commit()
         return new_id
 
     def add_empty_row(self, table: str) -> str:
         """Insert a blank row (fresh id) and log an ``empty_row`` snapshot; return the new id.
 
-        HOW: a fresh pk id, every nullable column left NULL, and every NOT NULL column filled
-        with a valid placeholder (an enum column takes its first constrained value, otherwise
-        an empty string / 0 / 0.0 by declared type). WHY placeholders rather than pure NULLs:
-        a table's NOT NULL / CHECK constraints would reject an all-null row, so a genuinely
-        insertable blank is the minimal constraint-satisfying row. A NOT NULL foreign-key
-        column cannot be fabricated (a blank row has no real parent), so such a table RAISES.
+        Gated on ``EDITABLE_TABLES`` exactly like :meth:`update`: an ``add_empty_row`` on an
+        L0/L1 evidence table would insert a fabricated blank row — forging evidence — so it
+        RAISES ``PermissionError`` there. The protection lives here, not in the UI, so no caller
+        can bypass it.
+
+        HOW (on an editable table): a fresh pk id, every nullable column left NULL, and every
+        NOT NULL column filled with a valid placeholder (an enum column takes its first
+        constrained value, a NOT NULL UNIQUE non-FK column a per-ordinal UNIQUE placeholder so
+        two successive blanks never collide, otherwise an empty string / 0 / 0.0 by declared
+        type). WHY placeholders rather than pure NULLs: a table's NOT NULL / CHECK constraints
+        would reject an all-null row, so a genuinely insertable blank is the minimal
+        constraint-satisfying row. A NOT NULL foreign-key column cannot be fabricated (a blank
+        row has no real parent), so such a table RAISES ``ValueError``.
         """
         self._require_table(table)
+        # Evidence protection: L0/L1 tables are never given a fabricated blank row (it would forge
+        # evidence and defeat the immutability the module enforces); only integration/analysis.
+        if table not in EDITABLE_TABLES:
+            layer = store_mod.TABLE_LAYER.get(table, "?")
+            raise PermissionError(
+                f"{table!r} is {layer} evidence; a fabricated blank row would forge evidence. "
+                f"add_empty_row is limited to the integration/analysis tables "
+                f"({', '.join(sorted(EDITABLE_TABLES))})")
         pk = self._pk(table)
         ordinal = self._next_ordinal()
         new_id = ids.id_for(table, "empty_row", ordinal)
-        snapshot = self._blank_row(table, pk, new_id)
+        snapshot = self._blank_row(table, pk, new_id, ordinal)
         self._insert(table, snapshot)
         self._append_log(table=table, row_id=new_id, column=None,
                          old_value=None, new_value=ids.canonical_json(snapshot),
@@ -313,9 +389,15 @@ class EditApi:
         current = self._conn.execute("SELECT MAX(ordinal) FROM edit_log").fetchone()[0]
         return 1 if current is None else current + 1
 
-    def _blank_row(self, table: str, pk: str, new_id: str) -> dict[str, Any]:
-        """Build the minimal constraint-satisfying blank row for ``add_empty_row``."""
+    def _blank_row(self, table: str, pk: str, new_id: str, ordinal: int) -> dict[str, Any]:
+        """Build the minimal constraint-satisfying blank row for ``add_empty_row``.
+
+        ``ordinal`` (the monotonic UNIQUE journal position this insert is logged at) seeds the
+        placeholder for any NOT NULL UNIQUE non-FK column, so two successive blank rows carry
+        distinct values there and the second does not fail the UNIQUE constraint.
+        """
         fk_columns = self._fk_columns(table)
+        unique_columns = {col for cols in self._unique_column_sets(table) for col in cols}
         row: dict[str, Any] = {pk: new_id}
         for info in self._conn.execute(f"PRAGMA table_info({table})").fetchall():
             name, decl_type, not_null, is_pk = (
@@ -326,20 +408,73 @@ class EditApi:
                 raise ValueError(
                     f"cannot add a blank {table!r} row: the NOT NULL foreign key {name!r} "
                     f"has no parent to reference; add the parent row first")
-            row[name] = self._blank_value(table, name, decl_type)
+            row[name] = self._blank_value(
+                table, name, decl_type, ordinal, unique=name in unique_columns)
         return row
 
-    def _blank_value(self, table: str, column: str, decl_type: str) -> Any:
-        """A valid placeholder for a NOT NULL column with no real value yet."""
+    def _blank_value(self, table: str, column: str, decl_type: str, ordinal: int,
+                     *, unique: bool) -> Any:
+        """A valid placeholder for a NOT NULL column with no real value yet.
+
+        ``unique`` columns fold the monotonic ``ordinal`` into the placeholder (a per-call
+        UNIQUE value) so repeated ``add_empty_row`` calls never collide on it; the rest take a
+        fixed zero/empty by declared type. An enum column takes its first legal token — a fresh
+        blank is not expected on a UNIQUE enum column, so it is not disambiguated.
+        """
         allowed = self._check_values(table, column)
         if allowed:
             return allowed[0]   # a constrained (enum) column: its first legal token
         upper = decl_type.upper()
         if "INT" in upper:
-            return 0
+            return ordinal if unique else 0   # the ordinal is itself a fresh unique integer
         if "REAL" in upper or "FLOA" in upper or "DOUB" in upper:
-            return 0.0
-        return ""
+            return float(ordinal) if unique else 0.0
+        return f"(blank {ordinal})" if unique else ""
+
+    # --- UNIQUE-constraint introspection (for save_as_new_row re-minting) --
+
+    def _unique_column_sets(self, table: str) -> list[list[str]]:
+        """The column list of each explicit ``UNIQUE`` constraint on ``table`` (index origin
+        'u'); the primary key and plain non-unique indexes are excluded."""
+        sets: list[list[str]] = []
+        for index in self._conn.execute(f"PRAGMA index_list({table})").fetchall():
+            if index["unique"] and index["origin"] == "u":
+                sets.append([info["name"] for info in
+                             self._conn.execute(f"PRAGMA index_info({index['name']})")])
+        return sets
+
+    def _fk_map(self, table: str) -> dict[str, tuple[str, str]]:
+        """Column -> (parent_table, parent_column) for every foreign key on ``table``."""
+        return {info["from"]: (info["table"], info["to"])
+                for info in self._conn.execute(f"PRAGMA foreign_key_list({table})")}
+
+    def _unique_tuple_collides(self, table: str, cols: list[str],
+                               snapshot: dict[str, Any]) -> bool:
+        """Does an existing ``table`` row already carry ``snapshot``'s values for ``cols``?
+
+        A NULL in the tuple means no collision: SQLite's UNIQUE treats every NULL as distinct,
+        so such a tuple can always be inserted. Otherwise a direct existence probe on the live
+        DB decides — so re-minting only fires when the clone would actually violate the UNIQUE.
+        """
+        if any(snapshot[col] is None for col in cols):
+            return False
+        clause = " AND ".join(f"{col} = ?" for col in cols)
+        found = self._conn.execute(
+            f"SELECT 1 FROM {table} WHERE {clause} LIMIT 1",
+            tuple(snapshot[col] for col in cols)).fetchone()
+        return found is not None
+
+    def _fresh_unique_scalar(self, old: Any, ordinal: int) -> Any:
+        """A fresh, collision-free value for a NON-FK column in a UNIQUE tuple, so a cloned
+        occurrence's natural key differs from the source's. The monotonic ``ordinal`` (never
+        reused) guarantees uniqueness and ties the value to the audit entry that minted it."""
+        if isinstance(old, str):
+            return f"{old} (occurrence {ordinal})"
+        if isinstance(old, int):   # also covers bool: the ordinal is a fresh unique integer
+            return ordinal
+        if isinstance(old, float):
+            return float(ordinal)
+        return f"occurrence {ordinal}"   # None / other: a stable, unique token
 
     # --- schema introspection (live DB only, no schema.py internals) ------
 

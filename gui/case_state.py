@@ -35,8 +35,11 @@ def read_case_counts(db_path: str | Path) -> CaseCounts:
     Opened READ-ONLY so surfacing the summary can never mutate the evidence database. The
     caller guards failures — a summary is best-effort feedback, never part of the run's
     correctness."""
-    # URI mode=ro: the file must exist AND the connection physically cannot write.
-    connection = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
+    # URI mode=ro: the file must exist AND the connection physically cannot write. The path is
+    # percent-encoded via Path.as_uri() (which yields an absolute file: URI) BEFORE the query
+    # string is appended, so a folder carrying a URI-significant character (#, ?, %) — e.g.
+    # "Case #3" — is not mis-parsed by SQLite's URI parser into a bogus path + fragment.
+    connection = sqlite3.connect(f"{Path(db_path).absolute().as_uri()}?mode=ro", uri=True)
     try:
         runs = connection.execute("SELECT COUNT(*) FROM run").fetchone()[0]
         sources = connection.execute("SELECT COUNT(*) FROM source").fetchone()[0]

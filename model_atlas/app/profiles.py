@@ -43,8 +43,13 @@ def load_profile(path: Path) -> list[Path]:
 def save_profile(path: Path, preset_paths: list[Path]) -> Path:
     """Write a selected-preset profile."""
     path = Path(path)
-    if path.suffix != PROFILE_SUFFIX:
-        path = path.with_suffix(PROFILE_SUFFIX)
+    # Ensure the file carries the full profile suffix by CONCATENATION, not with_suffix:
+    # with_suffix treats the final dotted segment as an extension, so a legitimately dotted
+    # profile name (e.g. "operation.falcon") would lose its last segment
+    # ("operation.mATLAS-profile"). Appending the whole suffix to the complete name keeps
+    # every segment, so a dotted name round-trips as "operation.falcon.mATLAS-profile".
+    if not path.name.endswith(PROFILE_SUFFIX):
+        path = path.with_name(path.name + PROFILE_SUFFIX)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "version": PROFILE_VERSION,

@@ -379,6 +379,15 @@ def process(
     # so the same evidence yields byte-identical ids/digests whichever run adds it.
     case_db_path = output / f"{base_name}.matlas.sqlite"
     is_append = case_db_path.is_file() and is_matlas_run_db(case_db_path)
+    # Refuse to clobber a pre-existing file at the case-DB path that is NOT a mATLAS run DB
+    # (an unrelated file, or a truncated/corrupt earlier run). On CREATE, store.persist()
+    # unlinks whatever sits at the target before VACUUM INTO, so proceeding would SILENTLY
+    # DELETE that file. A forensic tool must never destroy a file it does not recognise —
+    # fail loudly and let the operator move it or choose another output folder / --name.
+    if case_db_path.is_file() and not is_append:
+        raise FileExistsError(
+            f"{case_db_path} already exists but is not a mATLAS case database; refusing to "
+            f"overwrite it. Move or remove it, or choose a different output folder or --name.")
     if is_append:
         store = RunStore.open_persisted(case_db_path)
         existing_case_id = _read_case_id(store)

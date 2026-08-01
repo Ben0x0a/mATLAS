@@ -181,6 +181,31 @@ def test_panel_lists_expected_pair_excludes_references_and_exports(
         _teardown(app, parent)
 
 
+def test_query_opens_a_db_under_a_uri_significant_folder(
+        app: QApplication, tmp_path) -> None:
+    # A folder carrying a URI-significant character ('#') must open for the query: the read-only
+    # view builds its URI with Path.as_uri() percent-encoding, so SQLite's URI parser does not
+    # split "Case #3" into a path + fragment. Before the fix the query failed on a valid DB.
+    out = tmp_path / "Case #3"
+    out.mkdir()
+    db_path = out / "case.matlas.sqlite"
+    _build_persisted_db(db_path)
+
+    parent = QWidget()
+    controller = SpatiotemporalController(parent)
+    try:
+        controller.db_edit.setText(str(db_path))
+        controller.space_spin.setValue(50.0)
+        controller.time_spin.setValue(10.0)
+        controller.time_unit_combo.setCurrentText("minutes")
+        _run_and_wait(app, controller)
+        # The query ran (did not fail on URI parsing) and produced the one expected pair.
+        assert controller._result is not None
+        assert controller._model.rowCount() == 1
+    finally:
+        _teardown(app, parent)
+
+
 def test_read_only_view_never_mutates_the_persisted_db(tmp_path) -> None:
     db_path = tmp_path / "ro.matlas.sqlite"
     _build_persisted_db(db_path)

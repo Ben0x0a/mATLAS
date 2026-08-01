@@ -73,6 +73,17 @@ def _build_persisted_db(target: Path) -> dict[str, str]:
             spatial_integration_id=si_id, spatial_expression_id=sx_id, method=si_method,
             latitude_wgs84=46.193, longitude_wgs84=6.129, horizontal_accuracy_m=12.0))
 
+        # A temporal corner + its integration, so the editable-table tests can exercise
+        # timespan_integration (UNIQUE on the owned temporal_expression FK) too.
+        tx_id = ids.temporal_expression_id(nat_key)
+        store.write_temporal_expression(V.TemporalExpression(
+            temporal_expression_id=tx_id, kind=V.TemporalKind.INSTANT))
+        ti_method = "utc_passthrough/1.0"
+        ti_id = ids.timespan_integration_id(tx_id, ti_method)
+        store.write_timespan_integration(V.TimespanIntegration(
+            timespan_integration_id=ti_id, temporal_expression_id=tx_id, method=ti_method,
+            lower_unix_utc_us=1_700_000_000_000_000))
+
         l1 = ids.l1_projection(
             entity=ids.EntityProjection(identifier=None,
                                         identifier_type=V.IdentifierType.NONE,
@@ -92,10 +103,20 @@ def _build_persisted_db(target: Path) -> dict[str, str]:
             output_ordinal=output_ordinal, entity_id=entity_id,
             content_hash=content_hash, claim_digest=claim_digest,
             entity_origin=V.Origin.PRESET_MAPPED, spatial_expression_id=sx_id,
-            entity_role=V.EntityRole.SUBJECT))
+            temporal_expression_id=tx_id, entity_role=V.EntityRole.SUBJECT))
+
+        # An analysis verdict, so the editable-table tests can exercise analysis'
+        # UNIQUE(assertion_id, method) — the composite natural key with a non-FK discriminator.
+        an_method = "untangle/1.0"
+        an_id = ids.analysis_id(assertion_id, an_method)
+        store.write_analysis(V.Analysis(
+            analysis_id=an_id, assertion_id=assertion_id, method=an_method,
+            record_type="gps_fix", record_rank=1))
         store.persist(target)
     return {"entity_id": entity_id, "spatial_integration_id": si_id,
-            "spatial_expression_id": sx_id}
+            "spatial_expression_id": sx_id, "timespan_integration_id": ti_id,
+            "temporal_expression_id": tx_id, "analysis_id": an_id,
+            "assertion_id": assertion_id}
 
 
 @pytest.fixture
@@ -181,20 +202,85 @@ def test_save_as_new_row_keeps_original_and_logs(persisted_db) -> None:
         assert '"identifier":"+41791234567"' in log[0]["new_value"]
 
 
-def test_add_empty_row_logs_empty_row(persisted_db) -> None:
+# --- save_as_new_row re-mints UNIQUE keys on the editable tables -----------
+
+@pytest.mark.parametrize(
+    "table, key, fk_column, parent_table",
+    [
+        ("spatial_integration", "spatial_integration_id",
+         "spatial_expression_id", "spatial_expression"),
+        ("timespan_integration", "timespan_integration_id",
+         "temporal_expression_id", "temporal_expression"),
+    ],
+)
+def test_save_as_new_row_mints_fresh_parent_for_owned_corner(
+        persisted_db, table, key, fk_column, parent_table) -> None:
+    # The 1:1 owned-corner integrations carry UNIQUE(<owned FK>); a verbatim clone would
+    # duplicate that FK and raise IntegrityError. save_as_new_row must instead mint a fresh
+    # parent occurrence and point the new row at it.
     path, keys = persisted_db
     with EditApi.open(path, who="tester") as api:
-        new_id = api.add_empty_row("entity")
-        row = api.row("entity", new_id)
-        assert row is not None
-        # NOT NULL enum columns took their first legal value; the rest are blank/NULL.
-        assert row["identifier_type"] is not None
-        assert row["type"] is not None
-        assert row["identifier"] is None
+        original = api.row(table, keys[key])
+        parents_before = len(api.rows(parent_table))
+        new_id = api.save_as_new_row(table, keys[key], {})
+        assert new_id != keys[key]
+        # Original untouched; a genuinely new occurrence added.
+        assert api.row(table, keys[key]) == original
+        assert len(api.rows(table)) == 2
+        new_row = api.row(table, new_id)
+        # The owned FK was re-minted to a FRESH parent that actually exists (FK satisfied).
+        assert new_row[fk_column] != original[fk_column]
+        assert api.row(parent_table, new_row[fk_column]) is not None
+        assert len(api.rows(parent_table)) == parents_before + 1
+        # Two new_row entries logged (parent first, then the child).
+        kinds = [e["edit_kind"] for e in api.edit_log()]
+        assert kinds == [V.EditKind.NEW_ROW.value, V.EditKind.NEW_ROW.value]
+
+
+def test_save_as_new_row_regenerates_non_fk_discriminator(persisted_db) -> None:
+    # analysis' UNIQUE(assertion_id, method) has a non-FK discriminator: save_as_new_row keeps
+    # the assertion FK (the verdict is about the same assertion) and regenerates ``method`` so
+    # the natural key differs — no IntegrityError, no fabricated parent assertion.
+    path, keys = persisted_db
+    with EditApi.open(path, who="tester") as api:
+        original = api.row("analysis", keys["analysis_id"])
+        assertions_before = len(api.rows("assertion"))
+        new_id = api.save_as_new_row("analysis", keys["analysis_id"], {})
+        assert new_id != keys["analysis_id"]
+        assert api.row("analysis", keys["analysis_id"]) == original
+        new_row = api.row("analysis", new_id)
+        assert new_row["assertion_id"] == original["assertion_id"]   # same real parent
+        assert new_row["method"] != original["method"]               # fresh discriminator
+        assert len(api.rows("assertion")) == assertions_before       # no forged assertion
         log = api.edit_log()
-        assert len(log) == 1
-        assert log[0]["edit_kind"] == V.EditKind.EMPTY_ROW.value
-        assert log[0]["row_id"] == new_id
+        assert len(log) == 1 and log[0]["edit_kind"] == V.EditKind.NEW_ROW.value
+
+
+# --- add_empty_row is gated on the evidence protection ---------------------
+
+@pytest.mark.parametrize("table", ["raw_record", "source", "entity", "assertion",
+                                   "spatial_component"])
+def test_add_empty_row_rejects_evidence(persisted_db, table) -> None:
+    # add_empty_row must refuse L0/L1 evidence with the same protection as update(): a blank
+    # evidence row would forge evidence.
+    path, keys = persisted_db
+    with EditApi.open(path, who="tester") as api:
+        with pytest.raises(PermissionError, match="evidence"):
+            api.add_empty_row(table)
+        assert api.edit_log() == []
+
+
+def test_blank_value_unique_placeholder_never_collides(persisted_db) -> None:
+    # A NOT NULL UNIQUE non-FK column gets a per-ordinal placeholder, so two successive blanks
+    # carry DISTINCT values and the second cannot fail the UNIQUE constraint (archive.path is
+    # such a column: NOT NULL, UNIQUE, no FK).
+    path, keys = persisted_db
+    with EditApi.open(path, who="tester") as api:
+        first = api._blank_value("archive", "path", "TEXT", 7, unique=True)
+        second = api._blank_value("archive", "path", "TEXT", 8, unique=True)
+        assert first != second
+        # A non-unique NOT NULL column keeps the fixed zero/empty placeholder.
+        assert api._blank_value("archive", "cd_sha256", "TEXT", 7, unique=False) == ""
 
 
 # --- D41 full rewind -------------------------------------------------------
