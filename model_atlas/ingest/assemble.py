@@ -529,6 +529,39 @@ def _split_specs(specs: Sequence[FieldSpec]) -> tuple[list[FieldSpec], list[Fiel
     return scalar, verbatim
 
 
+def _write_temporal_component(
+    store: RunStore,
+    temporal_expression_id: str,
+    ordinal: int,
+    part: str,
+    temporal_role: str | None,
+    stated_offset: str | None,
+    source_field: str | None,
+    raw_value: str | None,
+) -> ids.TemporalComponentProjection:
+    """Write one temporal component row and return its matching digest projection.
+
+    HOW: mints the component id from ``(temporal_expression_id, ordinal)``, writes the L2 row,
+    and returns the ``TemporalComponentProjection`` the caller appends — in the SAME ordinal
+    order — to the expression's projection.
+    WHY a shared helper: the bound loop and the per-bound accuracy loop write the identical row
+    shape (only the role/offset/source_field set differs), so routing both through one helper
+    keeps the written row and its projection in lockstep — any drift between them would move the
+    claim_digest.
+    """
+    store.write_temporal_component(V.TemporalComponent(
+        temporal_component_id=ids.temporal_component_id(temporal_expression_id, ordinal),
+        temporal_expression_id=temporal_expression_id,
+        ordinal=ordinal,
+        part=part,
+        temporal_role=temporal_role,
+        stated_offset=stated_offset,
+        source_field=source_field,
+        raw_value=raw_value,
+    ))
+    return ids.TemporalComponentProjection(part, temporal_role, stated_offset, raw_value)
+
+
 def _emit_assertion(
     store: RunStore,
     report: AssembleReport,
@@ -661,18 +694,9 @@ def _emit_assertion(
         bound_projections: list[ids.TemporalComponentProjection] = []
         ordinal = 0
         for (part, role, source_field, raw_value) in bounds:
-            store.write_temporal_component(V.TemporalComponent(
-                temporal_component_id=ids.temporal_component_id(temporal_expression_id, ordinal),
-                temporal_expression_id=temporal_expression_id,
-                ordinal=ordinal,
-                part=part,
-                temporal_role=role,
-                stated_offset=stated_offset,
-                source_field=source_field,
-                raw_value=raw_value,
-            ))
-            bound_projections.append(
-                ids.TemporalComponentProjection(part, role, stated_offset, raw_value))
+            bound_projections.append(_write_temporal_component(
+                store, temporal_expression_id, ordinal,
+                part, role, stated_offset, source_field, raw_value))
             ordinal += 1
         # Source-stated per-bound accuracy: an OPTIONAL verbatim component per side (parallel
         # to the _date/_time split parts), carrying no offset/role/source_field — the raw µs
@@ -689,18 +713,9 @@ def _emit_assertion(
             if accuracy_raw is None or not have_side[side]:
                 continue
             accuracy_part = side + _ACCURACY_PART_SUFFIX
-            store.write_temporal_component(V.TemporalComponent(
-                temporal_component_id=ids.temporal_component_id(temporal_expression_id, ordinal),
-                temporal_expression_id=temporal_expression_id,
-                ordinal=ordinal,
-                part=accuracy_part,
-                temporal_role=None,
-                stated_offset=None,
-                source_field=None,
-                raw_value=accuracy_raw,
-            ))
-            bound_projections.append(
-                ids.TemporalComponentProjection(accuracy_part, None, None, accuracy_raw))
+            bound_projections.append(_write_temporal_component(
+                store, temporal_expression_id, ordinal,
+                accuracy_part, None, None, None, accuracy_raw))
             ordinal += 1
         temporal_projection = ids.TemporalProjection(kind, referential, tuple(bound_projections))
 
