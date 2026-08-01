@@ -193,10 +193,10 @@ CANONICAL_COLUMNS: tuple[str, ...] = tuple(name for name, _ in _CANONICAL_SELECT
 
 # Columns whose MODEL type is a numeric union (``float | str`` / ``int | float``) so the
 # schema stores them as TEXT, but whose values are semantically numeric. After reading the
-# frame back their dtype is restored so the CSV renders them unquoted exactly as the old
-# dict-built frame did — UNLESS a non-numeric sentinel (``UTC_OFFSET_UNKNOWN`` = "N/A") is
-# present, in which case the column stays text (quoted), keeping "value, zone unknown"
-# visibly distinct from a real offset.
+# frame back their numeric dtype is restored PER VALUE (see _restore_numeric_dtype) so the
+# CSV renders each real number unquoted, while a non-numeric sentinel (``UTC_OFFSET_UNKNOWN``
+# = "N/A") sitting in a sibling row stays text (quoted) — keeping "value, zone unknown"
+# visibly distinct from a real offset without dragging the genuine numbers into TEXT too.
 _NUMERIC_TEXT_COLUMNS: tuple[str, ...] = (
     "utc_offset_hours_lower", "utc_offset_hours_upper",
 )
@@ -249,6 +249,32 @@ def _quote_ident(name: str) -> str:
     """
     escaped = name.replace('"', '""')
     return f'"{escaped}"'
+
+
+def _json_path_literal(field: str) -> str:
+    """Build the SQL string literal of the JSON path ``$."<field>"`` for one raw key.
+
+    Two DISTINCT escaping layers stack here and must not be conflated (conflating them was
+    the original bug — SQL-literal ``"`` -> ``""`` doubling was mistakenly applied to the
+    JSON label, and backslashes were not escaped at all):
+
+    HOW:
+    - JSON-path layer (inside the ``$."..."`` quoted label): SQLite's JSON path parser
+      treats backslash as the ESCAPE character, so a literal ``\\`` must become ``\\\\`` and
+      a literal ``"`` must become ``\\"`` (backslash-escaped — NOT SQL-style ``""``). The
+      backslash escape is applied FIRST so the backslash introduced for a following ``"`` is
+      not doubled a second time.
+    - SQL string-literal layer (the whole path is embedded as a ``'...'`` literal): an
+      embedded single quote is doubled ``''``. Backslash is not special in a SQLite string
+      literal, so it needs no SQL-layer handling — only the JSON layer's.
+
+    WHY it matters: ``json_extract`` with a mis-escaped path silently returns NULL for every
+    row (no error raised), so a raw field named e.g. ``a"b`` or one containing ``\\`` would
+    emit its ``orig_`` passthrough column as all-NULL — silent verbatim-data loss.
+    """
+    json_label = field.replace("\\", "\\\\").replace('"', '\\"')
+    sql_escaped = json_label.replace("'", "''")
+    return "'$.\"" + sql_escaped + "\"'"
 
 
 def _passthrough_names(source_fields: list[str], prefix: str) -> dict[str, str]:
@@ -327,9 +353,10 @@ def build_flat_view_sql(
             alias = names[field]
             # The verbatim value of THIS assertion's own record. The JSON path quotes the
             # key (``$."<field>"``) so a field named e.g. ``a.party`` cannot break the
-            # extract; single quotes are doubled for the SQL string literal, double quotes
-            # for the JSON-path identifier.
-            path = "'$.\"" + field.replace("'", "''").replace('"', '""') + "\"'"
+            # extract; _json_path_literal handles both escaping layers (JSON-path backslash
+            # escaping + SQL-literal single-quote doubling) so an exotic key never yields a
+            # silently all-NULL passthrough column.
+            path = _json_path_literal(field)
             select_terms.append(
                 f"json_extract(r.raw_json, {path}) AS {_quote_ident(alias)}")
             orig_columns.append(alias)
@@ -381,20 +408,37 @@ def build_flat_view(
 
 
 def _restore_numeric_dtype(frame: pd.DataFrame, column: str) -> None:
-    """Coerce a numeric-union TEXT column back to numeric where the values allow it.
+    """Coerce a numeric-union TEXT column back to numeric PER VALUE.
 
-    A column with at least one non-null value, all of which parse as numbers, becomes a
-    numeric dtype (rendered unquoted); an all-null column, or one holding a non-numeric
-    sentinel (``UTC_OFFSET_UNKNOWN`` = "N/A"), is left as object so it renders quoted —
-    keeping "value, zone unknown" distinct from a real number.
+    A column whose non-null cells ALL parse as numbers becomes a numeric dtype (rendered
+    unquoted). When only SOME cells are numbers — the rest being the non-numeric sentinel
+    (``UTC_OFFSET_UNKNOWN`` = "N/A") — the genuine numbers are still restored to numeric
+    values while the sentinel cells keep their text, so a mixed column renders each number
+    numerically and each sentinel as the sentinel (rather than the WHOLE column staying
+    TEXT and rendering every real offset quoted, e.g. ``'2.00'``).
+
+    HOW: ``pd.to_numeric(..., errors="coerce")`` yields a numeric value where the cell
+    parses and NaN where it does not; ``errors="coerce"`` (not a try/except) keeps this a
+    value-level decision rather than exceptions-as-control-flow. An all-null column, and any
+    genuinely non-numeric cell, is left as its original object value so it renders quoted.
     """
     series = frame[column]
     if not series.notna().any():
         return   # all-null -> object dtype -> quoted "" cells, matching the old frame
-    try:
-        frame[column] = pd.to_numeric(series)
-    except (ValueError, TypeError):
-        pass     # a non-numeric sentinel is present -> keep the text column verbatim
+    coerced = pd.to_numeric(series, errors="coerce")
+    present = series.notna()
+    if coerced[present].notna().all():
+        # No sentinel present: every non-null cell is a number -> a single numeric dtype
+        # (identical to the old whole-column path, so a sentinel-free golden never drifts).
+        frame[column] = coerced
+        return
+    # Mixed: rebuild an object column cell-by-cell — the parsed number where the cell is
+    # numeric, else the original value (the text sentinel), else None for a genuinely empty
+    # cell. QUOTE_NONNUMERIC then renders the numeric cells unquoted and the sentinel quoted.
+    frame[column] = [
+        number if pd.notna(number) else (None if pd.isna(original) else original)
+        for original, number in zip(series, coerced)
+    ]
 
 
 def _fill_locates(frame: pd.DataFrame) -> None:

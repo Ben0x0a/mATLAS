@@ -145,10 +145,13 @@ def test_numeric_columns_are_numeric_dtypes(frame: pd.DataFrame) -> None:
     assert str(frame["upper_accuracy_us"].dtype) == "Int64"
     assert str(frame["s2_cell_id"].dtype) == "Int64"
     assert pd.api.types.is_numeric_dtype(frame["record_rank"])
-    # The applied offsets carry the "N/A" assumed-UTC sentinel in the demo, so they must
-    # STAY text (quoted) — "value, zone unknown" must never render as a bare number.
+    # Some applied offsets carry the "N/A" assumed-UTC sentinel in the demo, so the column
+    # is a MIX (object dtype): the sentinel stays text (quoted) — "value, zone unknown" must
+    # never render as a bare number — while genuine offsets are restored to numbers per value.
     assert not pd.api.types.is_numeric_dtype(frame["utc_offset_hours_lower"])
-    assert "N/A" in set(frame["utc_offset_hours_lower"].dropna())
+    offset_values = set(frame["utc_offset_hours_lower"].dropna())
+    assert "N/A" in offset_values                                    # the sentinel, kept text
+    assert any(isinstance(value, float) for value in offset_values)  # real offsets, numeric
 
 
 def test_s2_cell_id_exact_int64(demo: sqlite3.Connection, frame: pd.DataFrame) -> None:
@@ -220,3 +223,46 @@ def test_passthrough_collision_gets_trailing_underscore() -> None:
     names = flat_view._passthrough_names(["position", "position_"], "raw_")
     assert names["position"] == "raw_position_"       # "raw_position" is canonical
     assert names["position_"] == "raw_position__"     # and chains must not collide either
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ('a"b', "double-quote in the key"),          # the double-quote case
+        (r"a\b", "backslash in the key"),            # the backslash case
+        (r'a"\b', "both a quote and a backslash"),   # both together
+        ("plain", "an ordinary key"),                # the control
+    ],
+)
+def test_orig_json_path_extracts_exotic_field_verbatim(field: str, value: str) -> None:
+    # The orig_ passthrough builds a SQLite JSON path from each raw key. A key holding a
+    # double-quote or a backslash must still resolve to its verbatim value; the pre-fix
+    # SQL-literal doubling ("->"") left json_extract returning NULL for every row (silent
+    # verbatim-data loss). Exercise the exact production path builder against real sqlite.
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE raw_record (raw_json TEXT)")
+    connection.execute(
+        "INSERT INTO raw_record VALUES (?)", (json.dumps({field: value}),))
+    path = flat_view._json_path_literal(field)
+    (extracted,) = connection.execute(
+        f"SELECT json_extract(raw_json, {path}) FROM raw_record").fetchone()
+    assert extracted == value
+
+
+def test_restore_numeric_dtype_is_per_value() -> None:
+    # A numeric-union TEXT column mixing real offsets with the "N/A" sentinel must restore
+    # the genuine numbers to numeric values (rendered unquoted) while the sentinel stays
+    # text (quoted) — not drag the whole column to TEXT because one sibling row is "N/A".
+    frame = pd.DataFrame({"utc_offset_hours_lower": ["1.0", "N/A", "0.0", None]})
+    flat_view._restore_numeric_dtype(frame, "utc_offset_hours_lower")
+    restored = list(frame["utc_offset_hours_lower"])
+    assert restored[0] == 1.0 and isinstance(restored[0], float)   # real offset -> number
+    assert restored[1] == "N/A"                                    # sentinel -> kept text
+    assert restored[2] == 0.0 and isinstance(restored[2], float)   # real offset -> number
+    assert restored[3] is None                                     # empty -> stays empty
+    # And under the exporter's QUOTE_NONNUMERIC the numbers come out bare, the sentinel quoted.
+    buffer = io.StringIO()
+    frame.to_csv(buffer, index=False, sep=";", quoting=csv.QUOTE_NONNUMERIC)
+    rendered = buffer.getvalue().splitlines()
+    # (an empty cell renders as a quoted "" here, exactly as an all-null offset column does.)
+    assert rendered == ['"utc_offset_hours_lower"', "1.0", '"N/A"', "0.0", '""']

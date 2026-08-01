@@ -54,10 +54,15 @@ def frontier_report(preset: PresetSpec, present_fields: list[str]) -> dict[str, 
 
 
 def build_traceability_readable(
-    *, started_at: str, input_path: Path, presets_path: Path, output_csv: Path | None,
-    row_counts: dict[str, int], sources: list[dict[str, Any]], warning_count: int,
+    *, started_at: str, finished_at: str, input_path: Path, presets_path: Path,
+    output_csv: Path | None, row_counts: dict[str, int], sources: list[dict[str, Any]],
+    warning_count: int,
 ) -> dict[str, Any]:
     """A run record meant to be skimmed by a human.
+
+    ``finished_at`` is supplied by the caller (computed ONCE per run) rather than stamped
+    here, so this readable sidecar and the PROV sidecar of the same run agree on the finish
+    time instead of each calling ``now_iso()`` a few milliseconds apart.
 
     The per-source ``frontier`` (P/E/M) object is dropped here: it is the model-shift report and
     lives in the warnings sidecar. The full record is the run database; these sidecars are the
@@ -72,7 +77,7 @@ def build_traceability_readable(
         "tool": {"name": "matlas", "pipeline": "v1", "app_tag": "matlas"},
         "run": {
             "started_at": started_at,
-            "finished_at": now_iso(),
+            "finished_at": finished_at,
             "input": str(input_path),
             "presets": str(presets_path),
             "output_csv": str(output_csv) if output_csv else None,
@@ -84,9 +89,14 @@ def build_traceability_readable(
 
 
 def build_traceability_prov(
-    *, started_at: str, output_csv: Path | None, sources: list[dict[str, Any]],
+    *, started_at: str, finished_at: str, output_csv: Path | None,
+    sources: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """A W3C PROV-JSON record of the same run (harder to skim, standard to consume)."""
+    """A W3C PROV-JSON record of the same run (harder to skim, standard to consume).
+
+    ``finished_at`` is supplied by the caller (the single per-run finish time) so this
+    record's ``prov:endTime`` matches the readable sidecar's ``finished_at`` exactly.
+    """
     entities: dict[str, Any] = {}
     used: dict[str, Any] = {}
     derived: dict[str, Any] = {}
@@ -115,7 +125,7 @@ def build_traceability_prov(
     return {
         "prefix": {"matlas": "https://github.com/model-atlas/ns#", "prov": "http://www.w3.org/ns/prov#"},
         "entity": entities,
-        "activity": {"matlas:run": {"prov:startTime": started_at, "prov:endTime": now_iso()}},
+        "activity": {"matlas:run": {"prov:startTime": started_at, "prov:endTime": finished_at}},
         "agent": {"matlas:tool": {"prov:type": "prov:SoftwareAgent", "prov:label": "matlas v1"}},
         "wasAssociatedWith": {"matlas:_a": {"prov:activity": "matlas:run", "prov:agent": "matlas:tool"}},
         "used": used,

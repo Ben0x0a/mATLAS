@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from model_atlas.app.reporting import build_traceability_prov
+from model_atlas.app.reporting import (
+    build_traceability_prov,
+    build_traceability_readable,
+)
 
 _SOURCE = {
     "source_file": "cached.csv",
@@ -31,6 +34,7 @@ _SOURCE = {
 def test_prov_record_with_output_has_entities_used_and_derivation() -> None:
     prov = build_traceability_prov(
         started_at="2026-07-23T00:00:00+00:00",
+        finished_at="2026-07-23T00:00:05+00:00",
         output_csv=Path("/out/merged.csv"),
         sources=[_SOURCE],
     )
@@ -51,10 +55,33 @@ def test_prov_record_with_output_has_entities_used_and_derivation() -> None:
 
 def test_prov_record_without_output_omits_generation_and_derivation() -> None:
     prov = build_traceability_prov(
-        started_at="2026-07-23T00:00:00+00:00", output_csv=None, sources=[_SOURCE],
+        started_at="2026-07-23T00:00:00+00:00",
+        finished_at="2026-07-23T00:00:05+00:00",
+        output_csv=None, sources=[_SOURCE],
     )
     # No output entity, no generation, no derivation — but the source is still an entity used.
     assert "matlas:output" not in prov["entity"]
     assert prov["wasGeneratedBy"] == {}
     assert prov["wasDerivedFrom"] == {}
     assert prov["used"]["matlas:_u0"]["prov:entity"] == "matlas:source/0"
+
+
+def test_readable_and_prov_share_one_finish_time() -> None:
+    # A single run's two sidecar formats must AGREE on when the run finished: the caller
+    # computes the finish time once and passes it to both builders (previously each stamped
+    # its own now_iso(), so the two artefacts drifted by the gap between the calls).
+    started_at = "2026-07-23T00:00:00+00:00"
+    finished_at = "2026-07-23T00:00:05+00:00"
+    readable = build_traceability_readable(
+        started_at=started_at, finished_at=finished_at,
+        input_path=Path("/in/cached.csv"), presets_path=Path("/in/presets"),
+        output_csv=Path("/out/merged.csv"), row_counts={"assertions": 2},
+        sources=[_SOURCE], warning_count=0,
+    )
+    prov = build_traceability_prov(
+        started_at=started_at, finished_at=finished_at,
+        output_csv=Path("/out/merged.csv"), sources=[_SOURCE],
+    )
+    assert readable["run"]["finished_at"] == finished_at
+    assert prov["activity"]["matlas:run"]["prov:endTime"] == finished_at
+    assert readable["run"]["finished_at"] == prov["activity"]["matlas:run"]["prov:endTime"]

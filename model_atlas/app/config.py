@@ -156,11 +156,32 @@ def _validate_zone(name: str | None) -> str | None:
     return name
 
 
+def _require_bool(raw: dict, key: str, default: bool) -> bool:
+    """Return ``raw[key]`` as a real bool (or ``default`` when absent); reject a non-bool.
+
+    WHY not ``bool(raw.get(...))``: ``bool()`` coerces ANY truthy value, so a quoted TOML
+    string silently flips a safety flag — ``capture_env = "false"`` -> ``bool("false")`` ->
+    True would capture ``os.environ`` (holding secrets) into crash reports despite the
+    operator disabling it, and ``enabled = "no"`` would keep diagnostics on. Failing fast on
+    a non-bool (an unredacted secret is worse than an error) matches the ``redact`` field's
+    contract above.
+    """
+    value = raw.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"{CONFIG_FILENAME}: [diagnostics].{key} must be a boolean (true/false), "
+            f"got {value!r}"
+        )
+    return value
+
+
 def _load_diagnostics(raw: dict) -> DiagnosticsSettings:
     """Parse the optional ``[diagnostics]`` table into a DiagnosticsSettings.
 
     ``redact``, if present, MUST be a list of strings — a scalar there is a config typo we
     fail fast on rather than silently coercing (an unredacted secret is worse than an error).
+    The boolean flags are validated the same way (see ``_require_bool``) rather than
+    ``bool(...)``-coerced, so a quoted ``"false"`` cannot silently enable secret capture.
     """
     redact_raw = raw.get("redact")
     if redact_raw is None:
@@ -170,16 +191,16 @@ def _load_diagnostics(raw: dict) -> DiagnosticsSettings:
             raise ValueError(f"{CONFIG_FILENAME}: [diagnostics].redact must be a list of strings")
         redact = tuple(redact_raw)
     return DiagnosticsSettings(
-        enabled=bool(raw.get("enabled", True)),
+        enabled=_require_bool(raw, "enabled", True),
         crash_dir=str(raw.get("crash_dir", "crash_reports")),
         redact=redact,
-        redact_paths=bool(raw.get("redact_paths", True)),
+        redact_paths=_require_bool(raw, "redact_paths", True),
         max_string_len=int(raw.get("max_string_len", 512)),
         max_items=int(raw.get("max_items", 20)),
         max_head=int(raw.get("max_head", 3)),
         max_depth=int(raw.get("max_depth", 3)),
         max_frame_bytes=int(raw.get("max_frame_bytes", 65_536)),
-        capture_env=bool(raw.get("capture_env", False)),
+        capture_env=_require_bool(raw, "capture_env", False),
     )
 
 

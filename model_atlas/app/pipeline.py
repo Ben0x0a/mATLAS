@@ -687,14 +687,19 @@ def _write_sidecars(
     traceability_format: str,
 ) -> tuple[Path, Path]:
     """Write the traceability + warnings sidecars beside the (nominal) primary CSV."""
+    # The run finish time, computed ONCE and shared by whichever traceability sidecar is
+    # written, so a run's artefacts never disagree on when it finished (both formats stamped
+    # their own now_iso() before, drifting by the milliseconds between the two calls).
+    finished_at = reporting.now_iso()
     if traceability_format == "prov":
         trace = reporting.build_traceability_prov(
-            started_at=started_at, output_csv=content_csv, sources=sources)
+            started_at=started_at, finished_at=finished_at, output_csv=content_csv,
+            sources=sources)
     else:
         trace = reporting.build_traceability_readable(
-            started_at=started_at, input_path=input_path, presets_path=presets_path,
-            output_csv=content_csv, row_counts=row_counts, sources=sources,
-            warning_count=len(warnings),
+            started_at=started_at, finished_at=finished_at, input_path=input_path,
+            presets_path=presets_path, output_csv=content_csv, row_counts=row_counts,
+            sources=sources, warning_count=len(warnings),
         )
     output_traceability = write_json(traceability_path_for(anchor_csv), trace)
     output_warnings = write_json(

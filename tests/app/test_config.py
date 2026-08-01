@@ -55,3 +55,33 @@ def test_unknown_key_is_rejected(tmp_path: Path) -> None:
     cfg.write_text('[timezone]\nlocal_zone = "UTC"\ntypo = 1\n', encoding="utf-8")
     with pytest.raises(ValueError, match="unknown key"):
         load_settings(cfg)
+
+
+def test_quoted_capture_env_false_is_rejected_not_coerced(tmp_path: Path) -> None:
+    # A quoted "false" is truthy, so bool("false") would silently ENABLE os.environ capture
+    # (secrets into crash reports) despite the operator disabling it. It must fail fast.
+    cfg = tmp_path / CONFIG_FILENAME
+    cfg.write_text('[diagnostics]\ncapture_env = "false"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match=r"capture_env must be a boolean"):
+        load_settings(cfg)
+
+
+def test_quoted_enabled_string_is_rejected_not_coerced(tmp_path: Path) -> None:
+    # Likewise a quoted "no" would keep diagnostics on via bool("no") == True.
+    cfg = tmp_path / CONFIG_FILENAME
+    cfg.write_text('[diagnostics]\nenabled = "no"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match=r"enabled must be a boolean"):
+        load_settings(cfg)
+
+
+def test_real_bool_diagnostics_flags_are_accepted(tmp_path: Path) -> None:
+    # A genuine TOML boolean is honoured (no over-eager rejection of the valid case).
+    cfg = tmp_path / CONFIG_FILENAME
+    cfg.write_text(
+        "[diagnostics]\nenabled = false\ncapture_env = true\nredact_paths = false\n",
+        encoding="utf-8",
+    )
+    s = load_settings(cfg)
+    assert s.diagnostics.enabled is False
+    assert s.diagnostics.capture_env is True
+    assert s.diagnostics.redact_paths is False
