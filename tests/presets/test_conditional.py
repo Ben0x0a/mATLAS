@@ -156,6 +156,17 @@ def test_equality_tolerates_source_type_drift() -> None:
     assert _cond_match(2, "==", Ref("const", "1"), "1") is False
 
 
+def test_equality_tolerates_integral_float_drift() -> None:
+    # A pandas/Excel numeric cell arrives as a float 1.0; it must still equal the integer
+    # literal "1" (str(1.0) == "1.0" != "1", so a plain string fallback would wrongly fail).
+    assert _cond_match(1.0, "==", Ref("const", "1"), "1") is True
+    assert _cond_match(1.0, "!=", Ref("const", "1"), "1") is False
+    assert _cond_match(2.0, "==", Ref("const", "1"), "1") is False
+    # End-to-end through the resolver: a float source cell selects the matching branch.
+    assert _resolve('if field(ZTYPE) == "1" then const(match) else const(other)',
+                    {"ZTYPE": 1.0}) == "match"
+
+
 # --- load-time validation over a conditional-bearing spec --------------------
 
 _LINK_COND = """

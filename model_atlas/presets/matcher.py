@@ -109,7 +109,13 @@ def _missing_required(
     columns = peek(file, selector)
     if columns is None:
         return set()
-    return required_fields(preset) - set(columns)
+    # HOW: gate each required ref through the SAME glob-aware resolver assembly and structural
+    # scoring use, counting a ref present when it resolves to a real column. WHY not a literal
+    # ``required_fields(preset) - set(columns)``: a required ``field("ZLAT*")`` is not literally
+    # in the column set, so the set difference would report it missing and disqualify the preset
+    # even though the glob matches ``ZLATITUDE`` — silently dropping (or mis-ranking) the file.
+    resolve = make_resolver(sorted(columns))
+    return {ref for ref in required_fields(preset) if resolve(ref) is None}
 
 
 def match_files_detailed(
@@ -129,29 +135,51 @@ def match_files_detailed(
     type-matched but where no preset's required fields are satisfied — a faithful mapping is
     impossible and the caller must surface it loudly (never silently drop it).
     """
-    # Step 1 — location pre-filter, one selector per preset (first match wins; OR within role).
-    located: list[tuple[PresetSpec, InputSelector]] = []
+    # Step 1 — location pre-filter: keep EVERY selector matching the file's location, in
+    # first-seen order. HOW: no ``break`` after the first hit. WHY: a preset may declare OR
+    # alternatives (same role, sibling formats — e.g. ``export.*`` as both csv and sqlite) or
+    # selectors for DIFFERENT in-file sub-units (two tables of one DB); keeping only the first
+    # would let Step 2's format guard drop an OR sibling and would silently never extract every
+    # sub-unit past the first. Grouped by preset so Step 2 can tell a genuine format mismatch
+    # (no selector matches the format) from an OR sibling meant for another format.
+    located: list[tuple[PresetSpec, list[InputSelector]]] = []
     for preset in presets:
-        for selector in preset.input_selectors:
-            if _selector_location_matches(selector, file, root_prefix_depth):
-                located.append((preset, selector))
-                break
+        hits = [
+            selector for selector in preset.input_selectors
+            if _selector_location_matches(selector, file, root_prefix_depth)
+        ]
+        if hits:
+            located.append((preset, hits))
     if not located:
         log.debug(f"No selector located {file.logical_path}")
         return [], []
 
-    # Step 2 — type/namespace guard.
+    # Step 2 — type/namespace guard, per selector: keep every located selector whose format
+    # (and, for xml, namespace) matches the file. A mismatched selector is only a genuine
+    # mismatch worth warning about when NONE of the preset's located selectors match — an OR
+    # sibling declared for another format/namespace is a legitimate alternative, not a mismatch.
     detected = detect_source_format(file)
     file_namespace = _file_namespace(file) if detected == "xml" else None
     candidates: list[tuple[PresetSpec, InputSelector]] = []
-    for preset, selector in located:
-        if selector.format != detected:
-            log.warning(f"format mismatch: {file.logical_path} is {detected}, preset {preset.name} expects {selector.format}; skipped")
-            continue
-        if detected == "xml" and selector.namespace is not None and selector.namespace != file_namespace:
-            log.warning(f"namespace mismatch: {file.logical_path} is {file_namespace!r}, preset {preset.name} expects {selector.namespace!r}; skipped")
-            continue
-        candidates.append((preset, selector))
+    for preset, hits in located:
+        format_ok = [selector for selector in hits if selector.format == detected]
+        if detected == "xml":
+            kept = [
+                selector for selector in format_ok
+                if selector.namespace is None or selector.namespace == file_namespace
+            ]
+        else:
+            kept = format_ok
+        if kept:
+            candidates.extend((preset, selector) for selector in kept)
+        elif format_ok:
+            # Format matched but the xml namespace guard rejected every located selector.
+            wanted = sorted({s.namespace for s in format_ok if s.namespace is not None})
+            log.warning(f"namespace mismatch: {file.logical_path} is {file_namespace!r}, preset {preset.name} expects {wanted}; skipped")
+        else:
+            # The preset targeted this location but no selector matches the detected format.
+            wanted = sorted({s.format for s in hits})
+            log.warning(f"format mismatch: {file.logical_path} is {detected}, preset {preset.name} expects {wanted}; skipped")
 
     # Steps 3 + 4 — per in-file unit: gate on required columns, then tie-break the qualified.
     groups: dict[tuple, list[tuple[PresetSpec, InputSelector]]] = {}

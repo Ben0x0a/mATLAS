@@ -37,6 +37,7 @@ from model_atlas.core.vocabularies import column_cast, unit_factor
 from model_atlas.presets.expr import NA_LITERAL, NA_SENTINEL, Cond, Ref, Template
 from model_atlas.presets.pipes import PipeContext, run_pipe
 from model_atlas.presets.spec import FieldSpec, InputSelector, PresetSpec
+from model_atlas.presets.value_maps import value_map_key
 
 
 def is_missing(value: Any) -> bool:
@@ -190,9 +191,13 @@ def cond_match(test_value: Any, op: str, comparand_ref: Ref, comparand_value: An
     if is_missing(test_value) or is_missing(comparand_value):
         equal = is_missing(test_value) and is_missing(comparand_value)
     else:
-        # Direct equality first (int == int); fall back to textual equality so a source
-        # value typed differently from the literal (CSV "1" vs const 1) still matches.
-        equal = (test_value == comparand_value) or (str(test_value) == str(comparand_value))
+        # Direct equality first (int == int); fall back to normalised-key equality so a source
+        # value typed differently from the literal still matches. HOW: ``value_map_key`` (the
+        # lookup pipe's key normaliser) canonicalises an integral float to its integer spelling,
+        # so a pandas/Excel ``1.0`` and a literal ``"1"`` both key to ``"1"``. WHY not a plain
+        # ``str()``: ``str(1.0) == "1.0" != "1"``, so the documented drift tolerance would fail
+        # for every numeric-float source value and wrongly take the ``else`` branch.
+        equal = (test_value == comparand_value) or (value_map_key(test_value) == value_map_key(comparand_value))
     return equal if op == "==" else not equal
 
 
