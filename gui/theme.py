@@ -517,6 +517,50 @@ _QSS = """
         border: none;
     }
 
+    /* Tables (the Database Edit grid). Unstyled, a QTableView falls through to native
+       painting and rendered as a black slab against the light page. The header is styled
+       with it: leaving it native put dark grey column titles above light rows. */
+    QTableView {
+        background: #ffffff;
+        alternate-background-color: #f7f9fc;
+        color: #111827;
+        border: 1px solid #c2cede;
+        border-radius: 6px;
+        gridline-color: #e2e8f0;
+        selection-background-color: #dbeafe;
+        selection-color: #16233a;
+        outline: none;
+    }
+    QTableView::item {
+        padding: 3px 6px;
+    }
+    QTableView::item:selected {
+        background: #dbeafe;
+        color: #16233a;
+    }
+    QHeaderView {
+        background: transparent;
+        border: none;
+    }
+    QHeaderView::section {
+        background: #eef2f7;
+        color: #33415c;
+        border: none;
+        border-right: 1px solid #dbe3ee;
+        border-bottom: 1px solid #dbe3ee;
+        padding: 4px 8px;
+        font-weight: 600;
+    }
+    QHeaderView::section:last {
+        border-right: none;
+    }
+    QTableView QTableCornerButton::section {
+        background: #eef2f7;
+        border: none;
+        border-right: 1px solid #dbe3ee;
+        border-bottom: 1px solid #dbe3ee;
+    }
+
     /* Popups: the Additional export menu and every tooltip, which were the remaining
        native surfaces. */
     QMenu {

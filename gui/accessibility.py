@@ -55,20 +55,24 @@ def configure_accessibility(controller: Any) -> None:
     # provides the keyboard behaviour (arrow keys, Ctrl+Tab); only the naming is ours.
     controller.tab_widget.setAccessibleName("Main sections")
     controller.tab_widget.setAccessibleDescription(
-        "Tabs switching between the Transform form, Database Edit, and Spatiotemporal Analysis sections."
+        "Tabs switching between the Transform form, Database Edit, and Spatio-temporal concomitance sections."
     )
     controller.tab_widget.tabBar().setAccessibleName("Main section tabs")
     controller.transform_tab.setAccessibleName("Transform tab")
     controller.transform_tab.setAccessibleDescription(
         "Form for selecting a source, presets, and output settings, and running a transform."
     )
+    # Both descriptions once said "placeholder ... arrives in a later update"; the panels
+    # have since been built, so a screen-reader user was being told a working tool was not
+    # there yet.
     controller.database_edit_tab.setAccessibleName("Database Edit tab")
     controller.database_edit_tab.setAccessibleDescription(
-        "Placeholder for the database editing tools; arrives in a later update."
+        "Browse and edit the tables of an open case database."
     )
-    controller.spatiotemporal_tab.setAccessibleName("Spatiotemporal Analysis tab")
+    controller.spatiotemporal_tab.setAccessibleName("Spatio-temporal concomitance tab")
     controller.spatiotemporal_tab.setAccessibleDescription(
-        "Placeholder for the spatiotemporal analysis tools; arrives in a later update."
+        "Find pairs of entities recorded close together in both space and time, within "
+        "a chosen distance and a chosen time gap."
     )
 
     # The three check boxes carry their own text (and their own &mnemonic), so they need no

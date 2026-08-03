@@ -1,6 +1,7 @@
 """Background-thread plumbing and the GUI log handler for the PySide6 GUI.
 
-Defines:    ProgressBridge (thread-safe per-phase signal), TaskRunner (a QObject owning the
+Defines:    ProgressBridge (thread-safe per-phase ``phase`` signal + per-anchor ``progress``
+            (done, total) signal), TaskRunner (a QObject owning the
             QThread/worker lifecycle with run()/wait_all(), whose bookkeeping runs on the GUI
             thread), install_gui_log_handler(bridge_parent, on_record) -> logging.Handler
             (attaches a coloured GUI log handler to the root logger) and
@@ -32,6 +33,10 @@ class ProgressBridge(QObject):
     # Emitted (from the worker thread) at the start of each pipeline phase; a queued connection
     # marshals it onto the GUI thread so the status label can be updated safely.
     phase = Signal(str)
+    # Emitted (from the worker thread) as (done, total) anchor counts by a long-running query
+    # that reports fine-grained progress (e.g. model_atlas.app.concomitance_run.run_concomitance);
+    # a queued connection marshals it onto the GUI thread so a progress bar can be updated safely.
+    progress = Signal(int, int)
 
 
 class _GuiLogHandler(logging.Handler):
@@ -106,7 +111,17 @@ class TaskRunner(QObject):
         worker.failed.connect(on_failed)
         worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
         worker.failed.connect(thread.quit, Qt.ConnectionType.DirectConnection)
-        thread.finished.connect(worker.deleteLater)
+        # NOTE: deliberately NO `thread.finished.connect(worker.deleteLater)`.
+        # The worker has no C++ parent, so the Python reference in ``_workers`` is its sole
+        # owner and dropping that reference in ``_reap`` destroys it. Adding deleteLater as
+        # well gives it TWO owners racing each other: deleteLater posts a DeferredDelete to
+        # the worker's own (already finishing) thread, while _reap drops the last Python
+        # reference on the GUI thread. Whichever runs second frees an object the other has
+        # already destroyed — observed as a segfault in ~QObjectWrapper on a worker thread,
+        # inside that thread's timer/posted-event dispatch. The thread below is different:
+        # it IS parented to this runner, so dropping its Python reference does not delete
+        # it and its deleteLater is what actually frees it.
+        #
         # _reap is a bound slot of this GUI-thread QObject, so this connection is queued onto
         # the GUI thread — the list bookkeeping never runs on the finishing worker thread.
         thread.finished.connect(self._reap)

@@ -24,7 +24,7 @@ import pytest
 pytest.importorskip("PySide6", reason="GUI extra not installed")
 
 from PySide6.QtCore import QThread
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QMessageBox, QWidget
 
 from gui.db_edit_controller import DbEditController
 from gui.spatiotemporal_controller import SpatiotemporalController
@@ -85,26 +85,37 @@ def test_async_open_lands_on_gui_thread_and_edit_does_not_raise(app, tmp_path) -
     drain(app)   # run that delete NOW rather than at some later timer tick
 
 
-def test_pending_panel_query_is_waited_at_quit(app, tmp_path) -> None:
+def test_pending_panel_query_is_waited_at_quit(app, tmp_path, monkeypatch) -> None:
     # The spatiotemporal panel shares the app's lifecycle-managed runner, so wait_all() (wired
-    # to aboutToQuit) also drains its concomitance query — quitting mid-query must not leave a
-    # running QThread to be destroyed. Kick off a query, then wait_all() as quit would.
+    # to aboutToQuit) also drains its concomitance run — quitting mid-run must not leave a
+    # running QThread to be destroyed. Kick off a run, then wait_all() as quit would.
     path = tmp_path / "case.matlas.sqlite"
     _build_persisted_db(path)
     parent = QWidget()
     runner = TaskRunner(parent)
     panel = SpatiotemporalController(parent, runner=runner)
-    panel.db_edit.setText(str(path))
+    panel.case_1_edit.setText(str(path))
+    panel.space_spin.setValue(50.0)
+    panel.time_before_spin.setValue(10.0)
+    panel.time_after_spin.setValue(10.0)
+    panel.output_edit.setText(str(tmp_path / "out.csv"))
+    # Both groups are empty ("everything"): check_request warns (identical groups in one
+    # case) but does not block; accept the Continue prompt.
+    monkeypatch.setattr(QMessageBox, "warning",
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
 
-    panel._run_query()                 # dispatches onto the shared runner
-    runner.wait_all()                  # what aboutToQuit does: block on the live worker
-    _pump_until(app, lambda: not panel.run_button.text().endswith("…"))
+    panel._on_run_clicked()             # dispatches onto the shared runner
+    runner.wait_all()                   # what aboutToQuit does: block on the live worker
+    _pump_until(app, lambda: panel.run_button.text() == "Run")
 
-    # The query completed cleanly (a result set was produced) and the panel left the running
+    # The run completed cleanly (a result was produced) and the panel left the running
     # state — no thread was destroyed while still running.
     assert panel.run_button.isEnabled()
-    assert panel._result is not None
+    assert panel._last_result is not None
 
     runner.wait_all()
+    # Silence the panel's own emitters (its progress bridge) before its widgets die: a
+    # queued signal arriving after deletion dereferences freed memory.
+    panel.shutdown()
     parent.deleteLater()
     drain(app)   # run that delete NOW rather than at some later timer tick

@@ -52,9 +52,10 @@ def test_open_case_binds_context_then_close_case_detaches(controller, tmp_path, 
     assert controller._case_output_dir == db.parent
     assert controller._case_db_path() == db
     assert controller.window.windowTitle().endswith("Case: op")
-    # Both analysis tabs bind to the opened case.
+    # The Database-Edit tab binds to the opened case; the Spatiotemporal panel owns its
+    # own Case 1 / Case 2 selection (T101a) and is deliberately NOT bound here.
     assert controller._db_edit_controller.path_edit.text() == str(db)
-    assert controller._spatiotemporal_controller.db_edit.text() == str(db)
+    assert controller._spatiotemporal_controller.case_1_edit.text() == ""
     # With a case open, the bar offers only Close case.
     assert controller.close_case_button.isVisibleTo(controller.window)
     assert not controller.new_case_button.isVisibleTo(controller.window)

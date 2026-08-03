@@ -810,7 +810,7 @@
       </widget>
       <widget class="QWidget" name="spatiotemporalTab">
        <attribute name="title">
-        <string>Spatiotemporal Analysis</string>
+        <string>Spatio-temporal concomitance</string>
        </attribute>
        <layout class="QVBoxLayout" name="spatiotemporalTabLayout">
         <item>

@@ -195,6 +195,10 @@ class MainController(QObject):
         self._shutdown_done = True
         self._run_timer.stop()
         self._progress_bridge.phase.disconnect(self._on_phase)
+        # The spatiotemporal panel owns emitters of its own (its progress bridge); silence
+        # them here too, before this controller's widgets — which include that panel's — die.
+        if self._spatiotemporal_controller is not None:
+            self._spatiotemporal_controller.shutdown()
         self._runner.wait_all()
         if (app := QCoreApplication.instance()) is not None:
             app.processEvents()
@@ -1000,9 +1004,9 @@ class MainController(QObject):
         return db_path.name.removesuffix(".matlas.sqlite")
 
     def _activate_case(self, db_path: Path) -> None:
-        """Make ``db_path`` the active case: title the window, bind the Database-Edit and
-        Spatiotemporal tabs to it, and show its running totals. Best-effort — a summary read
-        failure is logged and swallowed so a completed run is never reported as failed."""
+        """Make ``db_path`` the active case: title the window, bind the Database-Edit tab
+        to it, and show its running totals. Best-effort — a summary read failure is logged
+        and swallowed so a completed run is never reported as failed."""
         self._active_case_db = db_path
         # A run may create the case a New case declaration only named; keep the two in step.
         if self._case_name is None:
@@ -1134,13 +1138,14 @@ class MainController(QObject):
             )
 
     def _bind_case_to_panels(self, db_path: Path) -> None:
-        """Point the Database-Edit and Spatiotemporal tabs at the active case DB, so the two
-        analysis tabs operate on the very case the Transform tab just built or appended to."""
-        text = str(db_path)
+        """Point the Database-Edit tab at the active case DB, so it operates on the very
+        case the Transform tab just built or appended to.
+
+        The Spatiotemporal panel is NOT bound here: it owns its own Case 1 / Case 2
+        selection (T101a), so inheriting Transform's case would only ever mislabel which
+        case is being analysed."""
         if self._db_edit_controller is not None:
-            self._db_edit_controller.path_edit.setText(text)
-        if self._spatiotemporal_controller is not None:
-            self._spatiotemporal_controller.db_edit.setText(text)
+            self._db_edit_controller.path_edit.setText(str(db_path))
 
     def _update_window_title(self) -> None:
         """Show the active case in the window title (or the bare app name when none is open)."""

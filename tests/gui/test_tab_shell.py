@@ -3,7 +3,7 @@
 Constructs the real MainController offscreen and checks the QTabWidget shell: three
 named tabs in order, the Transform form reparented (not rewritten) into the first tab
 with its widgets still bound and reachable, and accessible names on the tab bar and
-each page. The other two tabs now hold the Database Edit and Spatiotemporal Analysis
+each page. The other two tabs now hold the Database Edit and Spatio-temporal concomitance
 panels (their placeholder labels removed so nothing renders above the real panel).
 Used by:    pytest (the shared ``controller`` fixture and the headless offscreen platform both
             come from tests/gui/conftest.py).
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QLabel, QTabWidget, QWidget
 
 from gui.app import APP_TITLE_DEFAULT, APP_TITLE_UFDR
 
-EXPECTED_TAB_TITLES = ["Transform", "Database Edit", "Spatiotemporal Analysis"]
+EXPECTED_TAB_TITLES = ["Transform", "Database Edit", "Spatio-temporal concomitance"]
 
 
 def test_window_has_three_named_tabs(controller) -> None:
