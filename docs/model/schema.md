@@ -27,6 +27,56 @@ never an ingest-time merge. Everything analyst-graph-shaped (person chains, vali
 intervals, mention resolution, cross-record activity linking) is **deferred out of
 v1** — designed in entity_model.md, absent from the run schema.
 
+## Visual overview
+
+A simplified map of the tables by layer and their purpose (keys and columns omitted — see the
+tables below for those). Solid arrows are the ownership/foreign-key spine; the pure link tables
+(`run_archive`, `run_preset`, `activity_record`) and `matlas_meta` are omitted for clarity.
+
+```mermaid
+flowchart TB
+  subgraph L0["Layer 0 — acquisition (verbatim, immutable, never merged)"]
+    caseT["<b>case_metadata</b><br/>the one case per DB file"]
+    runT["<b>run</b><br/>one processing run<br/>(reproducible from settings_json)"]
+    sourceT["<b>source</b><br/>one file / subunit opened<br/>(paths, tier, format)"]
+    rawT["<b>raw_record</b><br/>one verbatim source row<br/>(+ recovery origin)"]
+    archiveT["<b>archive</b><br/>one container path<br/>(dedup by cd_sha256)"]
+    presetT["<b>preset</b><br/>a preset definition applied<br/>(key ⟂ version)"]
+  end
+  subgraph L1["Layer 1 — assertion (the source's own words)"]
+    assertT["<b>assertion</b><br/>one entity, in one role, at one<br/>place, one time, one activity"]
+    entityT["<b>entity</b><br/>who / what: identifier,<br/>type, concerns"]
+    activityT["<b>activity</b><br/>one real-world happening<br/>(+ context_json)"]
+    sexprT["<b>spatial_expression</b><br/>place header:<br/>referential + source"]
+    scompT["<b>spatial_component</b><br/>one verbatim place field<br/>(part, raw_value)"]
+    texprT["<b>temporal_expression</b><br/>time header: kind +<br/>referential + source"]
+    tcompT["<b>temporal_component</b><br/>one verbatim time field<br/>(bound, raw_value)"]
+  end
+  subgraph L2["Layer 2 — integration (derived, private, method-stamped)"]
+    sintT["<b>spatial_integration</b><br/>canonical WGS84 coords<br/>+ speeds (method)"]
+    sidxT["<b>spatial_index</b><br/>S2 leaf cell<br/>for concomitance"]
+    tintT["<b>timespan_integration</b><br/>canonical UTC µs +<br/>local ISO (method)"]
+  end
+  subgraph L3["Layer 3 — analysis (about evidence, never inside it)"]
+    analysisT["<b>analysis</b><br/>method-attributed verdict<br/>(rank / type)"]
+    editT["<b>edit_log</b><br/>rewindable<br/>manual-edit audit"]
+  end
+  caseT --> runT --> sourceT --> rawT --> assertT
+  runT -.-> archiveT
+  assertT -.-> presetT
+  assertT --> entityT
+  assertT --> activityT
+  assertT --> sexprT --> scompT
+  assertT --> texprT --> tcompT
+  sexprT --> sintT --> sidxT
+  texprT --> tintT
+  assertT --> analysisT
+```
+
+The two corners share one pattern: an **expression** (L1) holds the source's own words as a header
+plus verbatim component rows; a 1:1 **integration** (L2) holds the derived canonical form,
+method-stamped. The flat CSV is a projection over this spine.
+
 ## Tables (by layer)
 
 ### Layer 0 — acquisition (verbatim, immutable, never merged)
