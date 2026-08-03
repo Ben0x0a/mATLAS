@@ -21,7 +21,7 @@ expected_fields: [Lat, Lon, TS, Loc, "Item ID", Source]
 source_record_uid: 'field("Item ID")'
 common: {entity: const(device), input_record_id: field(Loc), raw_source_path: field(Source)}
 assertions:
-  - position: {latitude_wgs84: field(Lat), longitude_wgs84: field(Lon)}
+  - position: {latitude: field(Lat), longitude: field(Lon)}
     time: {instant: field(TS), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
@@ -55,8 +55,8 @@ def test_rowid_as_uid_warns() -> None:
 
 
 def test_half_coordinate_warns() -> None:
-    text = _CLEAN.replace("latitude_wgs84: field(Lat), longitude_wgs84: field(Lon)",
-                          "latitude_wgs84: field(Lat)")
+    text = _CLEAN.replace("latitude: field(Lat), longitude: field(Lon)",
+                          "latitude: field(Lat)")
     assert "half-coordinate" in _codes(lint_spec(_spec(text)), WARNING)
 
 
@@ -84,8 +84,8 @@ def test_id_naming_advice() -> None:
 
 def test_raw_epoch_arithmetic_advice() -> None:
     text = _CLEAN.replace(
-        "latitude_wgs84: field(Lat)",
-        'latitude_wgs84: { from: field(Lat), pipe: "arithmetic((value + 978307200) * 1000000000)" }')
+        "latitude: field(Lat)",
+        'latitude: { from: field(Lat), pipe: "arithmetic((value + 978307200) * 1000000000)" }')
     assert "raw-epoch-arithmetic" in _codes(lint_spec(_spec(text)), ADVICE)
 
 
@@ -124,7 +124,7 @@ def test_clean_preset_is_free_of_new_warnings() -> None:
 
 
 def test_unfilled_placeholder_is_flagged() -> None:
-    text = _CLEAN.replace("longitude_wgs84: field(Lon)", 'longitude_wgs84: field("TODO")')
+    text = _CLEAN.replace("longitude: field(Lon)", 'longitude: field("TODO")')
     findings = lint_spec(_spec(text))
     assert "unfilled-placeholder" in _codes(findings, WARNING)
 

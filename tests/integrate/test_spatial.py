@@ -121,11 +121,11 @@ def test_integrate_spatial_is_idempotent_and_integrates_new_only() -> None:
     # expressions and never collides on an existing spatial_integration row.
     with RunStore() as store:
         _write_expression(store, "a", "epsg:4326",
-                          [("latitude_wgs84", "46.20"), ("longitude_wgs84", "6.14")])
+                          [("latitude", "46.20"), ("longitude", "6.14")])
         assert integrate_spatial(store).integration_count == 1
         assert integrate_spatial(store).integration_count == 0   # nothing new, no collision
         _write_expression(store, "b", "epsg:4326",
-                          [("latitude_wgs84", "47.00"), ("longitude_wgs84", "7.00")])
+                          [("latitude", "47.00"), ("longitude", "7.00")])
         assert integrate_spatial(store).integration_count == 1   # only the new one
         total = store.connection.execute(
             "SELECT COUNT(*) FROM spatial_integration").fetchone()[0]
@@ -137,8 +137,8 @@ def test_integrate_spatial_is_idempotent_and_integrates_new_only() -> None:
 def test_passthrough_and_unit_conversions_write_one_stamped_row() -> None:
     with RunStore() as store:
         expression_id = _write_expression(store, "gnss", "epsg:4326", [
-            ("latitude_wgs84", "46.2030"),
-            ("longitude_wgs84", "6.1430"),
+            ("latitude", "46.2030"),
+            ("longitude", "6.1430"),
             ("altitude_m", "100"),            # source unit ft -> 30.48 m
             ("horizontal_speed_kmh", "10"),   # source unit m/s -> 36.0 km/h
             ("heading_deg", "220"),           # already canonical (identity factor)
@@ -179,7 +179,7 @@ def test_unknown_source_unit_raises_loudly() -> None:
 
 def test_non_numeric_raw_value_raises_loudly() -> None:
     expression = SpatialExpressionInput(
-        "sx-test", "epsg:4326", {"latitude_wgs84": "pres de la gare"})
+        "sx-test", "epsg:4326", {"latitude": "pres de la gare"})
     with pytest.raises(ValueError):
         PassthroughWgs84().integrate(expression)
 
@@ -199,7 +199,7 @@ def test_non_finite_coordinate_raises_before_s2sphere(raw: str) -> None:
     # 'nan'/'inf' under a coordinate must raise the documented ValueError HERE, not crash
     # deep in s2sphere.from_lat_lng (an AssertionError that would abort the whole pass).
     expression = SpatialExpressionInput(
-        "sx-test", "epsg:4326", {"latitude_wgs84": raw, "longitude_wgs84": "6.14"})
+        "sx-test", "epsg:4326", {"latitude": raw, "longitude": "6.14"})
     with pytest.raises(ValueError):
         PassthroughWgs84().integrate(expression)
 
@@ -208,7 +208,9 @@ def test_finite_float_still_parses() -> None:
     # The guard rejects only non-finite values — an ordinary coordinate is untouched.
     expression = SpatialExpressionInput(
         "sx-test", "epsg:4326",
-        {"latitude_wgs84": "46.2030", "longitude_wgs84": "6.1430"})
+        {"latitude": "46.2030", "longitude": "6.1430"})
+    # The datum-agnostic L1 parts ``latitude`` / ``longitude`` are MAPPED to the canonical
+    # L2 columns ``latitude_wgs84`` / ``longitude_wgs84`` at the point of WGS84 adoption.
     assert PassthroughWgs84().integrate(expression) == {
         "latitude_wgs84": 46.2030, "longitude_wgs84": 6.1430}
 
@@ -218,7 +220,7 @@ def test_finite_float_still_parses() -> None:
 def test_every_integration_row_is_method_stamped() -> None:
     with RunStore() as store:
         _write_expression(store, "a", "epsg:4326",
-                          [("latitude_wgs84", "46.2030"), ("longitude_wgs84", "6.1430")])
+                          [("latitude", "46.2030"), ("longitude", "6.1430")])
         _write_expression(store, "b", "unknown",
                           [("horizontal_speed_kmh", "50")])
         integrate_spatial(store)
@@ -275,9 +277,9 @@ def test_stubs_recognise_their_referentials_but_refuse_to_integrate() -> None:
 def test_duplicate_interpretable_part_raises() -> None:
     with RunStore() as store:
         _write_expression(store, "dup", "epsg:4326", [
-            ("latitude_wgs84", "46.0"),
-            ("latitude_wgs84", "47.0"),   # two candidates for ONE canonical column
-            ("longitude_wgs84", "6.0"),
+            ("latitude", "46.0"),
+            ("latitude", "47.0"),   # two candidates for ONE canonical column
+            ("longitude", "6.0"),
         ])
         with pytest.raises(ValueError):
             integrate_spatial(store)

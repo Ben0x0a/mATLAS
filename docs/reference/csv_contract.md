@@ -31,10 +31,10 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | lower_accuracy_us | = | timespan_integration.lower_accuracy_us | per-bound timing uncertainty (µs) |
 | upper_accuracy_us | = | timespan_integration.upper_accuracy_us | |
 | temporal_source | = | temporal_expression.temporal_source | clock mechanism |
-| latitude_wgs84 | = | spatial_integration.latitude_wgs84 | |
-| latitude_source_field | → | spatial_component(part=latitude_wgs84).source_field | |
-| longitude_wgs84 | = | spatial_integration.longitude_wgs84 | |
-| longitude_source_field | → | spatial_component(part=longitude_wgs84).source_field | |
+| latitude_wgs84 | = | spatial_integration.latitude_wgs84 | canonical L2 column (kept); L1 part is the datum-agnostic `latitude` |
+| latitude_source_field | → | spatial_component(part=latitude).source_field | L1 part is datum-agnostic |
+| longitude_wgs84 | = | spatial_integration.longitude_wgs84 | canonical L2 column (kept); L1 part is the datum-agnostic `longitude` |
+| longitude_source_field | → | spatial_component(part=longitude).source_field | L1 part is datum-agnostic |
 | altitude_m | = | spatial_integration.altitude_m | |
 | position_type | → | spatial_component.spatial_role | its semantics were always the place's role (origin/destination/…) |
 | raw_position | → | spatial_component(part=raw_position).raw_value | verbatim composite |

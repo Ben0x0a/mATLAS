@@ -49,8 +49,9 @@ common:
 # fields are shared, so this is two assertions over the same position.
 assertions:
   - position:
-      latitude_wgs84:        field(Latitude)
-      longitude_wgs84:       field(Longitude)
+      latitude:              field(Latitude)
+      longitude:             field(Longitude)
+      spatial_referential:   const(epsg:4326)   # the datum for the coordinates
       horizontal_accuracy_m: field(Accuracy)
     time:
       interval:
@@ -63,8 +64,9 @@ assertions:
       spatial_temporal: continuous_during_interval
 
   - position:
-      latitude_wgs84:        field(Latitude)
-      longitude_wgs84:       field(Longitude)
+      latitude:              field(Latitude)
+      longitude:             field(Longitude)
+      spatial_referential:   const(epsg:4326)   # the datum for the coordinates
       horizontal_accuracy_m: field(Accuracy)
     time:
       instant: 'field("Created Date/Time - * (dd.MM.yyyy)")'

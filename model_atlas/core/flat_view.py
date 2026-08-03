@@ -123,10 +123,14 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("lower_accuracy_us", "ti.lower_accuracy_us"),
     ("upper_accuracy_us", "ti.upper_accuracy_us"),
     ("temporal_source", "tx.temporal_source"),
+    # The value columns read the canonical L2 integration columns (which KEEP their
+    # ``*_wgs84`` names); the ``*_source_field`` subqueries key off the datum-agnostic L1
+    # component part names ``latitude`` / ``longitude`` — so the CSV header is unchanged
+    # while the lookup follows the renamed L1 part.
     ("latitude_wgs84", "si.latitude_wgs84"),
-    ("latitude_source_field", _spatial_part("latitude_wgs84", "source_field")),
+    ("latitude_source_field", _spatial_part("latitude", "source_field")),
     ("longitude_wgs84", "si.longitude_wgs84"),
-    ("longitude_source_field", _spatial_part("longitude_wgs84", "source_field")),
+    ("longitude_source_field", _spatial_part("longitude", "source_field")),
     ("altitude_m", "si.altitude_m"),
     ("spatial_role", _SPATIAL_ROLE),                    # old position_type
     ("raw_position", _spatial_part("raw_position", "raw_value")),

@@ -28,7 +28,8 @@ v3 layout (readable, examiner-first)::
     common:
       entity: const(device)
     assertions:
-      - position: {latitude_wgs84: field(ZLATITUDE), ...}
+      - position: {latitude: field(ZLATITUDE), longitude: field(ZLONGITUDE),
+                   spatial_referential: const(epsg:4326)}
         time:     {instant: field(ZTIMESTAMP), epoch: cocoa, zone: UTC}
         links:    {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 
@@ -90,8 +91,10 @@ ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
     "temporal_role_lower", "temporal_role_upper",
     "temporal_part_lower", "temporal_part_upper",
     "time_accuracy_us_lower", "time_accuracy_us_upper",
-    # spatial
-    "latitude_wgs84", "longitude_wgs84", "altitude_m", "position_type", "raw_position",
+    # spatial. The two angle targets are DATUM-AGNOSTIC (``latitude`` / ``longitude`` — the
+    # source's words); the datum is stated separately via ``spatial_referential`` (e.g.
+    # const(epsg:4326)), which is what lets L2 adopt them as the canonical ``*_wgs84`` columns.
+    "latitude", "longitude", "altitude_m", "position_type", "raw_position",
     "position_source", "horizontal_accuracy_m", "vertical_accuracy_m",
     "horizontal_speed_kmh", "vertical_speed_kmh", "horizontal_speed_accuracy_kmh",
     "vertical_speed_accuracy_kmh", "heading_deg", "heading_accuracy_deg",

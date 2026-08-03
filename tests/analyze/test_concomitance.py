@@ -101,8 +101,8 @@ class _CaseFixture:
         self.store.write_spatial_expression(V.SpatialExpression(
             spatial_expression_id=sx_id, referential="epsg:4326"))
         for ordinal, (part, raw) in enumerate((
-                ("latitude_wgs84", str(latitude)),
-                ("longitude_wgs84", str(longitude)))):
+                ("latitude", str(latitude)),
+                ("longitude", str(longitude)))):
             self.store.write_spatial_component(V.SpatialComponent(
                 spatial_component_id=ids.spatial_component_id(sx_id, ordinal),
                 spatial_expression_id=sx_id, ordinal=ordinal,

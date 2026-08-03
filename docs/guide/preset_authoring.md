@@ -75,8 +75,9 @@ common:
 ```yaml
 assertions:
   - position:
-      latitude_wgs84:  field(ZLATITUDE)      # numeric cast is inferred — no cast() needed
-      longitude_wgs84: field(ZLONGITUDE)
+      latitude:  field(ZLATITUDE)            # datum-agnostic L1 part; numeric cast is inferred
+      longitude: field(ZLONGITUDE)
+      spatial_referential: const(epsg:4326)   # the datum — required for the coords to integrate
       altitude_m:      field(ZALTITUDE)
       horizontal_speed_kmh: { from: field(ZSPEED), unit: m/s }   # converted to km/h
     time:
@@ -125,8 +126,9 @@ patterns:      {coords: "(?P<lat>-?\\d+\\.\\d+) - (?P<lon>-?\\d+\\.\\d+)"}
 ...
   deleted: { from: 'field("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
   # one cell holding "lat - lon": pull each named group into its own field
-  latitude_wgs84:  { from: field(Coords), extract: coords.lat }
-  longitude_wgs84: { from: field(Coords), extract: coords.lon }
+  latitude:  { from: field(Coords), extract: coords.lat }
+  longitude: { from: field(Coords), extract: coords.lon }
+  spatial_referential: const(epsg:4326)   # the datum for the coordinates above
 ```
 
 `regex` requires named groups, and you name which group to extract — so what is pulled

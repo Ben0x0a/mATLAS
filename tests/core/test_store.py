@@ -86,11 +86,11 @@ def _write_gps_assertion(store: RunStore, *, source_id: str, preset_id: str,
     spatial_components = (
         V.SpatialComponent(
             spatial_component_id=ids.spatial_component_id(sx_id, 0),
-            spatial_expression_id=sx_id, ordinal=0, part="latitude_wgs84",
+            spatial_expression_id=sx_id, ordinal=0, part="latitude",
             source_field="ZLATITUDE", raw_value="46.193000"),
         V.SpatialComponent(
             spatial_component_id=ids.spatial_component_id(sx_id, 1),
-            spatial_expression_id=sx_id, ordinal=1, part="longitude_wgs84",
+            spatial_expression_id=sx_id, ordinal=1, part="longitude",
             source_field="ZLONGITUDE", raw_value="6.129000"),
     )
     for component in spatial_components:

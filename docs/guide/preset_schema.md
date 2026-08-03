@@ -42,8 +42,9 @@ common:                                  # fields shared by every assertion of a
 
 assertions:                              # each entry = one position + one time + links
   - position:
-      latitude_wgs84:  field(ZLATITUDE)
-      longitude_wgs84: field(ZLONGITUDE)
+      latitude:  field(ZLATITUDE)             # datum-agnostic L1 part
+      longitude: field(ZLONGITUDE)
+      spatial_referential: const(epsg:4326)    # the datum — required to integrate the coords
       horizontal_speed_kmh: { from: field(ZSPEED), unit: m/s }
     time:
       instant: field(ZTIMESTAMP)
@@ -148,7 +149,7 @@ A field may instead be a mapping with attributes:
 ```yaml
 horizontal_speed_kmh: { from: field(ZSPEED), unit: m/s }
 imei:                  { from: filename(name), pipe: "regex(imei, group=n)" }
-latitude_wgs84:        { from: field(Coords), extract: coords.lat }
+latitude:              { from: field(Coords), extract: coords.lat }
 ```
 
 | Attribute | Effect |
@@ -160,7 +161,7 @@ latitude_wgs84:        { from: field(Coords), extract: coords.lat }
 | `pipe` | a procedural call-chain (see Pipes) |
 
 Numeric model fields are **cast automatically** from their declared type, so a plain
-`latitude_wgs84: field(Lat)` needs no `cast`.
+`latitude: field(Lat)` needs no `cast`.
 
 Bare scalars are allowed only where the position is a known keyword/enum — link values,
 `epoch`, `zone` — never where a field reference could be meant.

@@ -462,8 +462,14 @@ _EPLINK_LOCATES: dict[EntityPositionLink, Locates] = {
 
 STANDARD_SPATIAL_PARTS: frozenset[str] = frozenset({
     "raw_position",          # composite / free-text position (one field)
-    "latitude_wgs84",
-    "longitude_wgs84",
+    # The two ANGLE parts are DATUM-AGNOSTIC at L1 — they name "the source's latitude /
+    # longitude words, verbatim". The datum (WGS84 / epsg:4326) is carried ONLY by the
+    # spatial_expression.referential, never baked into the part name: baking it in would
+    # double-state the datum and pre-empt the L2 CRS-adoption interpretation. The canonical
+    # WGS84 float columns keep their _wgs84 names at L2 (SpatialIntegration below) — that is
+    # the canonical layer, where the datum IS asserted.
+    "latitude",
+    "longitude",
     "altitude_m",
     "horizontal_accuracy_m",
     "vertical_accuracy_m",
@@ -683,7 +689,10 @@ class SpatialExpression:
 
     ``referential`` = encoding/CRS; ``spatial_source`` = the mechanism (GNSS, WiFi,
     cell…). The values live in ``spatial_component`` rows; ``spatial_role`` moved to
-    the component.
+    the component. ``referential`` is the SOLE carrier of the datum: the ``latitude`` /
+    ``longitude`` component parts are datum-agnostic (the source's words), and only an
+    ``epsg:4326`` referential lets L2 adopt them as canonical WGS84 — the CRS adoption is
+    the interpretation, never pre-stated by the part name.
     """
 
     spatial_expression_id: str      # uuid5(assertion natural key ⟂ corner tag)
@@ -884,14 +893,17 @@ UTC_OFFSET_UNKNOWN = "N/A"
 # has to restate `cast: float` / `cast: int` on a numeric mapping. ``column_cast`` is keyed
 # on the ASSIGNABLE field name — what a preset writes in `to:` (presets/spec.py
 # ASSIGNABLE_FIELDS) — because that is exactly the string its one caller
-# (presets/resolve.py) passes. For the float metrics the assignable name happens to equal
-# the integration column; for the integer fields it does NOT (the assignable names are
-# ``multiplicity`` / ``time_accuracy_us_lower`` / ``_upper``, whereas the downstream write
-# columns are ``lower_accuracy_us`` / ``upper_accuracy_us``), so the set must hold the
-# ASSIGNABLE names or the int branch never fires for a field a preset can map.
+# (presets/resolve.py) passes. For the metric float fields the assignable name happens to
+# equal the integration column; for the two ANGLE fields it does NOT (a preset maps the
+# datum-agnostic ``latitude`` / ``longitude``, whereas the canonical L2 write columns are
+# ``latitude_wgs84`` / ``longitude_wgs84``), and for the integer fields it does NOT either
+# (the assignable names are ``multiplicity`` / ``time_accuracy_us_lower`` / ``_upper``,
+# whereas the downstream write columns are ``lower_accuracy_us`` / ``upper_accuracy_us``),
+# so the set must hold the ASSIGNABLE names or the cast never fires for a field a preset
+# can map.
 
 _FLOAT_COLUMNS: frozenset[str] = frozenset({
-    "latitude_wgs84", "longitude_wgs84", "altitude_m",
+    "latitude", "longitude", "altitude_m",
     "horizontal_accuracy_m", "vertical_accuracy_m",
     "horizontal_speed_kmh", "vertical_speed_kmh",
     "horizontal_speed_accuracy_kmh", "vertical_speed_accuracy_kmh",

@@ -262,10 +262,10 @@ def _write_assertion(
         referential=V.SpatialReferential.EPSG_4326, spatial_source="GNSS"))
     store.write_spatial_component(V.SpatialComponent(
         spatial_component_id=f"sc-{tag}-lat", spatial_expression_id=spatial_expression_id,
-        ordinal=0, part="latitude_wgs84", source_field="Latitude", raw_value=str(latitude)))
+        ordinal=0, part="latitude", source_field="Latitude", raw_value=str(latitude)))
     store.write_spatial_component(V.SpatialComponent(
         spatial_component_id=f"sc-{tag}-lon", spatial_expression_id=spatial_expression_id,
-        ordinal=1, part="longitude_wgs84", source_field="Longitude", raw_value=str(longitude)))
+        ordinal=1, part="longitude", source_field="Longitude", raw_value=str(longitude)))
     store.write_spatial_integration(V.SpatialIntegration(
         spatial_integration_id=f"si-{tag}", spatial_expression_id=spatial_expression_id,
         method="passthrough_wgs84/1.0", latitude_wgs84=latitude, longitude_wgs84=longitude,

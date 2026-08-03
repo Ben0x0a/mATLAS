@@ -76,8 +76,8 @@ def test_axiom_model_parser_writes_valid_template(tmp_path: Path) -> None:
     # TODO placeholders the analyst fills/prunes.
     assert data["input_selector"] == {"format": "csv", "name": "TODO_export_filename.csv", "encoding": "utf-8-sig"}
     assertion = data["assertions"][0]
-    assert assertion["position"]["latitude_wgs84"] == 'field("TODO")'
-    assert assertion["position"]["longitude_wgs84"] == 'field("TODO")'
+    assert assertion["position"]["latitude"] == 'field("TODO")'
+    assert assertion["position"]["longitude"] == 'field("TODO")'
     assert assertion["time"]["instant"] == 'field("TODO")'
     assert assertion["time"]["format"] == "TODO_STRPTIME"
     # Rich template: common + the enum links carry reviewed defaults (a TODO is not a valid
@@ -139,7 +139,7 @@ preset: {id: ios.axiom.example_sheet, name: Example Sheet, os: iOS, tool: AXIOM,
 input_selector: {format: csv, name: "Example Sheet.csv"}
 expected_fields: [Timestamp, Latitude]
 assertions:
-  - position: {latitude_wgs84: 'field("Latitude")'}
+  - position: {latitude: 'field("Latitude")'}
     time: {instant: 'field("Timestamp")', format: TODO}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """

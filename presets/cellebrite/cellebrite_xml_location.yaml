@@ -52,8 +52,9 @@ common:
 
 assertions:
   - position:
-      latitude_wgs84:        field(Position.Latitude)         # required
-      longitude_wgs84:       field(Position.Longitude)        # required
+      latitude:              field(Position.Latitude)         # required
+      longitude:             field(Position.Longitude)        # required
+      spatial_referential:   const(epsg:4326)                 # the datum for the coordinates
       # Enrichments some schema versions omit — optional, so their absence yields a null
       # cell rather than disqualifying the preset.
       altitude_m:            { from: field(Position.Elevation), optional: true }

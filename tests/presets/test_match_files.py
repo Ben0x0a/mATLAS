@@ -17,9 +17,9 @@ _NS = "http://pa.cellebrite.com/report/2.0"
 
 
 def _xml_preset(model: str, *, id_suffix: str = "", longitude=None) -> object:
-    position = {"latitude_wgs84": "field(Position.Latitude)"}
+    position = {"latitude": "field(Position.Latitude)"}
     if longitude is not None:
-        position["longitude_wgs84"] = longitude
+        position["longitude"] = longitude
     raw = {
         "preset": {"id": f"cellebrite.{model.lower()}{id_suffix}", "name": f"Cellebrite {model}{id_suffix}",
                    "tier": "secondary", "version": 1},
@@ -67,7 +67,7 @@ def test_namespace_mismatch_excludes_preset(tmp_path: Path) -> None:
         "input_selector": {"format": "xml", "name": "report.xml",
                            "namespace": "urn:axiom", "model": "Location"},
         "assertions": location.assertions and [{
-            "position": {"latitude_wgs84": "field(Position.Latitude)"},
+            "position": {"latitude": "field(Position.Latitude)"},
             "time": {"instant": "field(TimeStamp)"},
             "links": {"entity_position": "at", "entity_time": "observed_at",
                       "spatial_temporal": "instant"},

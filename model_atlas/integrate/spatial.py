@@ -111,13 +111,22 @@ class SpatialExpressionInput:
     part_values: dict[str, str] = field(default_factory=dict)
 
 
-# The parts the v1 Methods interpret. The two angles are WGS84 degrees (no unit
-# conversion — the CRS adoption is the interpretation); every metric part is exactly
-# the set of columns carrying a canonical unit in core/vocabularies.py, so a column
-# added there is picked up here with no second list to update.
-_LATITUDE_PART_NAME = "latitude_wgs84"
-_LONGITUDE_PART_NAME = "longitude_wgs84"
+# The parts the v1 Methods interpret. The two angles are DATUM-AGNOSTIC L1 parts
+# (``latitude`` / ``longitude`` — the source's words); adopting them as WGS84 degrees is
+# the CRS interpretation (no unit conversion), and it MAPS the agnostic part onto its
+# canonical L2 column ``*_wgs84`` via ``_PART_TO_COLUMN`` below. Every metric part is
+# exactly the set of columns carrying a canonical unit in core/vocabularies.py, so a
+# column added there is picked up here with no second list to update.
+_LATITUDE_PART_NAME = "latitude"
+_LONGITUDE_PART_NAME = "longitude"
 _ANGLE_PARTS: frozenset[str] = frozenset({_LATITUDE_PART_NAME, _LONGITUDE_PART_NAME})
+# L1 angle part -> canonical L2 integration column. The datum lives in the referential at
+# L1; adopting it names the canonical WGS84 column, so the part->column rename happens
+# HERE (the interpretation), never at L1.
+_PART_TO_COLUMN: dict[str, str] = {
+    _LATITUDE_PART_NAME: "latitude_wgs84",
+    _LONGITUDE_PART_NAME: "longitude_wgs84",
+}
 _METRIC_PARTS: frozenset[str] = frozenset(V.CANONICAL_UNIT)
 _INTERPRETABLE_PARTS: frozenset[str] = _ANGLE_PARTS | _METRIC_PARTS
 
@@ -173,7 +182,10 @@ class PassthroughWgs84:
     The pass-through IS a documented derivation (verbatim text -> REAL column), so it
     is stamped like any other method. Only the two angle parts are handled here — the
     CRS adoption is a different interpretation from a unit conversion, so the metric
-    columns belong to ``UnitConvert`` and the two method names stay honest.
+    columns belong to ``UnitConvert`` and the two method names stay honest. It applies
+    ONLY when the referential is ``epsg:4326``: that is what licenses reading the
+    datum-agnostic L1 ``latitude`` / ``longitude`` as canonical WGS84 (a preset that maps
+    coordinates but states no referential resolves to ``unknown`` and is NOT adopted).
     """
 
     name = "passthrough_wgs84"
@@ -184,8 +196,11 @@ class PassthroughWgs84:
                 and any(part in expression.part_values for part in _ANGLE_PARTS))
 
     def integrate(self, expression: SpatialExpressionInput) -> dict[str, float] | None:
+        # Map each datum-agnostic L1 angle part onto its canonical L2 column: the returned
+        # dict keys are the ``*_wgs84`` integration columns, so the WGS84 datum is named at
+        # the point of adoption (here), not baked into the L1 part name.
         columns = {
-            part: _parse_float(part, expression.part_values[part])
+            _PART_TO_COLUMN[part]: _parse_float(part, expression.part_values[part])
             for part in (_LATITUDE_PART_NAME, _LONGITUDE_PART_NAME)
             if part in expression.part_values
         }

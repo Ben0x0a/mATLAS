@@ -35,8 +35,9 @@ common:
 
 assertions:
   - position:
-      latitude_wgs84:        field(Latitude)
-      longitude_wgs84:       field(Longitude)
+      latitude:              field(Latitude)
+      longitude:             field(Longitude)
+      spatial_referential:   const(epsg:4326)   # the datum for the coordinates
       horizontal_accuracy_m: 'field("Accuracy (m)")'
       horizontal_speed_kmh:  { from: 'field("Speed (m/s)")', unit: m/s }
     time:

@@ -139,8 +139,8 @@ common:
   source_label: format("{field(First)} {field(Last)}")
 assertions:
   - position:
-      latitude_wgs84: field(Lat)
-      longitude_wgs84: field(Lon)
+      latitude: field(Lat)
+      longitude: field(Lon)
     time:
       instant: field(Created)
     links: {entity_position: at, entity_time: recorded_at, spatial_temporal: instant}

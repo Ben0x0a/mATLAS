@@ -168,7 +168,7 @@ def test_negation_and_reference_members_phrase_accordingly() -> None:
 # --- is_standard_part predicate -------------------------------------------
 
 def test_is_standard_part_accepts_documented_names_rejects_arbitrary() -> None:
-    for part in ("raw_position", "latitude_wgs84", "longitude_wgs84",
+    for part in ("raw_position", "latitude", "longitude",
                  "horizontal_accuracy_m", "beam_azimuth_deg", "zone",
                  "lower", "upper", "duration", "lower_date", "upper_time"):
         assert is_standard_part(part)
@@ -190,8 +190,9 @@ def test_column_cast_int_fires_for_assignable_integer_fields() -> None:
 
 
 def test_column_cast_float_and_free_text_unchanged() -> None:
-    # Float metrics still cast to float; a free-text field carries no implicit cast.
-    assert column_cast("latitude_wgs84") is float
+    # Float metrics still cast to float; a free-text field carries no implicit cast. The
+    # datum-agnostic angle assignable is ``latitude`` (not the L2 column ``latitude_wgs84``).
+    assert column_cast("latitude") is float
     assert column_cast("horizontal_accuracy_m") is float
     assert column_cast("source_label") is None
     # The downstream write-column names are NOT the assignable keys, so they do not match

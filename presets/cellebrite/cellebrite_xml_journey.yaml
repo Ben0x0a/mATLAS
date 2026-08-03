@@ -48,8 +48,9 @@ common:
 # so each trip yields two output rows sharing the Journey's source_record_uid.
 assertions:
   - position:
-      latitude_wgs84:  field(FromPoint.Position.Latitude)
-      longitude_wgs84: field(FromPoint.Position.Longitude)
+      latitude:  field(FromPoint.Position.Latitude)
+      longitude: field(FromPoint.Position.Longitude)
+      spatial_referential: const(epsg:4326)   # the datum for the coordinates above
     time:
       instant: field(StartTime)
       format:  iso8601
@@ -58,8 +59,9 @@ assertions:
       entity_time:      observed_at
       spatial_temporal: instant
   - position:
-      latitude_wgs84:  field(ToPoint.Position.Latitude)
-      longitude_wgs84: field(ToPoint.Position.Longitude)
+      latitude:  field(ToPoint.Position.Latitude)
+      longitude: field(ToPoint.Position.Longitude)
+      spatial_referential: const(epsg:4326)   # the datum for the coordinates above
     time:
       instant: field(EndTime)
       format:  iso8601

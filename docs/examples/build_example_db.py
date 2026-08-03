@@ -610,8 +610,8 @@ def build() -> sqlite3.Connection:
                 "ZHORIZONTALACCURACY": acc, "ZSPEED": sp, "ZCOURSE": hd, "ZTIMESTAMP": cf})
             ent = b.entity(rr, 0, None, None, "none", "device")
             sx = b.spatial(rr, 0, "epsg:4326", "GNSS",
-                [("latitude_wgs84", None, "ZLATITUDE", lat),
-                 ("longitude_wgs84", None, "ZLONGITUDE", lon),
+                [("latitude", None, "ZLATITUDE", lat),
+                 ("longitude", None, "ZLONGITUDE", lon),
                  ("horizontal_accuracy_m", None, "ZHORIZONTALACCURACY", acc),
                  ("horizontal_speed_kmh", None, "ZSPEED", sp),
                  ("heading_deg", None, "ZCOURSE", hd)],
@@ -633,8 +633,8 @@ def build() -> sqlite3.Connection:
                            "ZENTRYDATE": "763689600", "ZEXITDATE": "763702200"})
     ent = b.entity(rr, 0, None, None, "none", "device")
     sx = b.spatial(rr, 0, "epsg:4326", "GNSS",
-        [("latitude_wgs84", None, "ZLAT", "46.193000"),
-         ("longitude_wgs84", None, "ZLON", "6.129000")],
+        [("latitude", None, "ZLAT", "46.193000"),
+         ("longitude", None, "ZLON", "6.129000")],
         "passthrough_wgs84/1.0+unit_convert/1.0", HOME[0], HOME[1],
         horizontal_accuracy_m=40.0)
     # Each bound carries its OWN role: lower=check_in, upper=check_out. An epoch is
@@ -808,8 +808,8 @@ def build() -> sqlite3.Connection:
     act = b.activity(rr, "message", {"recipient": "+41762223344"})
     ent = b.entity(rr, 0, "+41791234567", "+41791234567", "msisdn", "device")
     sx = b.spatial(rr, 0, "epsg:4326", "GNSS",
-        [("latitude_wgs84", None, "lat", "46.203000"),
-         ("longitude_wgs84", None, "lon", "6.140000")],
+        [("latitude", None, "lat", "46.203000"),
+         ("longitude", None, "lon", "6.140000")],
         "passthrough_wgs84/1.0", SCENE[0], SCENE[1])
     tx = b.temporal(rr, 0, "instant", "unix_epoch_s", "NTP",
         [("lower", "start", None, "ts", "1773450680")],   # epoch: no stated zone

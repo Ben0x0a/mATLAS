@@ -47,8 +47,9 @@ common:
 
 assertions:
   - position:
-      latitude_wgs84:                 field(ZLATITUDE)
-      longitude_wgs84:                field(ZLONGITUDE)
+      latitude:                       field(ZLATITUDE)
+      longitude:                      field(ZLONGITUDE)
+      spatial_referential:            const(epsg:4326)   # the datum for the coordinates
       altitude_m:                     field(ZALTITUDE)
       horizontal_accuracy_m:          field(ZHORIZONTALACCURACY)
       vertical_accuracy_m:            field(ZVERTICALACCURACY)

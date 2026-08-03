@@ -35,7 +35,7 @@ common:
   source_label: const(ZRTCLLOCATIONMO)
 assertions:
   - position:
-      latitude_wgs84: field(ZLATITUDE)
+      latitude: field(ZLATITUDE)
       horizontal_speed_kmh: { from: field(ZSPEED), unit: m/s }
     time:
       instant: field(ZTIMESTAMP)
@@ -63,7 +63,7 @@ def test_valid_preset_parses() -> None:
     assert preset.source_record_uid is not None and preset.source_record_uid.ref.arg == "Z_PK"
     template = preset.assertions[0]
     fields = {f.model_field: f for f in template.fields}
-    assert fields["latitude_wgs84"].ref.arg == "ZLATITUDE"
+    assert fields["latitude"].ref.arg == "ZLATITUDE"
     assert fields["horizontal_speed_kmh"].unit == "m/s"
     assert fields["entity_position_link"].ref.arg == "at"
     time = template.temporal[0]
@@ -81,7 +81,7 @@ def test_invalid_edge_value_rejected() -> None:
 
 
 def test_engine_owned_field_not_assignable() -> None:
-    bad = _VALID.replace("latitude_wgs84: field(ZLATITUDE)", "time_lower_unix_utc_us: field(ZLATITUDE)")
+    bad = _VALID.replace("latitude: field(ZLATITUDE)", "time_lower_unix_utc_us: field(ZLATITUDE)")
     with pytest.raises(ValueError):
         _parse(bad)
 
@@ -92,7 +92,7 @@ _MIN = """
 preset: {id: t, name: N, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: f.csv}
 assertions:
-  - position: {latitude_wgs84: field(Lat)}
+  - position: {latitude: field(Lat)}
     time: {instant: field(TS), format: "%Y"}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
@@ -190,11 +190,11 @@ _INVALID: dict[str, str] = {
                                       "spatial_temporal: instant, bogus: x}"),
     "invalid entity_position enum": _MIN.replace("entity_position: at",
                                                  "entity_position: teleported"),
-    "engine-owned field assigned": _MIN.replace("latitude_wgs84: field(Lat)",
+    "engine-owned field assigned": _MIN.replace("latitude: field(Lat)",
                                                 "latitude_source_field: field(Lat)"),
-    "unknown model field": _MIN.replace("latitude_wgs84: field(Lat)",
+    "unknown model field": _MIN.replace("latitude: field(Lat)",
                                         "not_a_field: field(Lat)"),
-    "bare reference": _MIN.replace("latitude_wgs84: field(Lat)", "latitude_wgs84: Lat"),
+    "bare reference": _MIN.replace("latitude: field(Lat)", "latitude: Lat"),
     "invalid regex pattern": _MIN.replace(
         "input_selector: {format: csv, name: f.csv}",
         "input_selector: {format: csv, name: f.csv}\npatterns: {bad: \"(unclosed\"}"),
@@ -204,18 +204,18 @@ _INVALID: dict[str, str] = {
     # extract validation (_parse_extract): must be 'pattern.group', name a known pattern, and
     # reference a named group that pattern actually defines.
     "extract not pattern.group": _MIN.replace(
-        "latitude_wgs84: field(Lat)",
-        "latitude_wgs84: {from: field(Lat), extract: nogroup}"),
+        "latitude: field(Lat)",
+        "latitude: {from: field(Lat), extract: nogroup}"),
     "extract unknown pattern": _MIN.replace(
-        "latitude_wgs84: field(Lat)",
-        "latitude_wgs84: {from: field(Lat), extract: absent.g}"),
+        "latitude: field(Lat)",
+        "latitude: {from: field(Lat), extract: absent.g}"),
     "extract references missing group": _MIN.replace(
         "assertions:", "patterns:\n  p: \"(?P<lat>[0-9]+)\"\nassertions:").replace(
-        "latitude_wgs84: field(Lat)",
-        "latitude_wgs84: {from: field(Lat), extract: p.nope}"),
+        "latitude: field(Lat)",
+        "latitude: {from: field(Lat), extract: p.nope}"),
     # field-mapping dict validation (_parse_field): the dict form must carry a 'from' reference.
     "field mapping without from": _MIN.replace(
-        "latitude_wgs84: field(Lat)", "latitude_wgs84: {type: float}"),
+        "latitude: field(Lat)", "latitude: {type: float}"),
 }
 
 
@@ -250,8 +250,8 @@ def test_extended_l1_vocabulary_is_assignable() -> None:
         "  context.imei: field(IMEI)\n"
         "assertions:",
     ).replace(
-        "position: {latitude_wgs84: field(Lat)}",
-        "position: {latitude_wgs84: field(Lat), spatial_referential: const(epsg:4326)}",
+        "position: {latitude: field(Lat)}",
+        "position: {latitude: field(Lat), spatial_referential: const(epsg:4326)}",
     )
     preset = _parse(text)
     common = {f.model_field: f for f in preset.common}
@@ -287,6 +287,6 @@ def test_time_bound_extract_parses() -> None:
 def test_unknown_field_still_rejected() -> None:
     """The gate stays closed for genuinely-unknown targets and stray ``context`` (no dot)."""
     with pytest.raises(ValueError):
-        _parse(_MIN.replace("latitude_wgs84: field(Lat)", "not_a_field: field(Lat)"))
+        _parse(_MIN.replace("latitude: field(Lat)", "not_a_field: field(Lat)"))
     with pytest.raises(ValueError):
-        _parse(_MIN.replace("latitude_wgs84: field(Lat)", "context: field(Lat)"))
+        _parse(_MIN.replace("latitude: field(Lat)", "context: field(Lat)"))

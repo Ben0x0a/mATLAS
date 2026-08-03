@@ -193,8 +193,8 @@ common:
   spatial_temporal_link: if field(Created) == "NA" then const(instant)
 assertions:
   - position:
-      latitude_wgs84: field(Lat)
-      longitude_wgs84: field(Lon)
+      latitude: field(Lat)
+      longitude: field(Lon)
       position_type: if field(Kind) == "cell" then const(tower) else const(gps)
     time:
       instant: field(Created)

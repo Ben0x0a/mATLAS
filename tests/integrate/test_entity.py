@@ -194,8 +194,8 @@ def _write_mention(
         store.write_spatial_expression(V.SpatialExpression(
             spatial_expression_id=spatial_expression_id,
             referential="epsg:4326", spatial_source="gnss"))
-        spatial_parts = (("latitude_wgs84", "lat", "46.2030"),
-                         ("longitude_wgs84", "lon", "6.1430"))
+        spatial_parts = (("latitude", "lat", "46.2030"),
+                         ("longitude", "lon", "6.1430"))
         for ordinal, (part, source_field, raw_value) in enumerate(spatial_parts):
             store.write_spatial_component(V.SpatialComponent(
                 spatial_component_id=ids.spatial_component_id(spatial_expression_id, ordinal),
@@ -380,8 +380,8 @@ def test_normalised_entity_digests_recomputed_refused_unchanged(store: RunStore)
         entity=ids.EntityProjection("+41791234567", "msisdn", "person"),
         spatial=ids.SpatialProjection(
             "epsg:4326", "gnss",
-            (ids.SpatialComponentProjection("latitude_wgs84", "vicinity", "46.2030"),
-             ids.SpatialComponentProjection("longitude_wgs84", "vicinity", "6.1430"))),
+            (ids.SpatialComponentProjection("latitude", "vicinity", "46.2030"),
+             ids.SpatialComponentProjection("longitude", "vicinity", "6.1430"))),
         temporal=ids.TemporalProjection(
             "instant", "unix_epoch_s",
             (ids.TemporalComponentProjection("lower", "start", "+01:00", "1700000000"),)),

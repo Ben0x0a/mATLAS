@@ -259,10 +259,10 @@ def _check_assertions(spec: PresetSpec, label: str) -> list[LintFinding]:
         where = f"assertions[{index}]"
         fields = {f.model_field for f in tmpl.fields}
         # Half a coordinate is almost always a mistake.
-        if ("latitude_wgs84" in fields) != ("longitude_wgs84" in fields):
+        if ("latitude" in fields) != ("longitude" in fields):
             out.append(LintFinding(
                 WARNING, "half-coordinate",
-                "only one of latitude_wgs84/longitude_wgs84 is mapped — a point needs both; map "
+                "only one of latitude/longitude is mapped — a point needs both; map "
                 "the missing one or drop the partial coordinate", label, f"{where}.position"))
         # An assertion's three links are its semantics; a missing one is incomplete.
         _link_example = {

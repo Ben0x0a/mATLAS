@@ -37,6 +37,7 @@ from model_atlas.core.store import RunStore
 from model_atlas.ingest.assemble import assemble_source
 from model_atlas.ingest.readers.base import RawRecord
 from model_atlas.ingest.writer import ingest_input
+from model_atlas.integrate.spatial import integrate_spatial
 from model_atlas.presets.expr import is_condition, parse_cond, parse_ref
 from model_atlas.presets.spec import (
     AssertionTemplate,
@@ -277,8 +278,9 @@ def _example_cache():
         _f("temporal_role_lower", "const(last_seen)"),
     ], assertions=[AssertionTemplate(
         fields=tuple([
-            _f("latitude_wgs84", "field(ZLATITUDE)"),
-            _f("longitude_wgs84", "field(ZLONGITUDE)"),
+            _f("latitude", "field(ZLATITUDE)"),
+            _f("longitude", "field(ZLONGITUDE)"),
+            _f("spatial_referential", "const(epsg:4326)"),
             _f("horizontal_accuracy_m", "field(ZHORIZONTALACCURACY)"),
             # unit declared for L2's benefit; L1 must keep the VERBATIM m/s text.
             _f("horizontal_speed_kmh", "field(ZSPEED)", unit="m/s"),
@@ -299,8 +301,9 @@ def _example_visit():
         _f("temporal_role_lower", "const(check_in)"),
         _f("temporal_role_upper", "const(check_out)"),
     ], assertions=[AssertionTemplate(
-        fields=tuple([_f("latitude_wgs84", "field(ZLAT)"),
-                      _f("longitude_wgs84", "field(ZLON)"),
+        fields=tuple([_f("latitude", "field(ZLAT)"),
+                      _f("longitude", "field(ZLON)"),
+                      _f("spatial_referential", "const(epsg:4326)"),
                       *_links("at", "observed_at", "continuous_during_interval")]),
         temporal=(_time("interval", "field(ZENTRYDATE)", "field(ZEXITDATE)",
                         epoch="cocoa"),),
@@ -368,8 +371,9 @@ def _example_pin():
         # decision 33: the app's own deleted flag via an if/then conditional (R11).
         _f("deleted", 'if field(is_deleted) == "1" then const(deleted) else const(live)'),
     ], assertions=[AssertionTemplate(
-        fields=tuple([_f("latitude_wgs84", "field(lat)"),
-                      _f("longitude_wgs84", "field(lon)"),
+        fields=tuple([_f("latitude", "field(lat)"),
+                      _f("longitude", "field(lon)"),
+                      _f("spatial_referential", "const(epsg:4326)"),
                       *_links("references", "event_at", "instant")]),
         temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
     )])
@@ -498,15 +502,15 @@ def test_cache_components_verbatim_and_derived_referentials() -> None:
     with _assembled(spec, records) as (store, _, _):
         comps = _rows(store, "SELECT * FROM spatial_component ORDER BY ordinal")
         assert [(c["part"], c["source_field"], c["raw_value"]) for c in comps] == [
-            ("latitude_wgs84", "ZLATITUDE", "46.202400"),
-            ("longitude_wgs84", "ZLONGITUDE", "6.140300"),
+            ("latitude", "ZLATITUDE", "46.202400"),          # datum-agnostic L1 part
+            ("longitude", "ZLONGITUDE", "6.140300"),
             ("horizontal_accuracy_m", "ZHORIZONTALACCURACY", "18"),
             ("horizontal_speed_kmh", "ZSPEED", "1.1"),       # m/s VERBATIM — no unit at L1
             ("heading_deg", "ZCOURSE", "15"),
         ]
         assert all(c["spatial_role"] is None for c in comps)
         sx = _one(store, "SELECT * FROM spatial_expression")
-        assert sx["referential"] == "epsg:4326"              # derived from lat/lon parts
+        assert sx["referential"] == "epsg:4326"              # from the explicit spatial_referential mapping
         tx = _one(store, "SELECT * FROM temporal_expression")
         assert tx["referential"] == "apple_cfabsolute"       # derived from epoch: cocoa
         bound = _one(store, "SELECT * FROM temporal_component")
@@ -777,7 +781,8 @@ def test_common_mapped_coordinate_produces_a_spatial_corner() -> None:
     # by the assertion, not vanish into `shared` — otherwise the position and its digest are lost.
     spec = _preset("common_coords", common=[
         _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
-        _f("latitude_wgs84", "field(lat)"), _f("longitude_wgs84", "field(lon)"),
+        _f("latitude", "field(lat)"), _f("longitude", "field(lon)"),
+        _f("spatial_referential", "const(epsg:4326)"),
     ], assertions=[AssertionTemplate(
         fields=tuple(_links("at", "observed_at", "instant")),
         temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
@@ -786,9 +791,9 @@ def test_common_mapped_coordinate_produces_a_spatial_corner() -> None:
     with _assembled(spec, records) as (store, _, _):
         comps = _rows(store, "SELECT * FROM spatial_component ORDER BY ordinal")
         assert [(c["part"], c["source_field"], c["raw_value"]) for c in comps] == [
-            ("latitude_wgs84", "lat", "46.2"), ("longitude_wgs84", "lon", "6.1")]
+            ("latitude", "lat", "46.2"), ("longitude", "lon", "6.1")]
         sx = _one(store, "SELECT * FROM spatial_expression")
-        assert sx["referential"] == "epsg:4326"          # derived from the shared lat/lon parts
+        assert sx["referential"] == "epsg:4326"          # from the explicit common spatial_referential
         assertion = _one(store, "SELECT * FROM assertion")
         assert assertion["spatial_expression_id"] is not None
         assert assertion["claim_digest"] is not None     # a real placed assertion, not placeless
@@ -875,3 +880,53 @@ def test_malformed_interval_gates_accuracy_per_side() -> None:
         digest_without = _one(store, "SELECT claim_digest FROM assertion")["claim_digest"]
     # The malformed lower accuracy contributed nothing to identity, as it must not.
     assert digest_with == digest_without
+
+
+# --- datum → referential: the L1 angle parts are datum-agnostic ---------------
+
+def _agnostic_coords_preset(key: str, *, with_referential: bool) -> PresetSpec:
+    """A preset mapping the datum-agnostic ``latitude``/``longitude`` parts, optionally with
+    an explicit ``spatial_referential: const(epsg:4326)`` — the datum carrier."""
+    position = [_f("latitude", "field(lat)"), _f("longitude", "field(lon)")]
+    if with_referential:
+        position.append(_f("spatial_referential", "const(epsg:4326)"))
+    return _preset(key, common=[
+        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+    ], assertions=[AssertionTemplate(
+        fields=tuple([*position, *_links("at", "observed_at", "instant")]),
+        temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
+    )])
+
+
+def test_agnostic_coordinates_with_referential_integrate_to_wgs84_columns() -> None:
+    # The datum→referential change, end to end: a preset mapping the datum-agnostic
+    # ``latitude``/``longitude`` parts WITH an explicit ``spatial_referential:
+    # const(epsg:4326)`` integrates to the canonical L2 ``latitude_wgs84``/``longitude_wgs84``
+    # columns, exactly as the old part-name-baked model did — and assemble emits NO warning.
+    spec = _agnostic_coords_preset("agnostic_coords", with_referential=True)
+    records = _records({"lat": "46.2030", "lon": "6.1430", "ts": "1773450680"})
+    with _assembled(spec, records) as (store, report, _):
+        assert report.warnings == []
+        assert _one(store, "SELECT * FROM spatial_expression")["referential"] == "epsg:4326"
+        # the L1 component parts are datum-agnostic — the datum lives on the expression.
+        parts = [c["part"] for c in
+                 _rows(store, "SELECT * FROM spatial_component ORDER BY ordinal")]
+        assert parts == ["latitude", "longitude"]
+        # integrate: the agnostic parts are ADOPTED onto the canonical WGS84 L2 columns.
+        integrate_spatial(store)
+        si = _one(store, "SELECT latitude_wgs84, longitude_wgs84 FROM spatial_integration")
+        assert (si["latitude_wgs84"], si["longitude_wgs84"]) == (46.2030, 6.1430)
+
+
+def test_agnostic_coordinates_without_referential_are_unknown_and_warn() -> None:
+    # The SAME mapping WITHOUT a ``spatial_referential`` resolves to ``unknown`` (no part-name
+    # datum crutch): the coordinates cannot be integrated (no spatial_integration row, empty L2
+    # coords) and assemble SURFACES a warning naming the missing referential — the mistake is
+    # loud, never silently coordinate-less.
+    spec = _agnostic_coords_preset("agnostic_no_ref", with_referential=False)
+    records = _records({"lat": "46.2030", "lon": "6.1430", "ts": "1773450680"})
+    with _assembled(spec, records) as (store, report, _):
+        assert _one(store, "SELECT * FROM spatial_expression")["referential"] == "unknown"
+        assert any("spatial_referential" in warning for warning in report.warnings)
+        assert integrate_spatial(store).integration_count == 0
+        assert _rows(store, "SELECT * FROM spatial_integration") == []

@@ -46,8 +46,9 @@ common:
 # Start/End are the planned (intended) trip times; Record is the DB write time.
 assertions:
   - position:
-      latitude_wgs84:  'field("Origin Latitude")'
-      longitude_wgs84: 'field("Origin Longitude")'
+      latitude:        'field("Origin Latitude")'
+      longitude:       'field("Origin Longitude")'
+      spatial_referential: const(epsg:4326)   # the datum for the coordinates above
       raw_position:    'field("Origin Address")'
       position_type:   const(origin)
     time:
@@ -60,8 +61,9 @@ assertions:
       spatial_temporal: instant
 
   - position:
-      latitude_wgs84:  'field("Destination Latitude")'
-      longitude_wgs84: 'field("Destination Longitude")'
+      latitude:        'field("Destination Latitude")'
+      longitude:       'field("Destination Longitude")'
+      spatial_referential: const(epsg:4326)   # the datum for the coordinates above
       raw_position:    'field("Destination Address")'
       position_type:   const(destination)
     time:

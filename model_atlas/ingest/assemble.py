@@ -55,7 +55,7 @@ The old→new field mapping (cross-check table of run_db_schema.md)
   the report so the L0 owner can set it on the ``source`` row. ``data_source`` is the
   preferred new spelling; ``raw_source_path`` is accepted as its legacy alias.
 - the three ``links``   → the assertion link columns, joined by the new ``entity_role``.
-- spatial part fields (``raw_position``, ``latitude_wgs84``, … ) → one
+- spatial part fields (``raw_position``, ``latitude``, ``longitude``, … ) → one
   ``spatial_component`` row each, VERBATIM ``raw_value`` + the resolved ``source_field``.
 - the time bounds       → ``temporal_component`` rows (parts ``lower``/``upper``, or a
   preset-renamed part such as ``duration``), VERBATIM, with the resolved ``zone`` text
@@ -280,15 +280,31 @@ def _temporal_referential(time_spec: TimeSpec) -> str:
     return V.TemporalReferential.UNIX_EPOCH_US.value
 
 
-def _spatial_referential(holder: dict[str, Any], parts: list[str]) -> str:
+_ANGLE_PART_NAMES = ("latitude", "longitude")
+
+
+def _spatial_referential(
+    holder: dict[str, Any], parts: list[str], warnings: list[str]) -> str:
     """The spatial referential: the explicit ``spatial_referential`` mapping when set,
-    else ``epsg:4326`` when the components carry a WGS84 latitude/longitude, else
-    ``unknown`` — never invented beyond what the mapping states."""
+    else ``unknown`` — never derived from a part name.
+
+    WHY no part-name crutch: the datum is an L2 interpretation, not an L1 fact. The
+    ``latitude`` / ``longitude`` parts are datum-agnostic (the source's words), so the
+    referential must come from the preset stating it explicitly (``spatial_referential:
+    const(epsg:4326)``); inferring ``epsg:4326`` from the presence of an angle part would
+    let the L1 part name double-state — and silently decide — the CRS. When a preset maps
+    coordinates but names no referential the expression resolves to ``unknown`` and cannot
+    be integrated, so that mistake is SURFACED as a warning rather than left silently
+    coordinate-less."""
     explicit = _norm(holder.get(SPATIAL_REFERENTIAL_NAME))
     if explicit is not None:
         return str(explicit)
-    if any(part in ("latitude_wgs84", "longitude_wgs84") for part in parts):
-        return V.SpatialReferential.EPSG_4326.value
+    if any(part in _ANGLE_PART_NAMES for part in parts):
+        warnings.append(
+            f"spatial components carry {[p for p in parts if p in _ANGLE_PART_NAMES]} but "
+            f"the preset states no spatial_referential; the coordinates resolve to "
+            f"'{V.SpatialReferential.UNKNOWN.value}' and cannot be integrated — map "
+            f"spatial_referential (e.g. const(epsg:4326)) so they are adopted at L2")
     return V.SpatialReferential.UNKNOWN.value
 
 
@@ -626,7 +642,8 @@ def _emit_assertion(
     if components:
         spatial_role = _text(flat.get(_SPATIAL_ROLE_NAME))
         spatial_source = _text(flat.get(_SPATIAL_SOURCE_NAME))
-        referential = _spatial_referential(flat, [part for part, _, _ in components])
+        referential = _spatial_referential(
+            flat, [part for part, _, _ in components], report.warnings)
         spatial_expression_id = ids.spatial_expression_id(natural_key)
         store.write_spatial_expression(V.SpatialExpression(
             spatial_expression_id=spatial_expression_id,

@@ -64,7 +64,7 @@ def _build_persisted_db(target: Path) -> dict[str, str]:
             spatial_source="GNSS"))
         store.write_spatial_component(V.SpatialComponent(
             spatial_component_id=ids.spatial_component_id(sx_id, 0),
-            spatial_expression_id=sx_id, ordinal=0, part="latitude_wgs84",
+            spatial_expression_id=sx_id, ordinal=0, part="latitude",
             source_field="lat", raw_value="46.193000"))
 
         si_method = "passthrough_wgs84/1.0"
@@ -91,7 +91,7 @@ def _build_persisted_db(target: Path) -> dict[str, str]:
             spatial=ids.SpatialProjection(
                 referential=V.SpatialReferential.EPSG_4326, spatial_source="GNSS",
                 components=(ids.SpatialComponentProjection(
-                    part="latitude_wgs84", raw_value="46.193000"),)),
+                    part="latitude", raw_value="46.193000"),)),
             temporal=None, links=ids.AssertionLinks(entity_role=V.EntityRole.SUBJECT),
             deleted=None, multiplicity=None, activity=None)
         content_hash, claim_digest = ids.digests(
