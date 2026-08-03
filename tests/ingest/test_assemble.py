@@ -930,3 +930,21 @@ def test_agnostic_coordinates_without_referential_are_unknown_and_warn() -> None
         assert any("spatial_referential" in warning for warning in report.warnings)
         assert integrate_spatial(store).integration_count == 0
         assert _rows(store, "SELECT * FROM spatial_integration") == []
+
+
+def test_time_without_epoch_or_format_assumes_unix_us_and_warns() -> None:
+    # A time mapped with NEITHER epoch: nor format: is assumed to already be Unix microseconds
+    # (temporal_referential = unix_epoch_us). That assumption is SURFACED as a warning so a
+    # source that is really seconds / an Apple epoch is not silently mis-scaled. (A time WITH an
+    # epoch/format declared emits no such warning — every other timed test above asserts that.)
+    spec = _preset("bare_time", common=[
+        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+    ], assertions=[AssertionTemplate(
+        fields=tuple([_f("raw_position", "field(loc)"),
+                      *_links("at", "observed_at", "instant")]),
+        temporal=(_time("instant", "field(ts)"),),   # no epoch, no format
+    )])
+    records = _records({"ts": "1773450680000000", "loc": "Lobby"})
+    with _assembled(spec, records) as (store, report, _):
+        assert _one(store, "SELECT * FROM temporal_expression")["referential"] == "unix_epoch_us"
+        assert any("epoch" in warning for warning in report.warnings)

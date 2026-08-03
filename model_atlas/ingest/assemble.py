@@ -64,9 +64,8 @@ The old→new field mapping (cross-check table of run_db_schema.md)
 
 Extended vocabulary — new L1 columns the old flat model never had. These are ordinary
 ``FieldSpec`` targets resolved through the same machinery (so conditionals
-and templates apply to them for free); the v3 YAML loader does not admit
-them yet (its ``ASSIGNABLE_FIELDS`` gate lives in the fenced ``presets/spec.py``), so
-until the preset schema is extended they are constructed programmatically:
+and templates apply to them for free); the v3 YAML loader ADMITS them all (its
+``ASSIGNABLE_FIELDS`` gate in ``presets/spec.py`` lists each), so a real YAML preset can map:
 ``entity_role``, ``identifier_type``, ``activity_kind`` (its presence in ``common:``
 creates the record's activity), ``context.<key>`` (gathered into
 ``activity.context_json``), ``multiplicity``, ``spatial_referential`` /
@@ -262,21 +261,29 @@ def _apply_extract(
     return match.group(group) if match else None
 
 
-def _temporal_referential(time_spec: TimeSpec) -> str:
+def _temporal_referential(time_spec: TimeSpec, warnings: list[str]) -> str:
     """Derive the temporal referential from the time spec's decode declaration.
 
     HOW: an ``epoch`` maps through ``_EPOCH_REFERENTIAL``; a ``format`` is ``iso8601``
-    or a local wall-clock string; neither means the old contract "the field is already
-    Unix microseconds". WHY derived here: the old preset language never named the
-    referential — the decode declaration IS that information, so deriving it keeps
-    existing presets expressive without a new mandatory field (an explicit
-    ``temporal_referential`` mapping overrides this)."""
+    or a local wall-clock string. WHY derived from the decode: the decode declaration
+    (``epoch:`` / ``format:``) IS the referential information, so deriving it from an
+    EXPLICIT instruction keeps presets expressive without a second mandatory field (an
+    explicit ``temporal_referential`` mapping still overrides this).
+    WHY the no-declaration case WARNS: with neither ``epoch:`` nor ``format:`` the value is
+    ASSUMED to already be Unix microseconds — a source that is really seconds / milliseconds /
+    an Apple epoch would be silently mis-scaled, so the assumption is SURFACED rather than made
+    quietly (mirroring the spatial no-referential warning)."""
     if time_spec.epoch is not None:
         return _EPOCH_REFERENTIAL.get(time_spec.epoch, V.TemporalReferential.UNKNOWN.value)
     if time_spec.format is not None:
         if time_spec.format == ISO8601_FORMAT:
             return V.TemporalReferential.ISO8601.value
         return V.TemporalReferential.LOCAL_STRING.value
+    warnings.append(
+        "time maps a value with no epoch: or format:; it is assumed to already be Unix "
+        "microseconds (temporal_referential = unix_epoch_us) — declare epoch: "
+        "(unix_s|unix_ms|unix_us|unix_ns|cocoa|webkit) or format: to state the source's "
+        "encoding, or temporal_referential explicitly if it really is unix_epoch_us")
     return V.TemporalReferential.UNIX_EPOCH_US.value
 
 
@@ -699,7 +706,7 @@ def _emit_assertion(
     temporal_projection: ids.TemporalProjection | None = None
     if bounds:
         kind = time_spec.kind    # "instant" | "interval" — the TemporalKind tokens
-        referential = _text(flat.get(TEMPORAL_REFERENTIAL_NAME)) or _temporal_referential(time_spec)
+        referential = _text(flat.get(TEMPORAL_REFERENTIAL_NAME)) or _temporal_referential(time_spec, report.warnings)
         temporal_source = _text(flat.get(_TEMPORAL_SOURCE_NAME))
         temporal_expression_id = ids.temporal_expression_id(natural_key)
         store.write_temporal_expression(V.TemporalExpression(

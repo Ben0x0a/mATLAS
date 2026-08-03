@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QCoreApplication, QFile, QObject, QStringListModel, QTimer, QUrl, Qt, Slot
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QIcon
+from PySide6.QtGui import QAction, QDesktopServices, QFontMetrics, QGuiApplication, QIcon
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -79,6 +79,13 @@ APP_TITLE_UFDR = "UFDR Parser"
 # The window title's stem; the active case name is appended after a run so the window
 # always shows which case is open. Consumed by _update_window_title (gui.app).
 WINDOW_TITLE_BASE = "Model ATLAS Transformer"
+
+# How much content the two elastic areas must always show, expressed in rows/lines rather
+# than pixels so the promise survives a larger system text size. Applied by
+# MainController._scale_minimums_to_font. The half row is deliberate: a part-row at the
+# bottom edge is what tells the reader the list scrolls.
+_PRESET_ROWS_VISIBLE = 3.5
+_LOG_LINES_VISIBLE = 4
 
 # A case name becomes a filename (``<name>.matlas.sqlite``), so these would either redirect
 # the database out of the chosen folder or produce a name the filesystem rejects. Checked in
@@ -289,6 +296,7 @@ class MainController(QObject):
         self._configure_ufdr_toggle()
         self.single_preset_notice_label.setVisible(False)
         accessibility.configure_status_label(self)
+        self._scale_minimums_to_font()
         self._stabilize_form_labels()
         self._stabilize_preset_mode_row()
         self._sync_case_bar()
@@ -472,6 +480,32 @@ class MainController(QObject):
         if (lists_row := self.window.findChild(QHBoxLayout, "presetListsRow")) is not None:
             for index, stretch in enumerate((1, 0, 1)):
                 lists_row.setStretch(index, stretch)
+
+    def _scale_minimums_to_font(self) -> None:
+        """Re-express the hand-tuned minimum sizes in terms of the current font.
+
+        Those constants live in main_window.ui as pixels, which quietly means something
+        different for every reader: the preset lists were sized to show about three and a
+        half rows, but a user running a larger system text size for readability got three,
+        then two — the accessibility setting bought bigger glyphs and took away content.
+        Deriving each minimum from the font metrics keeps the intent ("three and a half
+        rows", "four log lines", "the placeholder fits") true at any text size.
+
+        Qt's high-DPI scaling is a separate axis and is already handled: it scales the whole
+        UI including these values. This covers the other axis — text size at a fixed DPI."""
+        metrics = QFontMetrics(self.window.font())
+        line_height = metrics.height()
+        # One list row is the text plus the QSS item padding (3px top and bottom) and its
+        # 1px transparent border; the list itself adds 3px of padding and a 1px frame.
+        row_height = line_height + 8
+        list_minimum = int(row_height * _PRESET_ROWS_VISIBLE) + 8
+        for list_widget in (self.available_preset_list, self.selected_preset_list):
+            list_widget.setMinimumHeight(list_minimum)
+        self.log_edit.setMinimumHeight(line_height * _LOG_LINES_VISIBLE + 10)
+        # Wide enough that the search placeholder is never elided into meaninglessness.
+        self.preset_search_edit.setMinimumWidth(
+            metrics.horizontalAdvance(self.preset_search_edit.placeholderText()) + 30
+        )
 
     def _stabilize_form_labels(self) -> None:
         """Align the input grid's row captions on one column edge.

@@ -92,3 +92,28 @@ def test_header_frames_hide_in_ufdr_dump_mode(controller) -> None:
         assert all(_header_visibility(controller))
     finally:
         check.setChecked(False)
+
+
+def test_hiding_the_header_frames_does_not_move_the_page(controller, app) -> None:
+    """Toggling dump mode must not shift anything below the header.
+
+    The frames are the tallest item in the header row, so hiding them once collapsed the row
+    onto the shorter title and shunted the whole page up by several pixels — a visible jolt
+    on every toggle. RetainSizeWhenHidden (gui.header_assets) keeps their slot reserved."""
+    controller.window.show()
+    check = controller.dump_full_ufdr_check
+    try:
+        app.processEvents()
+        before_y = controller.tab_widget.y()
+        before_title = controller.app_title_label.height()
+        check.setChecked(True)
+        app.processEvents()
+        assert controller.tab_widget.y() == before_y
+        assert controller.app_title_label.height() == before_title
+        check.setChecked(False)
+        app.processEvents()
+        assert controller.tab_widget.y() == before_y
+    finally:
+        check.setChecked(False)
+        controller.window.hide()
+        app.processEvents()

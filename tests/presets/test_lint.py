@@ -60,6 +60,23 @@ def test_half_coordinate_warns() -> None:
     assert "half-coordinate" in _codes(lint_spec(_spec(text)), WARNING)
 
 
+def test_speed_without_unit_warns_but_declared_unit_is_clean() -> None:
+    # A speed part mapped with no unit: is read as ALREADY km/h; device sources report m/s, so
+    # a forgotten unit silently mis-scales it — the linter WARNS. Declaring the source unit
+    # clears it. (The m/deg metric parts are natively canonical, so they are NOT flagged.)
+    declared = "expected_fields: [Lat, Lon, TS, Loc, \"Item ID\", Source, Speed]"
+    base = _CLEAN.replace("expected_fields: [Lat, Lon, TS, Loc, \"Item ID\", Source]", declared)
+    missing = base.replace(
+        "latitude: field(Lat), longitude: field(Lon)",
+        "latitude: field(Lat), longitude: field(Lon), horizontal_speed_kmh: field(Speed)")
+    assert "speed-no-unit" in _codes(lint_spec(_spec(missing)), WARNING)
+    with_unit = base.replace(
+        "latitude: field(Lat), longitude: field(Lon)",
+        "latitude: field(Lat), longitude: field(Lon), "
+        "horizontal_speed_kmh: {from: field(Speed), unit: m/s}")
+    assert "speed-no-unit" not in _codes(lint_spec(_spec(with_unit)), WARNING)
+
+
 def test_missing_link_warns() -> None:
     text = _CLEAN.replace(", spatial_temporal: instant}", "}")
     assert "missing-link" in _codes(lint_spec(_spec(text)), WARNING)

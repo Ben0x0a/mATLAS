@@ -81,12 +81,22 @@ def _default_mono_font() -> str:
 
 
 def configure_application_font(app: object) -> None:
-    """Use a concrete UI font before loading .ui files."""
-    ui_font = _system_font_family(
+    """Resolve the UI font family to a concrete one, before any .ui file is loaded.
+
+    Only the FAMILY is replaced. The platform reports aliases like "Sans Serif" that Qt then
+    spends ~80ms resolving on every lookup, so pinning a real family is worth doing — but the
+    size must survive untouched, because it is where the user's OS text-size setting lives.
+
+    ``app.setFont(QFont(family))`` is the trap: that constructor carries Qt's built-in 12pt
+    default, so it silently overwrote whatever size the platform reported. Someone who had
+    turned their system text up to 20pt for readability got a 12pt app. Mutating the existing
+    font keeps the size, weight and style the platform chose and changes only the family."""
+    font = app.font()
+    font.setFamily(_system_font_family(
         QFontDatabase.SystemFont.GeneralFont,
         _default_ui_font(),
-    )
-    app.setFont(QFont(ui_font))
+    ))
+    app.setFont(font)
 
 
 def _base_point_size() -> float:
