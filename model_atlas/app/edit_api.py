@@ -4,7 +4,7 @@ Defines:    ``EditApi`` — opens an ALREADY-PERSISTED ``<name>.matlas.sqlite`` 
             lets a caller navigate rows and mutate them under the evidence-protection
             rules, and keeps the rewindable ``edit_log`` journal. The public surface is
             ``open`` / ``tables`` / ``rows`` / ``row`` / ``update`` / ``save_as_new_row`` /
-            ``add_empty_row`` / ``rewind`` / ``edit_log`` / ``close``. All protection is
+            ``rewind`` / ``edit_log`` / ``close``. All protection is
             enforced HERE (never in the UI): ``update`` refuses any L0/L1 evidence table and
             points the caller at ``save_as_new_row``; only the integration/analysis tables
             may be updated in place.
@@ -15,7 +15,7 @@ Depends on: ``model_atlas.core.store`` (``RunStore.open_persisted`` — which op
             truth for which tables are editable in place), ``model_atlas.core.schema``
             (``COPYABLE_TABLES`` — the editable/navigable table set), ``model_atlas.core.ids``
             (``canonical_json`` for the full-row snapshots and ``id_for`` for minting fresh
-            occurrence ids) and the standard library only (``sqlite3``, ``re``, ``json``,
+            occurrence ids) and the standard library only (``sqlite3``, ``json``,
             ``getpass``, ``datetime``).
 
 Editable-table set (single source of truth)
@@ -32,16 +32,16 @@ original untouched).
 Rewind mechanism
 ----------------
 ``update`` logs one entry per column carrying the JSON-encoded old->new scalar;
-``new_row`` / ``empty_row`` log the FULL row snapshot as canonical JSON in ``new_value``
+``new_row`` logs the FULL row snapshot as canonical JSON in ``new_value``
 (``old_value`` NULL — there was no prior row). ``ordinal`` is a monotonic UNIQUE journal
 position. ``rewind(to_ordinal)`` replays the inverse of every entry with a HIGHER ordinal,
 in DESCENDING ordinal order, and APPENDS each inverse as a fresh logged entry (the journal
 is never erased):
 
 * inverse of ``update``    -> ``SET column = old`` (old/new swapped in the appended entry);
-* inverse of ``new_row`` / ``empty_row`` -> DELETE the created row; the appended entry
+* inverse of ``new_row`` -> DELETE the created row; the appended entry
   carries the snapshot in ``old_value`` and a NULL ``new_value`` (the symmetric mirror of a
-  creation, whose ``new_value`` holds the snapshot). So a ``new_row``/``empty_row`` entry
+  creation, whose ``new_value`` holds the snapshot). So a ``new_row`` entry
   reads "row present with this snapshot" when ``new_value`` is set and "row absent" when it
   is NULL — the exact reverse of the forward operation.
 
@@ -56,8 +56,7 @@ derived deterministically from the audit event that created it: ``id_for(table,
 <origin>, ordinal)`` where ``ordinal`` is the monotonic UNIQUE journal position about to be
 assigned. Uniqueness is guaranteed by the ordinal's UNIQUE constraint; determinism keeps
 the derivation inside ``core.ids``' namespace/separator discipline. ``save_as_new_row``
-seeds the origin with the original row id (the occurrence it was cloned from);
-``add_empty_row`` uses a fixed ``"empty_row"`` tag.
+seeds the origin with the original row id (the occurrence it was cloned from).
 
 A verbatim clone would ALSO duplicate any other UNIQUE value the source row carries, so
 ``save_as_new_row`` re-mints those too (``_clone_row``): a non-FK discriminator (e.g. analysis'
@@ -71,7 +70,6 @@ from __future__ import annotations
 
 import getpass
 import json
-import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -274,43 +272,6 @@ class EditApi:
                          edit_kind=V.EditKind.NEW_ROW, ordinal=ordinal)
         return new_id
 
-    def add_empty_row(self, table: str) -> str:
-        """Insert a blank row (fresh id) and log an ``empty_row`` snapshot; return the new id.
-
-        Gated on ``EDITABLE_TABLES`` exactly like :meth:`update`: an ``add_empty_row`` on an
-        L0/L1 evidence table would insert a fabricated blank row — forging evidence — so it
-        RAISES ``PermissionError`` there. The protection lives here, not in the UI, so no caller
-        can bypass it.
-
-        HOW (on an editable table): a fresh pk id, every nullable column left NULL, and every
-        NOT NULL column filled with a valid placeholder (an enum column takes its first
-        constrained value, a NOT NULL UNIQUE non-FK column a per-ordinal UNIQUE placeholder so
-        two successive blanks never collide, otherwise an empty string / 0 / 0.0 by declared
-        type). WHY placeholders rather than pure NULLs: a table's NOT NULL / CHECK constraints
-        would reject an all-null row, so a genuinely insertable blank is the minimal
-        constraint-satisfying row. A NOT NULL foreign-key column cannot be fabricated (a blank
-        row has no real parent), so such a table RAISES ``ValueError``.
-        """
-        self._require_table(table)
-        # Evidence protection: L0/L1 tables are never given a fabricated blank row (it would forge
-        # evidence and defeat the immutability the module enforces); only integration/analysis.
-        if table not in EDITABLE_TABLES:
-            layer = store_mod.TABLE_LAYER.get(table, "?")
-            raise PermissionError(
-                f"{table!r} is {layer} evidence; a fabricated blank row would forge evidence. "
-                f"add_empty_row is limited to the integration/analysis tables "
-                f"({', '.join(sorted(EDITABLE_TABLES))})")
-        pk = self._pk(table)
-        ordinal = self._next_ordinal()
-        new_id = ids.id_for(table, "empty_row", ordinal)
-        snapshot = self._blank_row(table, pk, new_id, ordinal)
-        self._insert(table, snapshot)
-        self._append_log(table=table, row_id=new_id, column=None,
-                         old_value=None, new_value=ids.canonical_json(snapshot),
-                         edit_kind=V.EditKind.EMPTY_ROW, ordinal=ordinal)
-        self._conn.commit()
-        return new_id
-
     def rewind(self, to_ordinal: int) -> None:
         """Undo every edit after ``to_ordinal`` by appending its inverse (a full rewind).
 
@@ -348,7 +309,7 @@ class EditApi:
                              old_value=entry["new_value"], new_value=entry["old_value"],
                              edit_kind=V.EditKind.UPDATE)
         else:
-            # Inverse of a creation (new_row / empty_row): remove the created row. The
+            # Inverse of a creation (new_row): remove the created row. The
             # appended entry carries the snapshot in old_value with a NULL new_value — the
             # mirror of a creation, whose new_value holds the snapshot.
             self._conn.execute(
@@ -388,48 +349,6 @@ class EditApi:
         """The next monotonic journal position: ``MAX(ordinal) + 1`` (1 for an empty log)."""
         current = self._conn.execute("SELECT MAX(ordinal) FROM edit_log").fetchone()[0]
         return 1 if current is None else current + 1
-
-    def _blank_row(self, table: str, pk: str, new_id: str, ordinal: int) -> dict[str, Any]:
-        """Build the minimal constraint-satisfying blank row for ``add_empty_row``.
-
-        ``ordinal`` (the monotonic UNIQUE journal position this insert is logged at) seeds the
-        placeholder for any NOT NULL UNIQUE non-FK column, so two successive blank rows carry
-        distinct values there and the second does not fail the UNIQUE constraint.
-        """
-        fk_columns = self._fk_columns(table)
-        unique_columns = {col for cols in self._unique_column_sets(table) for col in cols}
-        row: dict[str, Any] = {pk: new_id}
-        for info in self._conn.execute(f"PRAGMA table_info({table})").fetchall():
-            name, decl_type, not_null, is_pk = (
-                info["name"], info["type"], info["notnull"], info["pk"])
-            if is_pk or not not_null:
-                continue   # pk is set; a nullable column stays absent (NULL)
-            if name in fk_columns:
-                raise ValueError(
-                    f"cannot add a blank {table!r} row: the NOT NULL foreign key {name!r} "
-                    f"has no parent to reference; add the parent row first")
-            row[name] = self._blank_value(
-                table, name, decl_type, ordinal, unique=name in unique_columns)
-        return row
-
-    def _blank_value(self, table: str, column: str, decl_type: str, ordinal: int,
-                     *, unique: bool) -> Any:
-        """A valid placeholder for a NOT NULL column with no real value yet.
-
-        ``unique`` columns fold the monotonic ``ordinal`` into the placeholder (a per-call
-        UNIQUE value) so repeated ``add_empty_row`` calls never collide on it; the rest take a
-        fixed zero/empty by declared type. An enum column takes its first legal token — a fresh
-        blank is not expected on a UNIQUE enum column, so it is not disambiguated.
-        """
-        allowed = self._check_values(table, column)
-        if allowed:
-            return allowed[0]   # a constrained (enum) column: its first legal token
-        upper = decl_type.upper()
-        if "INT" in upper:
-            return ordinal if unique else 0   # the ordinal is itself a fresh unique integer
-        if "REAL" in upper or "FLOA" in upper or "DOUB" in upper:
-            return float(ordinal) if unique else 0.0
-        return f"(blank {ordinal})" if unique else ""
 
     # --- UNIQUE-constraint introspection (for save_as_new_row re-minting) --
 
@@ -497,28 +416,6 @@ class EditApi:
             if info["pk"]:
                 return info["name"]
         raise AssertionError(f"table {table!r} has no primary key")  # schema invariant
-
-    def _fk_columns(self, table: str) -> set[str]:
-        return {info["from"]
-                for info in self._conn.execute(f"PRAGMA foreign_key_list({table})")}
-
-    def _check_values(self, table: str, column: str) -> list[str]:
-        """The ``CHECK (col IN ('a','b'...))`` value list for ``column``, parsed from the DDL.
-
-        WHY parse the live DDL rather than import the schema's enum map: it keeps this API
-        decoupled from ``core.schema``'s internals and honours whatever the OPENED database
-        actually constrains (a future schema generation cannot silently diverge here).
-        """
-        ddl = self._conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (table,)).fetchone()
-        if ddl is None or ddl["sql"] is None:
-            return []
-        match = re.search(rf"CHECK \({re.escape(column)} IN \(([^)]*)\)", ddl["sql"])
-        if match is None:
-            return []
-        return re.findall(r"'([^']*)'", match.group(1))
-
 
 # --- log value encoding ----------------------------------------------------
 

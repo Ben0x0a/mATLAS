@@ -219,7 +219,7 @@ def test_duplicate_edit_log_ordinal_raises() -> None:
 
 def test_invalid_enum_value_rejected() -> None:
     connection = _memory_conn()
-    # 'delete' is not a member of EditKind (update | new_row | empty_row) — the derived
+    # 'delete' is not a member of EditKind (update | new_row) — the derived
     # CHECK must reject it, so an out-of-vocabulary value can never reach the DB.
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(
@@ -231,9 +231,9 @@ def test_valid_enum_value_accepted() -> None:
     connection = _memory_conn()
     connection.execute(
         "INSERT INTO edit_log (edit_id, ordinal, edit_kind) VALUES (?, ?, ?)",
-        (str(uuid.uuid4()), 7, "empty_row"))
+        (str(uuid.uuid4()), 7, "new_row"))
     assert connection.execute(
-        "SELECT edit_kind FROM edit_log WHERE ordinal = 7").fetchone()[0] == "empty_row"
+        "SELECT edit_kind FROM edit_log WHERE ordinal = 7").fetchone()[0] == "new_row"
 
 
 # --- derived enum-CHECK coverage + NOT-NULL primary keys (SS2 / SS4) --------

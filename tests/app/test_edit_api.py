@@ -3,7 +3,7 @@
 Defines:    a small persisted-DB fixture (a full L1->L3 GPS placement built through the
             RunStore write API, then persisted with VACUUM INTO), and tests for the
             evidence-protection rules (update RAISES on evidence, succeeds + logs on an
-            integration table), save_as_new_row / add_empty_row logging, the
+            integration table), save_as_new_row logging, the
             persisted-file authentication, and the full-rewind scenario (update ->
             new_row -> update, then rewind restores the exact pre-edit state row-by-row
             and the journal keeps originals + inverses).
@@ -256,31 +256,16 @@ def test_save_as_new_row_regenerates_non_fk_discriminator(persisted_db) -> None:
         assert len(log) == 1 and log[0]["edit_kind"] == V.EditKind.NEW_ROW.value
 
 
-# --- add_empty_row is gated on the evidence protection ---------------------
+# --- there is deliberately no empty/blank-row capability -------------------
 
-@pytest.mark.parametrize("table", ["raw_record", "source", "entity", "assertion",
-                                   "spatial_component"])
-def test_add_empty_row_rejects_evidence(persisted_db, table) -> None:
-    # add_empty_row must refuse L0/L1 evidence with the same protection as update(): a blank
-    # evidence row would forge evidence.
+def test_edit_api_has_no_blank_row_capability(persisted_db) -> None:
+    # A fabricated blank row would forge evidence, so the API exposes no way to create one:
+    # the only creation path is save_as_new_row (clone an existing occurrence).
     path, keys = persisted_db
     with EditApi.open(path, who="tester") as api:
-        with pytest.raises(PermissionError, match="evidence"):
-            api.add_empty_row(table)
-        assert api.edit_log() == []
-
-
-def test_blank_value_unique_placeholder_never_collides(persisted_db) -> None:
-    # A NOT NULL UNIQUE non-FK column gets a per-ordinal placeholder, so two successive blanks
-    # carry DISTINCT values and the second cannot fail the UNIQUE constraint (archive.path is
-    # such a column: NOT NULL, UNIQUE, no FK).
-    path, keys = persisted_db
-    with EditApi.open(path, who="tester") as api:
-        first = api._blank_value("archive", "path", "TEXT", 7, unique=True)
-        second = api._blank_value("archive", "path", "TEXT", 8, unique=True)
-        assert first != second
-        # A non-unique NOT NULL column keeps the fixed zero/empty placeholder.
-        assert api._blank_value("archive", "cd_sha256", "TEXT", 7, unique=False) == ""
+        assert not hasattr(api, "add_empty_row")
+        assert V.EditKind.__members__ == {"UPDATE": V.EditKind.UPDATE,
+                                          "NEW_ROW": V.EditKind.NEW_ROW}
 
 
 # --- D41 full rewind -------------------------------------------------------

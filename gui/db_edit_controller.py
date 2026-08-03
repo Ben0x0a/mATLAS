@@ -5,7 +5,7 @@ Defines:    ``DbEditController`` — builds the Database Edit panel inside a par
             logic: every mutation and every protection decision is delegated to the edit API
             (MVC — the view only calls the model). The panel offers a table/row tree
             navigator, a labelled field editor for the selected row, the three edit actions
-            (Save edits / Save as new row / Add empty row) and a read-only edit_log view.
+            (Save edits / Save as new row) and a read-only edit_log view.
 Used by:    the GUI orchestrator (it constructs one ``DbEditController`` passing the
             ``databaseEditTab`` QWidget) and ``tests.gui.test_db_edit_controller``.
 Depends on: PySide6 (widgets), ``gui.worker`` (TaskRunner — the long initial DB read runs off
@@ -119,11 +119,8 @@ class DbEditController(QObject):
         self.save_button.clicked.connect(self._on_save_edits)
         self.new_row_button = QPushButton("Save as new row", editor_box)
         self.new_row_button.clicked.connect(self._on_save_as_new_row)
-        self.empty_row_button = QPushButton("Add empty row", editor_box)
-        self.empty_row_button.clicked.connect(self._on_add_empty_row)
         button_row.addWidget(self.save_button)
         button_row.addWidget(self.new_row_button)
-        button_row.addWidget(self.empty_row_button)
         editor_outer.addLayout(button_row)
         middle.addWidget(editor_box, 2)
         outer.addLayout(middle, 1)
@@ -155,9 +152,6 @@ class DbEditController(QObject):
         self.new_row_button.setAccessibleName("Save as new row")
         self.new_row_button.setAccessibleDescription(
             "Mint a new occurrence carrying the edited fields, keeping the original row.")
-        self.empty_row_button.setAccessibleName("Add empty row")
-        self.empty_row_button.setAccessibleDescription(
-            "Insert a blank row into the selected table.")
         self.log_table.setAccessibleName("Edit log")
         self.log_table.setAccessibleDescription(
             "Read-only audit journal of every edit, in order.")
@@ -302,7 +296,6 @@ class DbEditController(QObject):
         else:
             self.save_button.setToolTip("")
         self.new_row_button.setEnabled(bool(has_row))
-        self.empty_row_button.setEnabled(bool(has_row))
 
     # --- edit actions (all delegated to the model) ------------------------
 
@@ -331,15 +324,6 @@ class DbEditController(QObject):
         try:
             self._api.save_as_new_row(table, row_id, edits)
         except (ValueError, KeyError) as exc:
-            QMessageBox.warning(self._parent, "Could not add row", str(exc))
-        self._refresh_from_api()
-
-    def _on_add_empty_row(self) -> None:
-        if self._api is None or self._current_table is None:
-            return
-        try:
-            self._api.add_empty_row(self._current_table)
-        except ValueError as exc:
             QMessageBox.warning(self._parent, "Could not add row", str(exc))
         self._refresh_from_api()
 

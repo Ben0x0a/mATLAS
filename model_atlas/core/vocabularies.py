@@ -406,13 +406,13 @@ class EditKind(str, Enum):
     """The kind of manual edit recorded in ``edit_log``.
 
     Evidence protection: L0/L1 rows are NEVER updated in place — only ``NEW_ROW``
-    (mint a new occurrence, keep the original) or ``EMPTY_ROW``; integration/analysis
-    rows may ``UPDATE`` in place.
+    (mint a new occurrence, keep the original); integration/analysis rows may
+    ``UPDATE`` in place. There is deliberately NO blank/empty-row kind: a fabricated
+    empty row would forge evidence, so the API never creates one.
     """
 
     UPDATE = "update"
     NEW_ROW = "new_row"
-    EMPTY_ROW = "empty_row"
 
 
 class Origin(str, Enum):
@@ -854,8 +854,8 @@ class EditLog:
     """table: edit_log — the manual-edit audit journal.
 
     ``ordinal`` is a monotonic UNIQUE journal position enabling a full rewind:
-    ``UPDATE`` logs per-column old->new; ``NEW_ROW``/``EMPTY_ROW`` log the FULL row
-    snapshot (canonical JSON in ``new_value``). Applying inverses in reverse ordinal
+    ``UPDATE`` logs per-column old->new; ``NEW_ROW`` logs the FULL row snapshot
+    (canonical JSON in ``new_value``). Applying inverses in reverse ordinal
     order restores any earlier state.
     """
 

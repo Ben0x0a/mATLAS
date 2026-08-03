@@ -242,7 +242,7 @@ CREATE TABLE edit_log (
     column TEXT,
     old_value TEXT,
     new_value TEXT,
-    edit_kind TEXT CHECK (edit_kind IN ('update', 'new_row', 'empty_row') OR edit_kind IS NULL),
+    edit_kind TEXT CHECK (edit_kind IN ('update', 'new_row') OR edit_kind IS NULL),
     edited_by TEXT,
     edited_at TEXT
 );
