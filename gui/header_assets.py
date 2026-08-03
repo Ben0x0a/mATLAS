@@ -32,16 +32,40 @@ def asset_path(name: str) -> Path:
     return Path(files("gui").joinpath("assets", name))
 
 
+# A square slot, so the six frames read as one filmstrip regardless of their differing
+# intrinsic aspect ratios (the earlier 80x60 letterbox scaled each frame by a different
+# factor, which is what made them look like unrelated, randomly sized mascots).
+HEADER_FRAME_SIZE = 44
+
+
 def configure_header_assets(window: QMainWindow) -> None:
     for number in range(2, 8):
         label = window.findChild(QLabel, f"headerImage{number}")
         if label is None:
             continue
-        label.setFixedSize(80, 60)
-        label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        label.setFixedSize(HEADER_FRAME_SIZE, HEADER_FRAME_SIZE)
+        policy = QSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        # Keep the frame's slot in the layout even while it is hidden. The frames are the
+        # tallest thing in the header row, so without this, hiding them for UFDR dump mode
+        # collapsed the row onto the shorter title and shunted the entire page up by 6px —
+        # a visible jolt every time the mode was toggled.
+        policy.setRetainSizeWhenHidden(True)
+        label.setSizePolicy(policy)
         pixmap = _render_svg_pixmap(asset_path(TRANSITION_ASSETS[number]), label)
         if not pixmap.isNull():
             label.setPixmap(pixmap)
+
+
+def set_transition_visible(window: QMainWindow, visible: bool) -> None:
+    """Show or hide the six header frames.
+
+    They illustrate the transform pipeline, so they are actively misleading in UFDR dump
+    mode, which does not run it. The title beside them already swaps; hiding the frames
+    keeps the picture and the words telling the same story."""
+    for number in range(2, 8):
+        label = window.findChild(QLabel, f"headerImage{number}")
+        if label is not None:
+            label.setVisible(visible)
 
 
 def _render_svg_pixmap(path: Path, label: QLabel) -> QPixmap:

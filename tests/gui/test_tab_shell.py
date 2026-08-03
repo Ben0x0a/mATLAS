@@ -5,49 +5,21 @@ named tabs in order, the Transform form reparented (not rewritten) into the firs
 with its widgets still bound and reachable, and accessible names on the tab bar and
 each page. The other two tabs now hold the Database Edit and Spatiotemporal Analysis
 panels (their placeholder labels removed so nothing renders above the real panel).
-Used by:    pytest (headless: QT_QPA_PLATFORM=offscreen is forced below).
+Used by:    pytest (the shared ``controller`` fixture and the headless offscreen platform both
+            come from tests/gui/conftest.py).
 Depends on: gui.app (MainController), gui/main_window.ui, PySide6.
 """
 from __future__ import annotations
-
-import logging
-import os
-
-# Force the offscreen platform BEFORE any Qt import, so the suite runs headless (CI,
-# SSH). setdefault keeps a developer's explicit platform choice intact.
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
 pytest.importorskip("PySide6", reason="GUI extra not installed")
 
-from PySide6.QtWidgets import QApplication, QLabel, QTabWidget, QWidget
+from PySide6.QtWidgets import QLabel, QTabWidget, QWidget
 
-from gui.app import APP_TITLE_DEFAULT, APP_TITLE_UFDR, MainController
+from gui.app import APP_TITLE_DEFAULT, APP_TITLE_UFDR
 
 EXPECTED_TAB_TITLES = ["Transform", "Database Edit", "Spatiotemporal Analysis"]
-
-
-@pytest.fixture(scope="module")
-def controller():
-    """One MainController for the whole module: construction is the expensive part and
-    the checks below are read-only, so sharing it keeps the suite fast."""
-    app = QApplication.instance() or QApplication([])
-    ctrl = MainController()
-    # Fire the construction-time singleShot (async preset load) NOW, while the window is
-    # alive — otherwise it would first fire inside the teardown processEvents below,
-    # after the widgets are deleted, and crash on a dead QLabel.
-    app.processEvents()
-    yield ctrl
-    # Teardown order matters: finish worker threads, drain their queued result signals
-    # while the widgets still exist, then detach the GUI log handler from the root
-    # logger so later (non-GUI) tests never log into a torn-down widget.
-    ctrl._runner.wait_all()
-    app.processEvents()
-    if ctrl._log_handler is not None:
-        logging.getLogger().removeHandler(ctrl._log_handler)
-    ctrl.window.deleteLater()
-    app.processEvents()
 
 
 def test_window_has_three_named_tabs(controller) -> None:
@@ -67,7 +39,6 @@ def test_transform_form_lives_inside_first_tab(controller) -> None:
     for widget in (
         controller.source_edit,
         controller.presets_path_edit,
-        controller.output_edit,
         controller.available_preset_list,
         controller.selected_preset_list,
         controller.run_button,
@@ -119,7 +90,6 @@ def test_ufdr_toggle_available_and_switches_title(controller) -> None:
         assert not controller.available_preset_list.isEnabled()
         assert not controller.additional_export_button.isEnabled()
         assert controller.source_edit.isEnabled()
-        assert controller.output_edit.isEnabled()
         assert controller.run_button.isEnabled()
         check.setChecked(False)
         assert controller.app_title_label.text() == APP_TITLE_DEFAULT

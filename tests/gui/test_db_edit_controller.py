@@ -21,16 +21,12 @@ import pytest
 
 pytest.importorskip("PySide6", reason="GUI extra not installed")
 
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QWidget
 
 from gui.db_edit_controller import DbEditController, _coerce, _row_summary
 from model_atlas.app.edit_api import EditApi
 from tests.app.test_edit_api import _build_persisted_db
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from tests.gui.conftest import drain
 
 
 @pytest.fixture
@@ -63,6 +59,7 @@ def test_constructs_against_bare_parent(app) -> None:
     assert not controller.save_button.isEnabled()
     assert not controller.new_row_button.isEnabled()
     parent.deleteLater()
+    drain(app)   # run that delete NOW rather than at some later timer tick
 
 
 # --- end-to-end edit through the panel ------------------------------------
@@ -99,6 +96,7 @@ def test_edit_integration_saves_and_persists(app, persisted_db) -> None:
         assert log[0]["column"] == "latitude_wgs84"
         assert log[0]["new_value"] == "46.5"
     parent.deleteLater()
+    drain(app)   # run that delete NOW rather than at some later timer tick
 
 
 def test_evidence_row_disables_save(app, persisted_db) -> None:
@@ -113,3 +111,4 @@ def test_evidence_row_disables_save(app, persisted_db) -> None:
     # But minting a new occurrence is offered.
     assert controller.new_row_button.isEnabled()
     parent.deleteLater()
+    drain(app)   # run that delete NOW rather than at some later timer tick

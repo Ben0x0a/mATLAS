@@ -33,6 +33,7 @@ from model_atlas.core import ids
 from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore
 from model_atlas.integrate.spatial import integrate_spatial
+from tests.gui.conftest import drain
 
 # A demo-flavoured scene; a pure-latitude offset of d/M_PER_DEG_LAT degrees IS d
 # metres on the engine's sphere (meridian arcs are exact great circles).
@@ -45,11 +46,6 @@ DEMO_DB = Path(__file__).resolve().parents[2] / "docs" / "examples" / "matlas_ex
 
 def _north_of(metres: float) -> tuple[float, float]:
     return (KNOWN[0] + metres / M_PER_DEG_LAT, KNOWN[1])
-
-
-@pytest.fixture(scope="module")
-def app() -> QApplication:
-    return QApplication.instance() or QApplication([])
 
 
 def _add_point(store: RunStore, line_no: int, source_id: str, preset_id: str,
@@ -73,7 +69,7 @@ def _add_point(store: RunStore, line_no: int, source_id: str, preset_id: str,
     store.write_spatial_expression(V.SpatialExpression(
         spatial_expression_id=sx_id, referential="epsg:4326"))
     for ordinal, (part, raw) in enumerate((
-            ("latitude_wgs84", str(latitude)), ("longitude_wgs84", str(longitude)))):
+            ("latitude", str(latitude)), ("longitude", str(longitude)))):
         store.write_spatial_component(V.SpatialComponent(
             spatial_component_id=ids.spatial_component_id(sx_id, ordinal),
             spatial_expression_id=sx_id, ordinal=ordinal, part=part, raw_value=raw))
@@ -136,7 +132,7 @@ def _run_and_wait(app: QApplication, controller: SpatiotemporalController) -> No
 
 def _teardown(app: QApplication, parent: QWidget) -> None:
     parent.deleteLater()
-    app.processEvents()
+    drain(app)   # run that delete NOW rather than at some later timer tick
 
 
 def test_panel_lists_expected_pair_excludes_references_and_exports(

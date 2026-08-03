@@ -1,8 +1,9 @@
 """Runtime-loaded PySide6 GUI controller for Model Atlas.
 
 Defines:    MainController, the sole controller for the single-window GUI. It builds the
-            window from main_window.ui, wires widget signals, and dispatches pipeline
-            runs onto a background thread.
+            window from main_window.ui, wires widget signals, dispatches pipeline runs onto a
+            background thread, and exposes shutdown() — the ordered teardown of everything it
+            owns that outlives the window (run timer, progress bridge, log handler, workers).
 Used by:    launcher.gui (the GUI entry point constructs and shows MainController.window).
 Depends on: gui.worker (TaskRunner / ProgressBridge / install_gui_log_handler),
             gui.header_assets (window icon + header images), gui.accessibility,
@@ -20,27 +21,31 @@ from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QFile, QObject, QStringListModel, QTimer, QUrl, Qt, Slot
-from PySide6.QtGui import QAction, QDesktopServices, QIcon
+from PySide6.QtCore import QCoreApplication, QFile, QObject, QStringListModel, QTimer, QUrl, Qt, Slot
+from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
     QCompleter,
     QFileDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
-    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
     QTabWidget,
     QTextEdit,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -49,6 +54,7 @@ from gui.case_state import format_case_summary, read_case_counts
 from gui.completion import param_completions
 from gui.db_edit_controller import DbEditController
 from gui.spatiotemporal_controller import SpatiotemporalController
+from gui.widgets.checkable_menu import CheckableMenu
 from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
 from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler, remove_gui_log_handler
@@ -73,6 +79,12 @@ APP_TITLE_UFDR = "UFDR Parser"
 # The window title's stem; the active case name is appended after a run so the window
 # always shows which case is open. Consumed by _update_window_title (gui.app).
 WINDOW_TITLE_BASE = "Model ATLAS Transformer"
+
+# A case name becomes a filename (``<name>.matlas.sqlite``), so these would either redirect
+# the database out of the chosen folder or produce a name the filesystem rejects. Checked in
+# _new_case; Open case cannot hit it because the name is derived from an existing file.
+_CASE_NAME_FORBIDDEN = '/\\:*?"<>|'
+
 
 
 def _should_show_single_preset_notice(
@@ -124,11 +136,18 @@ class MainController(QObject):
         self._runner = TaskRunner(self)
         self._presets: list[PresetItem] = []
         self._last_output_folder: Path | None = None
-        # The case the GUI is working in: set to the case DB after a run, then bound to the
-        # Database-Edit and Spatiotemporal tabs so every tab operates on the same case.
+        # The case the GUI is working in, in two parts. The DECLARED identity (name +
+        # folder) comes from New case / Open case and is what a run writes to; it replaces
+        # the old "Case name" and "Output folder" form fields, which is why there is state
+        # here and no longer a widget to read. The PERSISTED database is set once a run has
+        # actually written one, and is what the analysis tabs bind to — a freshly declared
+        # case has no database on disk yet, so the two cannot be collapsed into one field.
+        self._case_name: str | None = None
+        self._case_output_dir: Path | None = None
         self._active_case_db: Path | None = None
         self._status_text = "Idle"
         self._log_handler: logging.Handler | None = None
+        self._shutdown_done = False
         self._current_phase = ""
         self._anim_dots = 0
 
@@ -146,16 +165,37 @@ class MainController(QObject):
         self._run_timer.setInterval(350)
         self._run_timer.timeout.connect(self._tick_running_animation)
         if app is not None:
-            app.aboutToQuit.connect(self._runner.wait_all)
-            # Detach the root-logger GUI handler on teardown (AFTER wait_all, so records emitted
-            # while workers drain still reach the log). Without this, a record logged after the
-            # window/log_edit is destroyed would append to a deleted widget and crash.
-            app.aboutToQuit.connect(self._detach_log_handler)
+            app.aboutToQuit.connect(self.shutdown)
         QTimer.singleShot(0, self._load_presets_async)
+
+    def shutdown(self) -> None:
+        """Detach everything of this controller's that outlives the window, in the only safe order.
+
+        WHY: the controller owns emitters whose lifetime is NOT the window's — the 350 ms run
+        timer, the progress bridge, the root-logger GUI handler, and background workers whose
+        results come back as QUEUED callbacks into methods that touch widgets. Any one of them
+        firing after the window is destroyed dereferences freed memory and kills the process
+        (observed as an intermittent crash inside Qt's timer dispatch at teardown).
+
+        HOW: silence the emitters first (timer, progress bridge), then join the worker threads,
+        then deliver what they already posted while the widgets still exist, and only then
+        detach the log handler — last, so records emitted during that drain still reach the log
+        panel. Idempotent, because it is wired to ``aboutToQuit`` AND called explicitly by the
+        GUI tests' fixture teardown.
+        """
+        if self._shutdown_done:
+            return
+        self._shutdown_done = True
+        self._run_timer.stop()
+        self._progress_bridge.phase.disconnect(self._on_phase)
+        self._runner.wait_all()
+        if (app := QCoreApplication.instance()) is not None:
+            app.processEvents()
+        self._detach_log_handler()
 
     def _detach_log_handler(self) -> None:
         """Remove the GUI log handler from the root logger so no post-teardown record touches
-        the destroyed log widget (mirrors the test fixture's teardown)."""
+        the destroyed log widget."""
         remove_gui_log_handler(self._log_handler)
         self._log_handler = None
 
@@ -189,10 +229,12 @@ class MainController(QObject):
         self.database_edit_tab: QWidget = child(QWidget, "databaseEditTab")
         self.spatiotemporal_tab: QWidget = child(QWidget, "spatiotemporalTab")
 
-        self.source_edit: QLineEdit = child(QLineEdit, "sourceEdit")
-        self.presets_path_edit: QLineEdit = child(QLineEdit, "presetsPathEdit")
-        self.output_edit: QLineEdit = child(QLineEdit, "outputEdit")
-        self.case_name_edit: QLineEdit = child(QLineEdit, "caseNameEdit")
+        # The three path fields are bound by their promoted type, not by QLineEdit. If the
+        # .ui promotion or the registerCustomWidget call above is ever lost, QUiLoader
+        # quietly substitutes a plain QLineEdit and drag-and-drop simply stops working;
+        # asking for the real class here turns that into a startup error instead.
+        self.source_edit: DragDropLineEdit = child(DragDropLineEdit, "sourceEdit")
+        self.presets_path_edit: DragDropLineEdit = child(DragDropLineEdit, "presetsPathEdit")
         self.entity_edit: QLineEdit = child(QLineEdit, "entityEdit")
         self.concerns_edit: QLineEdit = child(QLineEdit, "concernsEdit")
         self.preset_search_edit: QLineEdit = child(QLineEdit, "presetSearchEdit")
@@ -202,17 +244,16 @@ class MainController(QObject):
         self.status_label: QLabel = child(QLabel, "statusLabel")
         self.preset_status_label: QLabel = child(QLabel, "presetStatusLabel")
         self.single_preset_notice_label: QLabel = child(QLabel, "singlePresetNoticeLabel")
-        self.output_label: QLabel = child(QLabel, "outputLabel")
         self.app_title_label: QLabel = child(QLabel, "appTitleLabel")
         self.case_summary_label: QLabel = child(QLabel, "caseSummaryLabel")
         self.new_case_button: QPushButton = child(QPushButton, "newCaseButton")
         self.open_case_button: QPushButton = child(QPushButton, "openCaseButton")
+        self.close_case_button: QPushButton = child(QPushButton, "closeCaseButton")
 
         self.source_file_button: QPushButton = child(QPushButton, "sourceFileButton")
         self.source_folder_button: QPushButton = child(QPushButton, "sourceFolderButton")
         self.presets_folder_button: QPushButton = child(QPushButton, "presetsFolderButton")
         self.presets_file_button: QPushButton = child(QPushButton, "presetsFileButton")
-        self.output_button: QPushButton = child(QPushButton, "outputButton")
         self.add_preset_button: QPushButton = child(QPushButton, "addPresetButton")
         self.remove_preset_button: QPushButton = child(QPushButton, "removePresetButton")
         self.add_all_presets_button: QPushButton = child(QPushButton, "addAllPresetsButton")
@@ -238,17 +279,19 @@ class MainController(QObject):
         self.presets_path_edit.setText(str(default_presets))
         self.log_edit.setAcceptRichText(True)
         self.log_edit.document().setMaximumBlockCount(5000)
-        self.window.resize(1000, 860)
+        self._size_window_to_screen(1060, 940)
         self.window.setWindowTitle(WINDOW_TITLE_BASE)
         self.window.setWindowIcon(QIcon(str(header_assets.asset_path(header_assets.DESKTOP_ICON_ASSET))))
         self.window.setStyleSheet(build_stylesheet())
         header_assets.configure_header_assets(self.window)
+        self._configure_layout_stretch()
+        self._configure_preset_selection()
         self._configure_ufdr_toggle()
         self.single_preset_notice_label.setVisible(False)
         accessibility.configure_status_label(self)
         self._stabilize_form_labels()
         self._stabilize_preset_mode_row()
-        self._sync_output_mode()
+        self._sync_case_bar()
         self._configure_entity_completion()
         self._configure_exports()
         accessibility.configure_accessibility(self)
@@ -279,10 +322,14 @@ class MainController(QObject):
 
     def _configure_exports(self) -> None:
         """Populate the 'Additional export' button with a checkable menu, one item per registered
-        exporter (built-ins + any drop-in plugins). Built with Qt's QMenu/QAction — no custom
-        widget. The selection is read at run time and passed to process()."""
+        exporter (built-ins + any drop-in plugins). The selection is read at run time and
+        passed to process().
+
+        The menu is a CheckableMenu so it stays open across ticks: these formats are
+        independent choices, and a plain QMenu closed after each one, forcing the user to
+        reopen it once per format and hiding the current selection while they chose."""
         load_builtin_exporters()
-        menu = QMenu(self.additional_export_button)
+        menu = CheckableMenu(self.additional_export_button)
         self._export_actions: dict[str, QAction] = {}
         for spec in available_exporters():
             action = menu.addAction(spec.label)
@@ -339,7 +386,6 @@ class MainController(QObject):
         self.source_folder_button.clicked.connect(self._browse_source_folder)
         self.presets_folder_button.clicked.connect(self._browse_presets_folder)
         self.presets_file_button.clicked.connect(self._browse_presets_file)
-        self.output_button.clicked.connect(self._browse_output)
         self.source_edit.textChanged.connect(self._on_source_changed)
         self.presets_path_edit.editingFinished.connect(self._load_presets_async)
         self.preset_search_edit.textChanged.connect(self._render_available_presets)
@@ -352,6 +398,7 @@ class MainController(QObject):
         self.run_button.clicked.connect(self._run_process)
         self.new_case_button.clicked.connect(self._new_case)
         self.open_case_button.clicked.connect(self._open_case)
+        self.close_case_button.clicked.connect(self._close_case)
         self.open_output_folder_button.clicked.connect(self._open_output_folder)
         self.open_error_report_button.clicked.connect(self._open_error_reports)
         self.clear_form_button.clicked.connect(self._clear_form)
@@ -363,19 +410,91 @@ class MainController(QObject):
         self.log_level_combo.currentTextChanged.connect(self._apply_log_level)
         self.dump_full_ufdr_check.toggled.connect(lambda _checked: self._sync_ufdr_mode())
 
+    def _size_window_to_screen(self, width: int, height: int) -> None:
+        """Open at the preferred size, but never larger than the screen it opens on.
+
+        A constant like 1060x940 is comfortable on a desktop and taller than the work area
+        of a 1366x768 laptop, where it would push the action row and the log off the bottom
+        edge with no way to drag them back. Clamping to the available geometry (which
+        already excludes the taskbar / dock / menu bar) keeps the whole form reachable on
+        every screen without special-casing any platform."""
+        screen = self.window.screen() or QGuiApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            width = min(width, available.width() - 40)
+            height = min(height, available.height() - 40)
+        self.window.resize(width, height)
+
+    def _configure_preset_selection(self) -> None:
+        """Let both preset lists take a multiple selection.
+
+        Shift+click extends a range and Ctrl/Cmd+click picks individual entries, which is
+        the platform-standard behaviour users already expect from a list this shape. The
+        transfer handlers were written against selectedItems() from the start, so they
+        already move whatever is highlighted — only the selection mode was holding it to
+        one preset at a time."""
+        for list_widget in (self.available_preset_list, self.selected_preset_list):
+            list_widget.setSelectionMode(
+                QAbstractItemView.SelectionMode.ExtendedSelection
+            )
+
+    def _configure_layout_stretch(self) -> None:
+        """Decide which rows and columns absorb the window's spare space.
+
+        This lives here rather than in main_window.ui on purpose: QUiLoader silently drops
+        a layout's ``stretch`` / ``columnStretch`` properties (they are honoured only by
+        uic at code-generation time), so setting them in the .ui looks correct and does
+        nothing. Without them Qt spread the surplus evenly over every row; combined with
+        the stacked minimum heights that pushed the total past the window and left the
+        action row painted on top of the preset card.
+        """
+        if (main_layout := self.window.centralWidget().layout()) is not None:
+            main_layout.setStretch(0, 0)        # header filmstrip: natural height
+            main_layout.setStretch(1, 1)        # tab shell takes the rest
+
+        # Transform page: the case bar, the input card and the action row keep their natural
+        # height, and the surplus is split between the preset picker and the log — two parts
+        # to the log against one to the picker. The picker is a chooser, not a workspace:
+        # past a handful of visible rows the extra height buys nothing, whereas the log is
+        # what the user actually reads during a run.
+        if (form := self.window.findChild(QVBoxLayout, "transformTabLayout")) is not None:
+            for index, stretch in enumerate((0, 0, 1, 0, 2)):
+                form.setStretch(index, stretch)
+
+        # Input card: only the field column absorbs width, so the browse buttons stay a
+        # stable target and the captions never drift away from their fields.
+        if (grid := self.window.findChild(QGridLayout, "inputGrid")) is not None:
+            for column, stretch in enumerate((0, 1, 0, 0)):
+                grid.setColumnStretch(column, stretch)
+
+        # The two preset lists share the width evenly; the transfer buttons between them
+        # keep their natural size rather than stretching into oversized targets.
+        if (lists_row := self.window.findChild(QHBoxLayout, "presetListsRow")) is not None:
+            for index, stretch in enumerate((1, 0, 1)):
+                lists_row.setStretch(index, stretch)
+
     def _stabilize_form_labels(self) -> None:
-        label_names = (
-            "sourceLabel",
-            "identityLabel",
-            "presetsPathLabel",
-            "outputModeLabel",
-            "outputLabel",
-            "optionsLabel",
-        )
-        for name in label_names:
-            label = self.window.findChild(QLabel, name)
-            if label is not None:
-                label.setMinimumWidth(125)
+        """Align the input grid's row captions on one column edge.
+
+        The width is measured from the widest caption rather than pinned to a constant, so
+        the column still fits when the text is translated or when the user runs a larger
+        system font — a hardcoded value clipped in both cases."""
+        labels = [
+            label
+            for name in (
+                "sourceLabel",
+                "identityLabel",
+                "presetsPathLabel",
+                "outputModeLabel",
+                "optionsLabel",
+            )
+            if (label := self.window.findChild(QLabel, name)) is not None
+        ]
+        if not labels:
+            return
+        column_width = max(label.sizeHint().width() for label in labels) + 8
+        for label in labels:
+            label.setMinimumWidth(column_width)
 
     def _configure_ufdr_toggle(self) -> None:
         """Show the UFDR-parser toggle and reflect its state in the header title.
@@ -385,8 +504,6 @@ class MainController(QObject):
         """
         self.dump_full_ufdr_check.setVisible(True)
         self.dump_full_ufdr_check.setEnabled(True)
-        if (label := self.window.findChild(QLabel, "dumpFullUfdrLabel")) is not None:
-            label.setVisible(True)
         self._sync_ufdr_mode()
 
     def _sync_ufdr_mode(self) -> None:
@@ -395,6 +512,8 @@ class MainController(QObject):
         so disabling the preset/entity/export controls signals they are ignored."""
         dump = self.dump_full_ufdr_check.isChecked()
         self.app_title_label.setText(APP_TITLE_UFDR if dump else APP_TITLE_DEFAULT)
+        # The header filmstrip depicts the transform pipeline, which dump mode does not run.
+        header_assets.set_transition_visible(self.window, not dump)
         self._set_transform_controls_enabled(not dump)
 
     def _set_transform_controls_enabled(self, enabled: bool) -> None:
@@ -407,7 +526,7 @@ class MainController(QObject):
             self.add_preset_button, self.remove_preset_button,
             self.add_all_presets_button, self.remove_all_presets_button,
             self.reload_presets_button, self.auto_preset_check,
-            self.case_name_edit, self.entity_edit, self.concerns_edit,
+            self.entity_edit, self.concerns_edit,
             self.include_source_columns_check, self.traceability_combo,
             self.additional_export_button,
         ):
@@ -421,11 +540,9 @@ class MainController(QObject):
         accessibility.set_status(self, text)
 
     def _stabilize_preset_mode_row(self) -> None:
-        label = self.window.findChild(QLabel, "presetModeLabel")
-        if label is not None:
-            label.setMinimumWidth(0)
-            label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-            label.setFixedWidth(label.sizeHint().width())
+        """Keep the 'Auto apply' box at its natural width so the status text beside it does
+        not shift as the row's other contents change. sizeHint (not a constant) is used so
+        the caption still fits under a larger system font."""
         self.auto_preset_check.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         self.auto_preset_check.setFixedWidth(self.auto_preset_check.sizeHint().width())
 
@@ -439,11 +556,16 @@ class MainController(QObject):
         self.log_edit.append(f'<span style="color:{colour}">{html.escape(message)}</span>')
 
     def _browse_source_file(self) -> None:
+        # The filter must list every format the ingest layer actually reads, or a supported
+        # file is simply invisible here. It previously omitted *.xml (a registered reader —
+        # the shipped Cellebrite XML presets target it) and *.ufdr (which dump mode outright
+        # requires), so browsing to either was impossible without switching to "All files".
         path, _ = QFileDialog.getOpenFileName(
             self.window,
             "Choose source file",
             self.source_edit.text() or str(Path.cwd()),
-            "Supported sources (*.csv *.xlsx *.xlsm *.xltx *.xltm *.db *.sqlite *.sqlite3 *.zip);;All files (*)",
+            "Supported sources (*.csv *.tsv *.xlsx *.xlsm *.xltx *.xltm *.xml"
+            " *.db *.sqlite *.sqlite3 *.zip *.ufdr);;All files (*)",
         )
         if path:
             self.source_edit.setText(path)
@@ -477,27 +599,6 @@ class MainController(QObject):
         if path:
             self.presets_path_edit.setText(path)
             self._load_presets_async()
-
-    def _browse_output(self) -> None:
-        # --output is a folder: the case database is written inside it as <name>.matlas.sqlite,
-        # with every other export beside it (one file per format). Always pick a directory.
-        path = QFileDialog.getExistingDirectory(
-            self.window,
-            "Choose output folder",
-            self.output_edit.text() or str(Path.cwd() / "out"),
-        )
-        if path:
-            self.output_edit.setText(path)
-
-    def _sync_output_mode(self, *, clear_output: bool = False) -> None:
-        if clear_output:
-            self.output_edit.clear()
-        # The output is a folder; the case database is written inside it, with every other
-        # export (one file per format) beside it.
-        self.output_label.setText("Output folder")
-        self.output_button.setText("Folder...")
-        self.output_edit.setPlaceholderText("folder (the case database is written inside)")
-        accessibility.update_output_accessibility(self)
 
     def _load_presets_async(self) -> None:
         presets_path = self._preset_root()
@@ -697,14 +798,14 @@ class MainController(QObject):
             return
 
         source = self.source_edit.text().strip()
-        output = self.output_edit.text().strip()
         preset_root = self._preset_root()
         if self._reject_if_blank(source, "Choose a source file or folder."):
             return
         if preset_root is None:
             self._show_error("Choose a preset folder or YAML file.")
             return
-        if self._reject_if_blank(output, "Choose an output folder."):
+        if self._case_output_dir is None or self._case_name is None:
+            self._show_error("Open or create a case first (New case / Open case).")
             return
         entity = self.entity_edit.text().strip() or None
         concerns = self.concerns_edit.text().strip()
@@ -713,11 +814,10 @@ class MainController(QObject):
             # every output row must be attributable to a case subject.
             self._show_error("Enter the concerns (required).")
             return
-        output_path = Path(output).expanduser()
-        # The case name is the run's identity: the case DB is <output>/<name>.matlas.sqlite,
-        # so a run targeting an existing case DB APPENDS to it (pipeline.process). Empty falls
-        # back to the pipeline default ("merged"), and no explicit human case label is sent.
-        case_name = self.case_name_edit.text().strip()
+        # The case bar is the run's identity: the case DB is <folder>/<name>.matlas.sqlite,
+        # so a run targeting an existing case DB APPENDS to it (pipeline.process).
+        output_path = self._case_output_dir.expanduser()
+        case_name = self._case_name
         selected_mode = not self.auto_preset_check.isChecked()
         selected_paths = [Path(path) for path in self._selected_preset_paths()]
         if selected_mode and not selected_paths:
@@ -819,16 +919,18 @@ class MainController(QObject):
         output folder. Independent of presets and the case model — it writes no run DB, so it
         needs only a source file and an output folder (the transform fields are ignored)."""
         source = self.source_edit.text().strip()
-        output = self.output_edit.text().strip()
         if self._reject_if_blank(source, "Choose a source .ufdr file."):
             return
         source_path = Path(source).expanduser()
         if not source_path.is_file() or source_path.suffix.lower() != ".ufdr":
             self._show_error("UFDR dump mode needs a .ufdr file as the source.")
             return
-        if self._reject_if_blank(output, "Choose an output folder."):
+        # A dump writes no case database, but it still needs a destination, and the case
+        # folder is the only one the user has now named.
+        if self._case_output_dir is None:
+            self._show_error("Open or create a case first, to set the output folder.")
             return
-        output_path = Path(output).expanduser()
+        output_path = self._case_output_dir.expanduser()
 
         self._start_run()
 
@@ -868,6 +970,9 @@ class MainController(QObject):
         Spatiotemporal tabs to it, and show its running totals. Best-effort — a summary read
         failure is logged and swallowed so a completed run is never reported as failed."""
         self._active_case_db = db_path
+        # A run may create the case a New case declaration only named; keep the two in step.
+        if self._case_name is None:
+            self._declare_case(self._case_name_of(db_path), db_path.parent)
         self._bind_case_to_panels(db_path)
         self._update_window_title()
         try:
@@ -875,29 +980,69 @@ class MainController(QObject):
         except Exception:  # noqa: BLE001 - the summary is feedback, not run correctness.
             log.debug("Could not read case summary", exc_info=True)
             self.case_summary_label.setText(f"Case: {self._case_name_of(db_path)}")
+            self._sync_case_bar_buttons()
             return
         summary = format_case_summary(self._case_name_of(db_path), counts)
         self.case_summary_label.setText(summary)
         log.info(summary)
+        self._sync_case_bar_buttons()
 
     def _clear_active_case(self) -> None:
-        """Detach the open case: reset the context, the window title and the summary line."""
+        """Detach the persisted case: reset the context, window title and summary line."""
         self._active_case_db = None
         self._update_window_title()
-        self.case_summary_label.setText("No case open")
+        self._sync_case_bar()
 
     def _new_case(self) -> None:
-        """Start a fresh case: clear the case name and detach the open case, keeping the output
-        folder and presets so the operator can build a new case in place."""
-        self.case_name_edit.clear()
-        self._clear_active_case()
+        """Declare a new case: ask for its name, then the folder to write it in.
+
+        The pair replaces the old "Case name" and "Output folder" fields — the case database
+        is ``<folder>/<name>.matlas.sqlite`` exactly as before, so this only moves where the
+        two values are entered. Either dialog can be cancelled, and nothing changes until
+        both have been answered: a half-declared case would be worse than none.
+
+        Pointing a new case at a folder that already holds one of the same name adopts it
+        rather than refusing, because a run against an existing case database appends to it
+        (pipeline.process create-or-append). Adopting it up front means the summary and the
+        analysis tabs show the case's real contents instead of pretending it is empty."""
+        name, accepted = QInputDialog.getText(
+            self.window, "New case", "Case name:", text=self._case_name or "",
+        )
+        if not accepted:
+            return
+        name = name.strip()
+        if not name:
+            self._show_error("Enter a case name.")
+            return
+        if invalid := set(name) & set(_CASE_NAME_FORBIDDEN):
+            # The name becomes a filename, so a separator would silently redirect the case
+            # database out of the chosen folder.
+            self._show_error(
+                f"A case name cannot contain {' '.join(sorted(invalid))}"
+            )
+            return
+        folder = QFileDialog.getExistingDirectory(
+            self.window, "Choose the case folder",
+            str(self._case_output_dir or Path.cwd()),
+        )
+        if not folder:
+            return
+        self._declare_case(name, Path(folder))
+        db_path = self._case_db_path()
+        if db_path is not None and db_path.is_file() and is_matlas_run_db(db_path):
+            self._activate_case(db_path)
+            log.info(f"Case {name!r} already exists in {folder}; a run will append to it")
+        else:
+            self._sync_case_bar()
+            log.info(f"New case {name!r} in {folder}")
 
     def _open_case(self) -> None:
-        """Open an existing case database: bind it as the active case and fill the case name /
-        output folder so a subsequent run APPENDS to it (pipeline.process create-or-append)."""
+        """Open an existing case database, taking the case name and folder from its path.
+
+        A subsequent run APPENDS to it (pipeline.process create-or-append)."""
         path, _ = QFileDialog.getOpenFileName(
             self.window, "Open a case database",
-            self.output_edit.text() or str(Path.cwd()),
+            str(self._case_output_dir or Path.cwd()),
             "mATLAS case database (*.matlas.sqlite);;All files (*)",
         )
         if not path:
@@ -906,10 +1051,53 @@ class MainController(QObject):
         if not is_matlas_run_db(db_path):
             self._show_error(f"Not a mATLAS case database: {db_path.name}")
             return
-        self.output_edit.setText(str(db_path.parent))
-        self.case_name_edit.setText(self._case_name_of(db_path))
+        self._declare_case(self._case_name_of(db_path), db_path.parent)
         self._activate_case(db_path)
         log.info(f"Opened case {db_path}")
+
+    def _close_case(self) -> None:
+        """Close the open case. The case database on disk is left untouched."""
+        name = self._case_name
+        self._case_name = None
+        self._case_output_dir = None
+        self._clear_active_case()
+        if name:
+            log.info(f"Closed case {name!r}")
+
+    def _declare_case(self, name: str, output_dir: Path) -> None:
+        """Record the case identity a run will write to, without touching the disk."""
+        self._case_name = name
+        self._case_output_dir = output_dir
+
+    def _case_db_path(self) -> Path | None:
+        """Where this case's database lives (or will live); None when no case is open."""
+        if self._case_name is None or self._case_output_dir is None:
+            return None
+        return self._case_output_dir / f"{self._case_name}.matlas.sqlite"
+
+    def _sync_case_bar_buttons(self) -> None:
+        """Show either the two open-a-case buttons or the single Close case button.
+
+        Only one of these states is ever actionable, so showing both at once would offer a
+        choice that does not apply. Kept separate from the summary text because
+        _activate_case writes its own richer summary and must not have it overwritten."""
+        has_case = self._case_name is not None
+        self.new_case_button.setVisible(not has_case)
+        self.open_case_button.setVisible(not has_case)
+        self.close_case_button.setVisible(has_case)
+        accessibility.update_case_bar_accessibility(self)
+
+    def _sync_case_bar(self) -> None:
+        """Refresh the buttons AND the summary line for a case with no database yet."""
+        self._sync_case_bar_buttons()
+        if self._case_name is None:
+            self.case_summary_label.setText("No case open")
+        elif self._active_case_db is None:
+            # Declared but not yet written: say so plainly rather than showing zero counts,
+            # which would read as "this case ran and matched nothing".
+            self.case_summary_label.setText(
+                f"Case {self._case_name!r} (new) \u2192 {self._case_output_dir}"
+            )
 
     def _bind_case_to_panels(self, db_path: Path) -> None:
         """Point the Database-Edit and Spatiotemporal tabs at the active case DB, so the two
@@ -977,10 +1165,8 @@ class MainController(QObject):
 
     def _clear_form(self) -> None:
         self.source_edit.clear()
-        self.output_edit.clear()
-        self.case_name_edit.clear()
-        # Clearing the form closes the active case: reset the context, title and summary line.
-        self._clear_active_case()
+        # Clearing the form closes the case: reset the identity, context, title and summary.
+        self._close_case()
         self.entity_edit.clear()
         self.concerns_edit.clear()
         self.presets_path_edit.setText(str(Path.cwd() / "presets"))
@@ -990,7 +1176,6 @@ class MainController(QObject):
         self.log_level_combo.setCurrentText("INFO")
         for action in self._export_actions.values():
             action.setChecked(False)
-        self._sync_output_mode()
         self.auto_preset_check.setChecked(True)
         self._sync_single_preset_notice()
         self._set_status("Idle")

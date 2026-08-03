@@ -162,8 +162,9 @@ def remove_gui_log_handler(handler: logging.Handler | None) -> None:
 
     WHY this must be called on window close/teardown: the handler forwards records to the log
     widget for the WHOLE process, so a record emitted after the window (and its ``log_edit``)
-    is torn down would call ``append`` on a deleted Qt widget and crash. Removing it on close
-    mirrors the test fixture's teardown, which the running app otherwise lacked.
+    is torn down would call ``append`` on a deleted Qt widget and crash. Both the running app
+    and the GUI tests reach this through ``MainController.shutdown``, which detaches the
+    handler LAST so records emitted while the workers drain still reach the log panel.
     """
     if handler is not None:
         logging.getLogger().removeHandler(handler)

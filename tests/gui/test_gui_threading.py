@@ -24,17 +24,13 @@ import pytest
 pytest.importorskip("PySide6", reason="GUI extra not installed")
 
 from PySide6.QtCore import QThread
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QWidget
 
 from gui.db_edit_controller import DbEditController
 from gui.spatiotemporal_controller import SpatiotemporalController
 from gui.worker import TaskRunner
 from tests.app.test_edit_api import _build_persisted_db
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from tests.gui.conftest import drain
 
 
 def _pump_until(app, predicate, timeout: float = 5.0) -> None:
@@ -86,6 +82,7 @@ def test_async_open_lands_on_gui_thread_and_edit_does_not_raise(app, tmp_path) -
     runner.wait_all()
     controller._api.close()
     parent.deleteLater()
+    drain(app)   # run that delete NOW rather than at some later timer tick
 
 
 def test_pending_panel_query_is_waited_at_quit(app, tmp_path) -> None:
@@ -110,3 +107,4 @@ def test_pending_panel_query_is_waited_at_quit(app, tmp_path) -> None:
 
     runner.wait_all()
     parent.deleteLater()
+    drain(app)   # run that delete NOW rather than at some later timer tick

@@ -5,30 +5,29 @@
   <property name="windowTitle">
    <string>Model ATLAS Transformer</string>
   </property>
-  <property name="minimumSize">
-   <size>
-    <width>920</width>
-    <height>820</height>
-   </size>
-  </property>
+  <!-- No explicit minimumSize on purpose. Qt already refuses to shrink a window below its
+       layout's minimumSizeHint; declaring a smaller constant here overrode that guarantee,
+       which is what let the window be sized into the state where the action row was drawn
+       on top of the preset card. Leaving it unset also means the floor tracks the user's
+       font size instead of being pinned to one machine's metrics. -->
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="mainLayout">
     <property name="leftMargin">
-     <number>14</number>
+     <number>16</number>
     </property>
     <property name="topMargin">
-     <number>14</number>
+     <number>8</number>
     </property>
     <property name="rightMargin">
-     <number>14</number>
+     <number>16</number>
     </property>
     <property name="bottomMargin">
-     <number>14</number>
+     <number>10</number>
     </property>
     <item>
      <layout class="QHBoxLayout" name="appHeaderLayout">
       <property name="spacing">
-       <number>8</number>
+       <number>6</number>
       </property>
       <item>
        <spacer name="headerLeftSpacer">
@@ -120,8 +119,26 @@
         <string>Transform</string>
        </attribute>
        <layout class="QVBoxLayout" name="transformTabLayout">
+        <property name="leftMargin">
+         <number>14</number>
+        </property>
+        <property name="topMargin">
+         <number>10</number>
+        </property>
+        <property name="rightMargin">
+         <number>14</number>
+        </property>
+        <property name="bottomMargin">
+         <number>10</number>
+        </property>
+        <property name="spacing">
+         <number>8</number>
+        </property>
     <item>
      <layout class="QHBoxLayout" name="caseBarLayout">
+      <property name="spacing">
+       <number>8</number>
+      </property>
       <item>
        <widget class="QPushButton" name="newCaseButton">
         <property name="toolTip">
@@ -139,6 +156,16 @@
         </property>
         <property name="text">
          <string>Open case...</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="closeCaseButton">
+        <property name="toolTip">
+         <string>Close the open case; the case database on disk is left untouched.</string>
+        </property>
+        <property name="text">
+         <string>Close case</string>
         </property>
        </widget>
       </item>
@@ -170,6 +197,12 @@
        <string>Inputs</string>
       </property>
       <layout class="QGridLayout" name="inputGrid">
+       <property name="horizontalSpacing">
+        <number>8</number>
+       </property>
+       <property name="verticalSpacing">
+        <number>5</number>
+       </property>
        <item row="0" column="0">
         <widget class="QLabel" name="sourceLabel">
          <property name="text">
@@ -180,7 +213,7 @@
        <item row="0" column="1">
         <widget class="DragDropLineEdit" name="sourceEdit">
          <property name="placeholderText">
-          <string>CSV, Excel, SQLite, ZIP, or folder</string>
+          <string>CSV, Excel, XML, SQLite, ZIP, or folder</string>
          </property>
         </widget>
        </item>
@@ -207,6 +240,9 @@
        </item>
        <item row="1" column="1" colspan="3">
         <layout class="QHBoxLayout" name="identityLayout">
+         <property name="spacing">
+          <number>10</number>
+         </property>
          <item>
           <widget class="QLabel" name="entityLabel">
            <property name="text">
@@ -251,17 +287,20 @@
          </property>
         </widget>
        </item>
+       <!-- File-then-folder, matching the Source row above: the two browse buttons sit in
+            the same grid columns on every row, so the pair is in the same place and the
+            same order wherever it appears. -->
        <item row="2" column="2">
-        <widget class="QPushButton" name="presetsFolderButton">
+        <widget class="QPushButton" name="presetsFileButton">
          <property name="text">
-          <string>Folder...</string>
+          <string>YAML...</string>
          </property>
         </widget>
        </item>
        <item row="2" column="3">
-        <widget class="QPushButton" name="presetsFileButton">
+        <widget class="QPushButton" name="presetsFolderButton">
          <property name="text">
-          <string>YAML...</string>
+          <string>Folder...</string>
          </property>
         </widget>
        </item>
@@ -278,23 +317,29 @@
           <number>18</number>
          </property>
          <item>
-          <widget class="QLabel" name="caseNameLabel">
+          <widget class="QLabel" name="additionalExportLabel">
            <property name="text">
-            <string>Case name</string>
+            <string>Additional export</string>
            </property>
           </widget>
          </item>
          <item>
-          <widget class="QLineEdit" name="caseNameEdit">
-           <property name="placeholderText">
-            <string>case identity (defaults to 'merged')</string>
+          <widget class="QToolButton" name="additionalExportButton">
+           <property name="toolTip">
+            <string>Select additional export formats to write alongside the CSV.</string>
+           </property>
+           <property name="text">
+            <string>Additional export</string>
            </property>
           </widget>
          </item>
          <item>
           <widget class="QCheckBox" name="dumpFullUfdrCheck">
            <property name="text">
-            <string/>
+            <string>Dump full &amp;UFDR</string>
+           </property>
+           <property name="toolTip">
+            <string>Run the standalone UFDR parser instead of the transform pipeline: dump every Cellebrite model to CSV.</string>
            </property>
            <property name="enabled">
             <bool>false</bool>
@@ -302,26 +347,15 @@
           </widget>
          </item>
          <item>
-          <widget class="QLabel" name="dumpFullUfdrLabel">
-           <property name="text">
-            <string>Dump full UFDR</string>
-           </property>
-          </widget>
-         </item>
-         <item>
           <widget class="QCheckBox" name="includeSourceColumnsCheck">
            <property name="text">
-            <string/>
+            <string>&amp;Include source columns</string>
+           </property>
+           <property name="toolTip">
+            <string>Carry the untouched source columns through to the output alongside the mapped fields.</string>
            </property>
            <property name="checked">
             <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="includeSourceColumnsLabel">
-           <property name="text">
-            <string>Include source columns</string>
            </property>
           </widget>
          </item>
@@ -341,52 +375,17 @@
         </layout>
        </item>
        <item row="4" column="0">
-        <widget class="QLabel" name="outputLabel">
-         <property name="text">
-          <string>Output folder</string>
-         </property>
-        </widget>
-       </item>
-       <item row="4" column="1">
-        <widget class="DragDropLineEdit" name="outputEdit">
-         <property name="placeholderText">
-          <string>folder (the case database is written inside)</string>
-         </property>
-        </widget>
-       </item>
-       <item row="4" column="2" colspan="2">
-        <widget class="QPushButton" name="outputButton">
-         <property name="text">
-          <string>Folder...</string>
-         </property>
-        </widget>
-       </item>
-       <item row="5" column="0">
         <widget class="QLabel" name="optionsLabel">
          <property name="text">
           <string>Options</string>
          </property>
         </widget>
        </item>
-       <item row="5" column="1" colspan="3">
+       <item row="4" column="1" colspan="3">
         <layout class="QHBoxLayout" name="loggingOptionsLayout">
-         <item>
-          <widget class="QLabel" name="additionalExportLabel">
-           <property name="text">
-            <string>Additional export</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QToolButton" name="additionalExportButton">
-           <property name="toolTip">
-            <string>Select additional export formats to write alongside the CSV.</string>
-           </property>
-           <property name="text">
-            <string>Additional export</string>
-           </property>
-          </widget>
-         </item>
+         <property name="spacing">
+          <number>10</number>
+         </property>
          <item>
           <widget class="QLabel" name="traceabilityOptionLabel">
            <property name="text">
@@ -462,26 +461,45 @@
      <property name="title">
       <string>Presets Selection</string>
      </property>
-      <property name="minimumSize">
-       <size>
-        <width>0</width>
-        <height>300</height>
-       </size>
+      <!-- A group box does not expand by default, which would have pinned the picker to
+           its minimum at every window size and handed all the slack to the log. Allowing
+           it to expand lets the 1:2 split against the log take effect, so enlarging the
+           window shows more presets as well as more log. -->
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
       </property>
       <layout class="QVBoxLayout" name="presetLayout">
        <item>
         <layout class="QHBoxLayout" name="presetModeRow">
+         <property name="spacing">
+          <number>10</number>
+         </property>
+         <!-- The search field shares this row rather than owning one of its own: it filters
+              the Available list directly below it, so it stays next to what it acts on
+              while giving the lists back a full row of height. -->
          <item>
-         <widget class="QLabel" name="presetModeLabel">
-           <property name="text">
-            <string>Auto apply</string>
+          <widget class="QLineEdit" name="presetSearchEdit">
+           <property name="minimumSize">
+            <size>
+             <width>190</width>
+             <height>0</height>
+            </size>
+           </property>
+           <property name="placeholderText">
+            <string>Search preset names...</string>
            </property>
           </widget>
          </item>
          <item>
           <widget class="QCheckBox" name="autoPresetCheck">
            <property name="text">
-            <string/>
+            <string>&amp;Auto apply</string>
+           </property>
+           <property name="toolTip">
+            <string>Match presets to the source automatically instead of using the manual selection.</string>
            </property>
            <property name="checked">
             <bool>true</bool>
@@ -539,28 +557,64 @@
         </layout>
        </item>
        <item>
-        <widget class="DragDropLineEdit" name="presetSearchEdit">
-         <property name="placeholderText">
-          <string>Search preset names...</string>
-         </property>
-        </widget>
-       </item>
-       <item>
         <layout class="QHBoxLayout" name="presetListsRow">
+         <property name="spacing">
+          <number>10</number>
+         </property>
          <item>
-          <widget class="QListWidget" name="availablePresetList">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>190</height>
-            </size>
+          <layout class="QVBoxLayout" name="availablePresetColumn">
+           <property name="spacing">
+            <number>4</number>
            </property>
-          </widget>
+           <item>
+            <widget class="QLabel" name="availablePresetHeaderLabel">
+             <property name="text">
+              <string>Available</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QListWidget" name="availablePresetList">
+             <!-- About three and a half rows: enough to show the list is scrollable
+                  without the picker dominating the page. -->
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>100</height>
+              </size>
+             </property>
+            </widget>
+           </item>
+          </layout>
          </item>
          <item>
           <layout class="QVBoxLayout" name="presetButtonsLayout">
+           <property name="spacing">
+            <number>6</number>
+           </property>
+           <item>
+            <!-- Fixed shim standing in for the two column headers, so the transfer buttons
+                 line up with the top of the lists rather than with their labels. -->
+            <spacer name="presetButtonsHeaderShim">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+             <property name="sizeType">
+              <enum>QSizePolicy::Fixed</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>22</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
            <item>
             <widget class="QPushButton" name="addPresetButton">
+             <property name="toolTip">
+              <string>Move the highlighted presets into the selected list.</string>
+             </property>
              <property name="text">
               <string>Add &gt;</string>
              </property>
@@ -568,6 +622,9 @@
            </item>
            <item>
             <widget class="QPushButton" name="removePresetButton">
+             <property name="toolTip">
+              <string>Take the highlighted presets out of the selected list.</string>
+             </property>
              <property name="text">
               <string>&lt; Remove</string>
              </property>
@@ -575,6 +632,9 @@
            </item>
            <item>
             <widget class="QPushButton" name="addAllPresetsButton">
+             <property name="toolTip">
+              <string>Move every listed preset into the selected list.</string>
+             </property>
              <property name="text">
               <string>Add all &gt;&gt;</string>
              </property>
@@ -582,6 +642,9 @@
            </item>
            <item>
             <widget class="QPushButton" name="removeAllPresetsButton">
+             <property name="toolTip">
+              <string>Empty the selected list.</string>
+             </property>
              <property name="text">
               <string>&lt;&lt; Remove all</string>
              </property>
@@ -595,7 +658,7 @@
              <property name="sizeHint" stdset="0">
               <size>
                <width>20</width>
-               <height>40</height>
+               <height>10</height>
               </size>
              </property>
             </spacer>
@@ -603,14 +666,30 @@
           </layout>
          </item>
          <item>
-          <widget class="QListWidget" name="selectedPresetList">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>190</height>
-            </size>
+          <layout class="QVBoxLayout" name="selectedPresetColumn">
+           <property name="spacing">
+            <number>4</number>
            </property>
-          </widget>
+           <item>
+            <widget class="QLabel" name="selectedPresetHeaderLabel">
+             <property name="text">
+              <string>Selected</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QListWidget" name="selectedPresetList">
+             <!-- About three and a half rows: enough to show the list is scrollable
+                  without the picker dominating the page. -->
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>100</height>
+              </size>
+             </property>
+            </widget>
+           </item>
+          </layout>
          </item>
         </layout>
        </item>
@@ -619,6 +698,9 @@
     </item>
     <item>
      <layout class="QHBoxLayout" name="actionsLayout">
+      <property name="spacing">
+       <number>8</number>
+      </property>
       <item>
        <widget class="QPushButton" name="clearLogButton">
         <property name="text">
@@ -693,6 +775,12 @@
     </item>
     <item>
      <widget class="QTextEdit" name="logEdit">
+      <property name="minimumSize">
+       <size>
+        <width>0</width>
+        <height>84</height>
+       </size>
+      </property>
       <property name="readOnly">
        <bool>true</bool>
       </property>

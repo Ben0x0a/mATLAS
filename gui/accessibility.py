@@ -4,7 +4,7 @@ Defines:    configure_accessibility (accessible names/descriptions, label buddie
             shortcuts, and keyboard tab order for the main window, its tab shell, and
             the Transform form), configure_status_label / set_status /
             handle_status_resize / refresh_status_label (elided status label with a
-            stable accessible description), and update_output_accessibility.
+            stable accessible description), and update_case_bar_accessibility.
 Used by:    gui.app (MainController calls these during window construction).
 Depends on: PySide6 widgets only; reads controller attributes bound in gui.app.
 """
@@ -71,38 +71,38 @@ def configure_accessibility(controller: Any) -> None:
         "Placeholder for the spatiotemporal analysis tools; arrives in a later update."
     )
 
+    # The three check boxes carry their own text (and their own &mnemonic), so they need no
+    # buddy label: one accessible node per control, and the whole caption is a click target.
     for widget_name, buddy in (
         ("sourceLabel", controller.source_edit),
         ("identityLabel", controller.entity_edit),
         ("entityLabel", controller.entity_edit),
         ("concernsLabel", controller.concerns_edit),
         ("presetsPathLabel", controller.presets_path_edit),
-        ("caseNameLabel", controller.case_name_edit),
-        ("dumpFullUfdrLabel", controller.dump_full_ufdr_check),
-        ("outputLabel", controller.output_edit),
         ("optionsLabel", controller.traceability_combo),
         ("traceabilityOptionLabel", controller.traceability_combo),
         ("logLevelLabel", controller.log_level_combo),
-        ("presetModeLabel", controller.auto_preset_check),
+        ("availablePresetHeaderLabel", controller.available_preset_list),
+        ("selectedPresetHeaderLabel", controller.selected_preset_list),
     ):
         if (label := _label(controller, widget_name)) is not None:
             label.setBuddy(buddy)
 
     if (title := _label(controller, "appTitleLabel")) is not None:
         title.setAccessibleName("mATLAS Transformer title")
-    for step, text in {
-        2: "Transformation step 1, standby robot",
-        3: "Transformation step 2, robot activating",
-        4: "Transformation step 3, robot compacting",
-        5: "Transformation step 4, mattress forming",
-        6: "Transformation step 5, bed form",
-        7: "Transformation step 6, complete mattress",
-    }.items():
+    # The six header frames are decorative: they repeat, in pictures, what the title next to
+    # them already says. Naming each one made a screen reader announce six mascot
+    # descriptions before the user reached a single control, so they are silenced instead —
+    # no information is lost, because none of them carries any.
+    for step in range(2, 8):
         if (image := _label(controller, f"headerImage{step}")) is not None:
-            image.setAccessibleName(text)
+            image.setAccessibleName("")
+            image.setAccessibleDescription("")
 
     controller.source_edit.setAccessibleName("Source path")
-    controller.source_edit.setAccessibleDescription("Input CSV, Excel, SQLite, ZIP file, or folder to process.")
+    controller.source_edit.setAccessibleDescription(
+        "Input CSV, Excel, XML, SQLite, ZIP, or UFDR file, or a folder, to process."
+    )
     controller.source_file_button.setAccessibleName("Browse for source file")
     controller.source_file_button.setAccessibleDescription("Choose a source file for processing.")
     controller.source_folder_button.setAccessibleName("Browse for source folder")
@@ -116,16 +116,16 @@ def configure_accessibility(controller: Any) -> None:
         "to take the value from that source field per row."
     )
 
-    controller.case_name_edit.setAccessibleName("Case name")
-    controller.case_name_edit.setAccessibleDescription(
-        "Name of the case: the case database is written as <name>.matlas.sqlite in the output "
-        "folder. Running against an existing case database appends to it. Defaults to 'merged'.")
     controller.new_case_button.setAccessibleName("New case")
     controller.new_case_button.setAccessibleDescription(
-        "Start a fresh case: clear the case name and detach the open case.")
+        "Create a case: asks for a case name, then the folder to write it in. The case "
+        "database is written there as <name>.matlas.sqlite.")
     controller.open_case_button.setAccessibleName("Open case")
     controller.open_case_button.setAccessibleDescription(
         "Open an existing case database; a subsequent run appends to it.")
+    controller.close_case_button.setAccessibleName("Close case")
+    controller.close_case_button.setAccessibleDescription(
+        "Close the open case. The case database on disk is left untouched.")
     controller.case_summary_label.setAccessibleName("Case summary")
     controller.case_summary_label.setAccessibleDescription("Running totals of the open case.")
 
@@ -138,6 +138,12 @@ def configure_accessibility(controller: Any) -> None:
     controller.dump_full_ufdr_check.setAccessibleDescription(
         "When checked, switch to the standalone UFDR parser, which dumps every Cellebrite "
         "model to CSV. The centre title changes to UFDR Parser."
+    )
+
+    controller.include_source_columns_check.setAccessibleName("Include source columns")
+    controller.include_source_columns_check.setAccessibleDescription(
+        "When checked, the untouched source columns are carried through to the output "
+        "alongside the mapped fields."
     )
 
     controller.traceability_combo.setAccessibleName("Traceability format")
@@ -189,17 +195,22 @@ def configure_accessibility(controller: Any) -> None:
 
     _configure_shortcuts(controller)
     _configure_tab_order(controller)
-    update_output_accessibility(controller)
+    update_case_bar_accessibility(controller)
 
 
-def update_output_accessibility(controller: Any) -> None:
-    # The output is a folder; the case database is written inside it, with any other export
-    # (one file per format) beside it.
-    controller.output_button.setAccessibleName("Choose output folder")
-    controller.output_button.setAccessibleDescription("Choose the output folder.")
-    controller.output_edit.setAccessibleName("Output folder path")
-    controller.output_edit.setAccessibleDescription(
-        "Folder that receives the case database and every export (one file per format).")
+def update_case_bar_accessibility(controller: Any) -> None:
+    """Describe the case bar's current state on the summary label.
+
+    The bar swaps which buttons exist as a case opens and closes. A screen reader announces
+    that change only if something carries the new state, and the visible summary line is the
+    natural place: it is already the bar's status text."""
+    if getattr(controller, "_case_name", None) is None:
+        controller.case_summary_label.setAccessibleDescription(
+            "No case is open. Use New case or Open case to start one.")
+        return
+    controller.case_summary_label.setAccessibleDescription(
+        f"Case {controller._case_name} is open. Its database and every export "
+        f"(one file per format) are written to {controller._case_output_dir}.")
 
 
 def _label(controller: Any, name: str) -> QLabel | None:
@@ -226,30 +237,38 @@ def _configure_tab_order(controller: Any) -> None:
         controller.tab_widget,
         controller.new_case_button,
         controller.open_case_button,
+        controller.close_case_button,
         controller.source_edit,
         controller.source_file_button,
         controller.source_folder_button,
         controller.entity_edit,
         controller.concerns_edit,
         controller.presets_path_edit,
-        controller.presets_folder_button,
+        # YAML before Folder, matching the on-screen order of the pair.
         controller.presets_file_button,
-        controller.case_name_edit,
-        controller.output_edit,
-        controller.output_button,
+        controller.presets_folder_button,
+        controller.additional_export_button,
+        controller.dump_full_ufdr_check,
+        controller.include_source_columns_check,
         controller.traceability_combo,
         controller.log_level_combo,
+        # The search field now leads the preset row on screen, so it leads here too:
+        # tab order that disagrees with reading order is disorienting for anyone using the
+        # keyboard, and doubly so for a screen-reader user with no layout to fall back on.
+        controller.preset_search_edit,
         controller.auto_preset_check,
         controller.reload_presets_button,
         controller.load_profile_button,
         controller.save_profile_button,
-        controller.preset_search_edit,
         controller.available_preset_list,
         controller.add_preset_button,
         controller.remove_preset_button,
+        controller.add_all_presets_button,
+        controller.remove_all_presets_button,
         controller.selected_preset_list,
         controller.clear_log_button,
         controller.clear_form_button,
+        controller.open_error_report_button,
         controller.open_output_folder_button,
         controller.run_button,
         controller.log_edit,
