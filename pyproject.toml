@@ -47,22 +47,27 @@ matlas = "launcher.cli:run"
 matlas-gui = "launcher.gui:run"
 ufdr-parser = "ufdr_parser.cli:main"
 
-# Explicit package list: the repo uses a flat layout with three top-level
+# Explicit package list: the repo uses a flat layout with four top-level
 # packages. Auto-discovery refuses flat-layout multi-package projects, so we
-# list them here.
+# list them here. Keep this in step with the actual package tree (dirs holding
+# an __init__.py) — a stale entry fails the editable build with
+# "package directory '...' does not exist".
 [tool.setuptools]
 packages = [
     "gui",
     "gui.widgets",
     "launcher",
     "model_atlas",
-    "model_atlas.model",
+    "model_atlas.analyze",
+    "model_atlas.app",
+    "model_atlas.core",
+    "model_atlas.export",
+    "model_atlas.ingest",
+    "model_atlas.ingest.readers",
+    "model_atlas.ingest.readers.xml_specifics",
+    "model_atlas.integrate",
     "model_atlas.presets",
-    "model_atlas.sources",
-    "model_atlas.sources.readers",
-    "model_atlas.sources.readers.xml_specifics",
     "model_atlas.sqlite",
-    "model_atlas.transforms",
     "ufdr_parser",
     "ufdr_parser.model_signatures",
 ]
