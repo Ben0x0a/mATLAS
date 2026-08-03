@@ -28,12 +28,12 @@ Reused resolvers
 ``is_missing`` / ``resolve_ref`` / ``resolve_field`` / ``resolve_cond`` /
 ``resolve_param`` / ``preset_values`` are IMPORTED from ``presets.resolve`` (their
 settled home) rather than re-ported. WHY: they are pure functions of their arguments
-(row dict + parsed refs + an ``entity``/``linked_entity`` param holder — no store, no
+(row dict + parsed refs + an ``entity``/``concerns`` param holder — no store, no
 module state), and the conditional / template semantics —
 first-match-wins, ``NA_SENTINEL`` on no-match, empty-rendered missing placeholders —
 live inside them. Importing keeps them single-sourced; a re-port would create a second
 copy that could silently drift. The ``env`` they take is duck-typed here by
-``_ParamEnv`` (only ``.entity`` / ``.linked_entity`` are read).
+``_ParamEnv`` (only ``.entity`` / ``.concerns`` are read).
 
 The old→new field mapping (cross-check table of run_db_schema.md)
 -----------------------------------------------------------------
@@ -41,7 +41,7 @@ The old→new field mapping (cross-check table of run_db_schema.md)
   normalised ``identifier`` and the definitive ``identifier_type`` are the entity
   normaliser's job: assemble leaves ``identifier`` NULL and ``concerns_uid`` NULL).
 - ``entity_type``       → ``entity.type`` (default ``unknown`` — the column is NOT NULL).
-- ``linked_entity``     → ``entity.concerns`` (+ ``concerns_origin``).
+- ``concerns``     → ``entity.concerns`` (+ ``concerns_origin``).
 - ``position_type``     → the components' ``spatial_role`` (its semantics
   always were the place's role; the old language carries ONE role per assertion, so it
   is applied to every component of that expression — one value-group per assertion).
@@ -120,7 +120,7 @@ from model_atlas.presets.resolve import (
 # --- the extended field vocabulary (identifier-string constants) ------------
 # One constant per NEW L1 mapping target; suffixed _NAME because each is a field-name
 # identifier, not a value. The old names they join are read straight from the resolved
-# holder by their historic spelling (entity, entity_type, linked_entity, position_type,
+# holder by their historic spelling (entity, entity_type, concerns, position_type,
 # position_source, temporal_source, deleted, source_label, the three link columns).
 
 ENTITY_ROLE_NAME = "entity_role"
@@ -149,7 +149,7 @@ RAW_SOURCE_PATH_NAME = "raw_source_path"   # legacy alias of data_source
 # Old field names read from the resolved holder (their new homes are in the header).
 _ENTITY_NAME = "entity"
 _ENTITY_TYPE_NAME = "entity_type"
-_LINKED_ENTITY_NAME = "linked_entity"
+_CONCERNS_NAME = "concerns"
 _SPATIAL_ROLE_NAME = "position_type"       # position_type IS the spatial role
 _SPATIAL_SOURCE_NAME = "position_source"
 _TEMPORAL_SOURCE_NAME = "temporal_source"
@@ -179,11 +179,11 @@ _EPOCH_REFERENTIAL: dict[str, str] = {
 @dataclass(frozen=True)
 class _ParamEnv:
     """Duck-typed stand-in for the old engine's ``BuildEnv`` in the reused resolvers:
-    ``_resolve_ref`` reads exactly ``.entity`` / ``.linked_entity`` for ``param(...)``
+    ``_resolve_ref`` reads exactly ``.entity`` / ``.concerns`` for ``param(...)``
     refs and nothing else, so this narrow holder is the whole contract."""
 
     entity: str | None = None
-    linked_entity: str | None = None
+    concerns: str | None = None
 
 
 @dataclass
@@ -303,7 +303,7 @@ def assemble_source(
     source_file_path: str | None = None,
     selector: InputSelector | None = None,
     entity: str | None = None,
-    linked_entity: str | None = None,
+    concerns: str | None = None,
     activity_ordinals: dict[str, int] | None = None,
 ) -> AssembleReport:
     """Assemble one already-L0-written source's records under ONE matched preset.
@@ -315,7 +315,7 @@ def assemble_source(
     components → the assertion referencing them). ``PRAGMA foreign_keys = ON`` makes a
     missing parent raise immediately, so the layering is enforced, not assumed.
 
-    ``entity`` / ``linked_entity`` are the run-level operator params (they OVERRIDE the
+    ``entity`` / ``concerns`` are the run-level operator params (they OVERRIDE the
     preset mapping and set the ``*_origin`` columns to ``operator_param``); either
     may itself be a call-form reference (``field(...)``) resolved per row.
 
@@ -361,13 +361,13 @@ def assemble_source(
         "path": source_file_path,
     }
 
-    base_env = _ParamEnv(entity=entity, linked_entity=linked_entity)
+    base_env = _ParamEnv(entity=entity, concerns=concerns)
     entity_expr = parse_param_expr(entity)
-    linked_entity_expr = parse_param_expr(linked_entity)
+    concerns_expr = parse_param_expr(concerns)
 
     # entity_origin / concerns_origin: who specified the value.
     entity_origin = V.Origin.OPERATOR_PARAM if entity is not None else V.Origin.PRESET_MAPPED
-    operator_concerns = linked_entity is not None
+    operator_concerns = concerns is not None
 
     # Which template fields feed the two resolution modes (classified once, not per row).
     common_scalar, common_verbatim = _split_specs(preset.common)
@@ -376,15 +376,15 @@ def assemble_source(
         row = record.fields
         raw_record_id = ids.raw_record_id(source_id, record.line_no)
 
-        # Per-row operator params: a call-form --entity/--linked-entity resolves against
+        # Per-row operator params: a call-form --entity/--concerns resolves against
         # THIS record; a plain literal is used verbatim for every row.
         row_env = base_env
-        if entity_expr is not None or linked_entity_expr is not None:
+        if entity_expr is not None or concerns_expr is not None:
             row_env = replace(
                 base_env,
                 entity=_resolve_param(entity_expr, entity, row, resolve, file_values, base_env, preset_values),
-                linked_entity=_resolve_param(
-                    linked_entity_expr, linked_entity, row, resolve, file_values, base_env, preset_values),
+                concerns=_resolve_param(
+                    concerns_expr, concerns, row, resolve, file_values, base_env, preset_values),
             )
 
         shared: dict[str, Any] = {}
@@ -407,7 +407,7 @@ def assemble_source(
                     shared_components.append((spec.model_field, source_col, _text(value)))
             else:
                 shared[spec.model_field] = value
-        # Run-level entity / linked_entity OVERRIDE the preset value whenever the operator
+        # Run-level entity / concerns OVERRIDE the preset value whenever the operator
         # supplied one — INCLUDING an empty string or a call-form that resolves to nothing.
         # WHY apply on ``entity is not None`` (the operator param) rather than truthiness:
         # entity_origin / concerns_origin are tagged OPERATOR_PARAM on exactly that test, so
@@ -415,8 +415,8 @@ def assemble_source(
         # preset value it never actually replaced (origin lies about provenance).
         if entity is not None:
             shared[_ENTITY_NAME] = row_env.entity
-        if linked_entity is not None:
-            shared[_LINKED_ENTITY_NAME] = row_env.linked_entity
+        if concerns is not None:
+            shared[_CONCERNS_NAME] = row_env.concerns
 
         # data_source at SOURCE grain: resolved once, from the first record
         # that yields one, and only REPORTED — the source row is the L0 writer's to set.
@@ -517,7 +517,7 @@ def _split_specs(specs: Sequence[FieldSpec]) -> tuple[list[FieldSpec], list[Fiel
     contract; a preset that attaches a pipe/unit to the field must NOT convert it here).
     Everything else — links, roles, kinds, context, deleted, labels — resolves through
     the full old tail, where a lookup pipe maps tokens rather than converting values."""
-    verbatim_names = {_ENTITY_NAME, _LINKED_ENTITY_NAME,
+    verbatim_names = {_ENTITY_NAME, _CONCERNS_NAME,
                       TIME_ACCURACY_US_LOWER_NAME, TIME_ACCURACY_US_UPPER_NAME}
     scalar: list[FieldSpec] = []
     verbatim: list[FieldSpec] = []
@@ -601,7 +601,7 @@ def _emit_assertion(
     raw_identifier = _text(flat.get(_ENTITY_NAME))
     identifier_type = _norm(flat.get(IDENTIFIER_TYPE_NAME)) or V.IdentifierType.NONE.value
     entity_type = _norm(flat.get(_ENTITY_TYPE_NAME)) or V.EntityType.UNKNOWN.value
-    concerns = _text(flat.get(_LINKED_ENTITY_NAME))
+    concerns = _text(flat.get(_CONCERNS_NAME))
     if concerns is None:
         concerns_origin = None
     else:

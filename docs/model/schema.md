@@ -237,7 +237,7 @@ One CSV line per assertion — an assertion exists only per
 *placement*, so the line count is the placement count (a one-legged CDR is 1 line,
 never 3; a 20-recipient message is 1 line). `row_uid` = assertion_id; `content_uid` =
 content_hash; `entity` = entity.identifier (+ identifier_type, type columns);
-`linked_entity` = entity.concerns (origin projected); `counterpart` / `facets` /
+`concerns` = entity.concerns (origin projected); `counterpart` / `facets` /
 further context = projected from **activity.context_json** and, for
 detector/infrastructure records, already visible in the spatial expression itself
 (the camera id IS the cell_ref/asset_ref component) — **bonus columns**:

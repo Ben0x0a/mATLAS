@@ -76,7 +76,7 @@ def test_profile_run_forwards_root_prefix_depth(monkeypatch, tmp_path):
         "process",
         "--input", str(source),
         "--output", str(tmp_path / "out.csv"),
-        "--linked-entity", "subject",
+        "--concerns", "subject",
         "--profile", str(profile),
         "--root-prefix-depth", "3",
     ])
@@ -111,7 +111,7 @@ def test_root_prefix_depth_unset_falls_back_to_config(monkeypatch, tmp_path):
         "process",
         "--input", str(source),
         "--output", str(tmp_path / "out"),
-        "--linked-entity", "subject",
+        "--concerns", "subject",
     ])
 
     assert rc == 0

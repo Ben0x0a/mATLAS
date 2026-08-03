@@ -80,7 +80,7 @@ CONTEXT_FIELD_PREFIX = "context."
 
 ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
     # entity
-    "entity", "entity_type", "linked_entity", "entity_role", "identifier_type",
+    "entity", "entity_type", "concerns", "entity_role", "identifier_type",
     # temporal (assignable subset). time_accuracy_us_lower / _upper are the source-stated
     # per-bound timing uncertainties (µs) — the temporal analogue of the spatial corner's
     # accuracy, split per bound like temporal_role_lower/_upper: ingest.assemble writes each

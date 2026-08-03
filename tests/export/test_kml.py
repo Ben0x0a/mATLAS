@@ -24,7 +24,7 @@ _KML_NS = "{http://www.opengis.net/kml/2.2}"
 def _build_store(store: RunStore) -> None:
     spec = load_preset_specs(GOLDEN_SRC / "secondary_cached.preset.yaml")[0]
     run_relational_pipeline(
-        store, GOLDEN_SRC / "cached.csv", [spec], linked_entity="subject")
+        store, GOLDEN_SRC / "cached.csv", [spec], concerns="subject")
 
 
 def test_kml_round_trips_small_store(tmp_path: Path) -> None:
@@ -57,7 +57,7 @@ def test_kml_round_trips_small_store(tmp_path: Path) -> None:
     }
     assert actual_coords == expected_coords
 
-    # name = linked_entity ("subject" for both rows in this fixture).
+    # name = concerns ("subject" for both rows in this fixture).
     names = {placemark.find(f"{_KML_NS}name").text for placemark in placemarks}
     assert names == {"subject"}
 
@@ -75,7 +75,7 @@ def test_kml_writes_one_file_for_all_presets(tmp_path: Path) -> None:
     ]
     with RunStore() as store:
         run_relational_pipeline(
-            store, GOLDEN_SRC / "cached.csv", specs, linked_entity="subject")
+            store, GOLDEN_SRC / "cached.csv", specs, concerns="subject")
         written = KmlExporter().export(
             store, ExportContext(output_dir=tmp_path, base_name="case"))
 

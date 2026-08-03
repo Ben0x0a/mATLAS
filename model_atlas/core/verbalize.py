@@ -114,7 +114,7 @@ def _subject(row: Mapping[str, Any] | pd.Series) -> str:
         # "The unknown" (the type token is a vocabulary value, not prose).
         head = "An unknown entity"
     qualifiers: list[str] = []
-    concerns = _cell(row, "linked_entity")
+    concerns = _cell(row, "concerns")
     if concerns is not None:
         qualifiers.append(f"referring {concerns}")
     role = _cell(row, "entity_role")

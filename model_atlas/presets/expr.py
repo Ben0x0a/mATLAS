@@ -12,7 +12,7 @@ Reference forms — the value of a mapped field is ONE explicit call:
     field(NAME)               a source field's value (NAME may be a glob; quote if spaced)
     header("Glob *")          the matched field's header text (was v2 `from_name`)
     filename(name|stem|path)  part of the source file identity (was v2 `from_file`)
-    param(linked_entity)      a run-level parameter (entity | linked_entity)
+    param(concerns)      a run-level parameter (entity | concerns)
     preset(in_archive)        a key from the CURRENT preset's own definition (match/meta)
     const(VALUE)              a literal (number / bool / string)
     format("{field(A)} at {field(B)}")   an f-string-style template: literal
@@ -47,7 +47,7 @@ from typing import Any
 
 REF_KINDS = ("field", "header", "filename", "const", "param", "preset", "format")
 FILENAME_TOKENS = ("name", "stem", "path")
-PARAM_TOKENS = ("entity", "linked_entity")
+PARAM_TOKENS = ("entity", "concerns")
 # Keys a preset(...) ref may read from the current preset (match block + meta).
 PRESET_TOKENS = (
     "path", "name", "format", "table", "sheet", "sql",
@@ -412,13 +412,13 @@ def parse_cond(text: str) -> Cond:
     return Cond(branches=tuple(branches), else_=else_)
 
 
-# Reference kinds a run-level param (entity / linked_entity) may itself be. ``param`` is
+# Reference kinds a run-level param (entity / concerns) may itself be. ``param`` is
 # excluded so a value cannot reference itself circularly.
 PARAM_EXPR_KINDS = ("field", "header", "filename", "const", "preset")
 
 
 def parse_param_expr(text: Any) -> Ref | None:
-    """Interpret a run-level param value (entity / linked_entity).
+    """Interpret a run-level param value (entity / concerns).
 
     When ``text`` is a call-form reference (``field(NAME)``, ``header(...)``,
     ``filename(...)``, ``const(...)``, or ``preset(...)``) return the parsed Ref so the

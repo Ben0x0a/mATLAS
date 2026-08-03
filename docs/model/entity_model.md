@@ -76,10 +76,10 @@ a hotel-register name → an identified guest. One verdict per (mention, method)
 a competing verdict is a new row, never an overwrite. Defined now, populated by
 operator/analysis only — never at ingest.
 
-## What produces the CSV `linked_entity`
+## What produces the CSV `concerns`
 
-Unchanged by this document: one linked entity per assertion, fixed at
-parsing, `linked_entity_origin` recorded). The relation graph answers *analyst*
+Unchanged by this document: one concerns value per assertion, fixed at
+parsing, `concerns_origin` recorded). The relation graph answers *analyst*
 questions ("whose number was this in March?"); it never produces the CSV column.
 Possible future unification of the decision-12 FK with `assertion_mention`
 (role=owner) is recorded as an option, not done.

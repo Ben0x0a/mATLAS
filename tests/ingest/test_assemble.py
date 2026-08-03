@@ -199,7 +199,7 @@ def _example_witness():
         FieldSpec(model_field="entity", ref=parse_ref("field(statement)"),
                   extract=("homme", "who")),
         _f("identifier_type", "const(none)"), _f("entity_type", "const(person)"),
-        _f("entity_role", "const(reporter)"), _f("linked_entity", "field(witness)"),
+        _f("entity_role", "const(reporter)"), _f("concerns", "field(witness)"),
         _f("position_source", "const(manual)"), _f("position_type", "const(vicinity)"),
         _f("spatial_referential", "const(place_name)"),
         _f("temporal_referential", "const(local_string)"),
@@ -315,7 +315,7 @@ def _example_robbery():
         _f("entity", "field(case)"), _f("identifier_type", "const(case_ref)"),
         _f("entity_type", "const(event)"), _f("entity_role", "const(subject)"),
         # decision 36: identifier == concerns for an event from a structured list.
-        _f("linked_entity", "field(case)"),
+        _f("concerns", "field(case)"),
         _f("position_source", "const(manual)"), _f("position_type", "const(vicinity)"),
         _f("spatial_referential", "const(address)"),
         _f("temporal_referential", "const(local_string)"),

@@ -49,7 +49,7 @@ def _build_case(tmp_path: Path) -> Path:
                       "/x/C.sqlite,Table: T(Z_PK: 1),1001\n", encoding="utf-8")
     out = tmp_path / "case"
     process(source, _GOLDEN / "secondary_cached.preset.yaml", out,
-            linked_entity="subject", base_name="op")
+            concerns="subject", base_name="op")
     return out / "op.matlas.sqlite"
 
 

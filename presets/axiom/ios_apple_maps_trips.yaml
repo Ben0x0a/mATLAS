@@ -37,7 +37,7 @@ source_record_uid: 'field("Item ID")'
 common:
   entity:        param(entity)
   entity_type:   const(device)
-  linked_entity: 'field("Trip ID")'
+  concerns: 'field("Trip ID")'
   source_label:    const(ZRTLEARNEDLOCATIONOFINTERESTTRANSITIONMO)
   input_record_id:    field(Location)
   raw_source_path: field(Source)

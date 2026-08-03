@@ -242,7 +242,7 @@ class GeovisualizerExporter:
             # IMEI, ...) are shared by both.
             for timestamp_us, timestamp_field, offset_hours, bound in _time_emissions(row):
                 rows.append({
-                    "Target": clean(row.get("linked_entity")) or "",
+                    "Target": clean(row.get("concerns")) or "",
                     "MSISDN": "",
                     "IMEI": _pick_imei(row.get("entity")),
                     "Timestamp (local)": _local_timestamp(timestamp_us, offset_hours),

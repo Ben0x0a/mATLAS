@@ -36,7 +36,7 @@ _DEMO_DB = Path(__file__).resolve().parents[2] / "docs" / "examples" / "matlas_e
 # CANONICAL_COLUMNS cannot silently pass — the doc's list is the oracle, not the code's.
 _EXPECTED_CANONICAL = (
     # -- old columns, mapped (csv_migration.md "Every old column, mapped" order) --
-    "entity", "entity_type", "linked_entity",
+    "entity", "entity_type", "concerns",
     "time_lower_raw", "time_lower_source_field", "time_lower_unix_utc_us",
     "time_upper_raw", "time_upper_source_field", "time_upper_unix_utc_us",
     "utc_offset_hours_lower", "utc_offset_hours_upper",   # F2: the old single column, split

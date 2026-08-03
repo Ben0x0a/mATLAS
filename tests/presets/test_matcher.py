@@ -202,4 +202,4 @@ def test_force_mode_format_mismatch_is_hard_error(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="format mismatch"):
-        process(src, preset, tmp_path / "out", linked_entity="s")
+        process(src, preset, tmp_path / "out", concerns="s")

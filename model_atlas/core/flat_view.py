@@ -111,7 +111,7 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     # -- Block 1: every old column, mapped (csv_migration.md, old CSV order) ----
     ("entity", "e.identifier"),
     ("entity_type", "e.type"),
-    ("linked_entity", "e.concerns"),
+    ("concerns", "e.concerns"),
     ("time_lower_raw", _temporal_part("lower", "raw_value")),
     ("time_lower_source_field", _temporal_part("lower", "source_field")),
     ("time_lower_unix_utc_us", "ti.lower_unix_utc_us"),

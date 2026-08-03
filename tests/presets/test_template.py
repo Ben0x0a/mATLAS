@@ -34,10 +34,10 @@ from model_atlas.presets.resolve import resolve_ref as _resolve_ref
 
 
 class _Env:
-    """The resolvers' duck-typed env: only ``.entity`` / ``.linked_entity`` are read."""
+    """The resolvers' duck-typed env: only ``.entity`` / ``.concerns`` are read."""
 
     entity = None
-    linked_entity = None
+    concerns = None
 
 
 _ENV = _Env()

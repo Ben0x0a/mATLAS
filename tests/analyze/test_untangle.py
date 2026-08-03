@@ -93,7 +93,7 @@ def _write_spec(store: RunStore, *, source_id: str, preset_id: str, preset_key: 
         entity_id=entity_id, identifier=identifier, raw_identifier=identifier,
         identifier_type=(V.IdentifierType.MSISDN if identifier
                          else V.IdentifierType.NONE),
-        type=V.EntityType.DEVICE, concerns=spec.get("linked_entity")))
+        type=V.EntityType.DEVICE, concerns=spec.get("concerns")))
 
     tx_id = None
     if "time_lower_unix_utc_us" in spec:

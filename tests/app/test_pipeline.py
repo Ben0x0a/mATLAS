@@ -54,14 +54,14 @@ def test_source_tier_follows_the_matched_preset(tmp_path: Path) -> None:
     # default — previously the preset's tier was ignored and everything stamped primary.
     secondary = _GOLDEN / "secondary_cached.preset.yaml"
     result = process(_fixture_folder(tmp_path), secondary, tmp_path / "out",
-                     linked_entity=_LINKED)
+                     concerns=_LINKED)
     rows = _read_rows(result.output_csv)
     assert rows and all(row["source_tier"] == "secondary" for row in rows)
 
 
 def test_run_writes_case_db_csv_and_sidecars(tmp_path: Path) -> None:
     result = process(_fixture_folder(tmp_path), _GOLDEN, tmp_path / "out",
-                     linked_entity=_LINKED)
+                     concerns=_LINKED)
     assert isinstance(result, ProcessResult)
     # The case database is the mandatory default output, always written.
     assert result.output_case_db == tmp_path / "out" / "merged.matlas.sqlite"
@@ -97,7 +97,7 @@ def test_refuses_to_overwrite_a_non_matlas_file_at_the_output_path(tmp_path: Pat
     stray.write_bytes(payload)
 
     with pytest.raises(FileExistsError, match="not a mATLAS case database"):
-        process(_fixture_folder(tmp_path), _GOLDEN, out, linked_entity=_LINKED)
+        process(_fixture_folder(tmp_path), _GOLDEN, out, concerns=_LINKED)
 
     # The stray file is untouched (byte-for-byte) — nothing was deleted or overwritten.
     assert stray.read_bytes() == payload
@@ -105,9 +105,9 @@ def test_refuses_to_overwrite_a_non_matlas_file_at_the_output_path(tmp_path: Pat
 
 def test_folder_and_zip_runs_agree_on_evidence_digests(tmp_path: Path) -> None:
     folder_result = process(_fixture_folder(tmp_path), _GOLDEN, tmp_path / "out_folder",
-                            linked_entity=_LINKED)
+                            concerns=_LINKED)
     zip_result = process(_fixture_zip(tmp_path), _GOLDEN, tmp_path / "out_zip",
-                         linked_entity=_LINKED)
+                         concerns=_LINKED)
     folder_rows = _read_rows(folder_result.output_csv)
     zip_rows = _read_rows(zip_result.output_csv)
     assert len(folder_rows) == len(zip_rows) == 2
@@ -138,14 +138,14 @@ def test_append_builds_the_same_case_as_the_union_of_runs(tmp_path: Path) -> Non
         finally:
             con.close()
 
-    process(file_a, preset, tmp_path / "oa", linked_entity=_LINKED)          # A alone
-    process(file_b, preset, tmp_path / "ob", linked_entity=_LINKED)          # B alone
+    process(file_a, preset, tmp_path / "oa", concerns=_LINKED)          # A alone
+    process(file_b, preset, tmp_path / "ob", concerns=_LINKED)          # B alone
     d_a = digests(tmp_path / "oa" / "merged.matlas.sqlite")
     d_b = digests(tmp_path / "ob" / "merged.matlas.sqlite")
 
     out = tmp_path / "case"
-    process(file_a, preset, out, linked_entity=_LINKED)                      # create case
-    process(file_b, preset, out, linked_entity=_LINKED)                      # APPEND to it
+    process(file_a, preset, out, concerns=_LINKED)                      # create case
+    process(file_b, preset, out, concerns=_LINKED)                      # APPEND to it
     d_full = digests(out / "merged.matlas.sqlite")
 
     assert d_a and d_b and d_a != d_b
@@ -173,8 +173,8 @@ def test_re_appending_the_same_evidence_is_a_recorded_no_op(tmp_path: Path) -> N
                         "/x/Cache.sqlite,Table: T(Z_PK: 1),1001\n", encoding="utf-8")
 
     out = tmp_path / "case"
-    process(evidence, preset, out, linked_entity=_LINKED)                      # create
-    result = process(evidence, preset, out, linked_entity=_LINKED)             # re-append SAME
+    process(evidence, preset, out, concerns=_LINKED)                      # create
+    result = process(evidence, preset, out, concerns=_LINKED)             # re-append SAME
 
     # The skip is recorded, not silent, and the run added nothing new.
     assert any("already in the case" in warning for warning in result.warnings)
@@ -193,7 +193,7 @@ def test_no_match_writes_the_case_db_but_no_csv(tmp_path: Path) -> None:
     source.mkdir()
     (source / "unrelated.csv").write_text("a,b\n1,2\n", encoding="utf-8")
     out = tmp_path / "out"
-    result = process(source, _GOLDEN, out, linked_entity=_LINKED)
+    result = process(source, _GOLDEN, out, concerns=_LINKED)
     assert result.output_csv is None
     assert result.output_case_db == out / "merged.matlas.sqlite"
     assert result.row_counts["rows"] == 0
@@ -217,8 +217,8 @@ def test_two_independent_runs_produce_identical_digests(tmp_path: Path) -> None:
             con.close()
 
     source = _fixture_folder(tmp_path)
-    first = process(source, _GOLDEN, tmp_path / "o1", linked_entity=_LINKED)
-    second = process(source, _GOLDEN, tmp_path / "o2", linked_entity=_LINKED)
+    first = process(source, _GOLDEN, tmp_path / "o1", concerns=_LINKED)
+    second = process(source, _GOLDEN, tmp_path / "o2", concerns=_LINKED)
 
     d1 = digests(first.output_case_db)
     assert d1 and d1 == digests(second.output_case_db)             # identical evidence identity
@@ -229,4 +229,4 @@ def test_output_path_that_is_a_file_is_refused(tmp_path: Path) -> None:
     stray = tmp_path / "out"
     stray.write_text("occupied", encoding="utf-8")
     with pytest.raises(ValueError, match="must be a folder"):
-        process(_fixture_folder(tmp_path), _GOLDEN, stray, linked_entity=_LINKED)
+        process(_fixture_folder(tmp_path), _GOLDEN, stray, concerns=_LINKED)

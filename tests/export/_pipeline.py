@@ -142,7 +142,7 @@ def run_relational_pipeline(
     specs: list[PresetSpec],
     *,
     case_number: str = "C1",
-    linked_entity: str | None = None,
+    concerns: str | None = None,
 ) -> None:
     """Drive the full new-engine chain over ``input_path`` into ``store``.
 
@@ -179,7 +179,7 @@ def run_relational_pipeline(
                 records, spec, store,
                 source_id=source["source_id"],
                 fingerprint_sha256=source["fingerprint_sha256"],
-                linked_entity=linked_entity,
+                concerns=concerns,
                 activity_ordinals=activity_ordinals,
             )
             if report.data_source is not None:

@@ -222,14 +222,14 @@
           </widget>
          </item>
          <item>
-          <widget class="QLabel" name="linkedEntityLabel">
+          <widget class="QLabel" name="concernsLabel">
            <property name="text">
-            <string>Linked entity *</string>
+            <string>Concerns *</string>
            </property>
           </widget>
          </item>
          <item>
-          <widget class="QLineEdit" name="linkedEntityEdit">
+          <widget class="QLineEdit" name="concernsEdit">
            <property name="placeholderText">
             <string>required: person, company, account, or case subject</string>
            </property>

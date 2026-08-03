@@ -67,7 +67,7 @@ common:
   entity:         const(device)
   tool_label:     const(ZRTCLLOCATIONMO)
   record_locator: filename(name)
-  linked_entity:  param(linked_entity)   # or pass --linked-entity at run time
+  concerns:  param(concerns)   # or pass --concerns at run time
 ```
 
 ## 4. Map an assertion (`position` + `time` + `links`)
@@ -167,7 +167,7 @@ write a literal brace. A template also works as a conditional branch result
 
 ## 7. Run it
 
-`--linked-entity` is required; `--entity` is optional. A single input file (one element)
+`--concerns` is required; `--entity` is optional. A single input file (one element)
 plus a single preset YAML runs in **force-preset mode** (selector matching bypassed),
 which is handy while iterating:
 
@@ -176,7 +176,7 @@ python matlas.py process \
   --input ./evidence/Cache.sqlite \
   --presets presets/ios/ios_routined_cached_locations.yaml \
   --output ./out/routined.csv \
-  --linked-entity "Case Subject"
+  --concerns "Case Subject"
 ```
 
 Inspect `out/routined.csv` plus the `.matlas.traceability.json` and

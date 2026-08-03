@@ -25,15 +25,15 @@ python matlas.py process \
   --presets ./presets \
   --output ./out \
   --name operation-falcon \
-  --linked-entity "Case Subject"
+  --concerns "Case Subject"
 ```
 
 `--output` is a **folder**. The case database is written inside it as
 `<name>.matlas.sqlite` (default name `merged`); any other export is one file per format
 beside it. The case database is always written — it is the run itself.
 
-`--linked-entity` is required: it names the case subject every assertion is attributed to.
-`--entity` is optional. When supplied, these arguments **override** any `entity`/`linked_entity`
+`--concerns` is required: it names the case subject every assertion is attributed to.
+`--entity` is optional. When supplied, these arguments **override** any `entity`/`concerns`
 a preset maps; the preset value is the default used only when the argument is absent.
 
 ### The case & append model
@@ -52,11 +52,11 @@ re-adding evidence already in the case is a recorded skip, never a duplicate or 
 
 ```bash
 python matlas.py process --help
-python matlas.py process --input ./evidence --presets ./presets --output ./out --linked-entity Subject --export kml --export geojson
-python matlas.py process --input ./evidence --presets ./presets --output ./out --linked-entity Subject --traceability-format prov
-python matlas.py process --input ./evidence --presets ./presets --output ./out --linked-entity Subject --no-source-columns
-python matlas.py process --input ./evidence --profile ./profiles/ios-locations.mATLAS-profile --output ./out --linked-entity Subject
-python matlas.py --log-level DEBUG process --input ./evidence --presets ./presets --output ./out --linked-entity Subject
+python matlas.py process --input ./evidence --presets ./presets --output ./out --concerns Subject --export kml --export geojson
+python matlas.py process --input ./evidence --presets ./presets --output ./out --concerns Subject --traceability-format prov
+python matlas.py process --input ./evidence --presets ./presets --output ./out --concerns Subject --no-source-columns
+python matlas.py process --input ./evidence --profile ./profiles/ios-locations.mATLAS-profile --output ./out --concerns Subject
+python matlas.py --log-level DEBUG process --input ./evidence --presets ./presets --output ./out --concerns Subject
 ```
 
 `--export NAME` (repeatable) writes an additional projection alongside the CSV — one file per
@@ -144,7 +144,7 @@ python matlas.py process \
   --input ./evidence \
   --profile ./profiles/ios-locations.mATLAS-profile \
   --output ./out \
-  --linked-entity Subject
+  --concerns Subject
 ```
 
 ## Forensic defaults

@@ -13,7 +13,7 @@ Query + serialiser
 The data access is ONE query — ``core.flat_view.build_flat_view`` (the same flat frame the
 CSV exporter reads); this module's only job is picking the coordinate-bearing rows
 and shaping them into KML Placemarks, faithfully reproducing the old exporter's XML
-shape (name = linked_entity, TimeStamp/when = the lower-bound local ISO instant,
+shape (name = concerns, TimeStamp/when = the lower-bound local ISO instant,
 Point/coordinates = "lon,lat"). The old single ``utc_offset_hours`` column split into
 ``utc_offset_hours_lower`` / ``_upper`` in the relational model; the
 placemark's one timestamp uses the LOWER bound + ITS OWN offset — for an instant
@@ -84,7 +84,7 @@ class KmlExporter:
             if lat is None or lon is None:
                 continue   # a placemark needs a coordinate; rows without one are omitted
             placemark = SubElement(document, "Placemark")
-            SubElement(placemark, "name").text = clean(row.get("linked_entity")) or ""
+            SubElement(placemark, "name").text = clean(row.get("concerns")) or ""
             when = _local_iso(row.get("time_lower_unix_utc_us"), row.get("utc_offset_hours_lower"))
             if when:
                 SubElement(SubElement(placemark, "TimeStamp"), "when").text = when

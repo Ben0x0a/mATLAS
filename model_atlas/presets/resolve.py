@@ -3,7 +3,7 @@
 Defines:    is_missing (None/NaN test), preset_values (the ``preset(<key>)`` value
             holder), resolve_ref (one typed reference call), resolve_template
             (``format(...)`` templates), resolve_param (run-level
-            entity/linked_entity params), resolve_cond (conditional
+            entity/concerns params), resolve_cond (conditional
             chains, with cond_match), coerce_scalar and resolve_field (the full
             resolution tail: ref/conditional -> extract -> pipe -> unit -> cast).
 Used by:    ingest.assemble (the L1 fan-out engine resolves every mapped field
@@ -23,7 +23,7 @@ and the ingest engine depends one-way on presets. The conditional
 ``NA_SENTINEL`` on no-match, empty-rendered missing placeholders — are carried
 verbatim; every function is a pure function of its arguments.
 
-``env`` is duck-typed: only ``.entity`` / ``.linked_entity`` are read (for
+``env`` is duck-typed: only ``.entity`` / ``.concerns`` are read (for
 ``param(...)`` refs), so any narrow holder with those two attributes satisfies it.
 """
 from __future__ import annotations
@@ -94,7 +94,7 @@ def resolve_ref(
     if ref.kind == "format":
         return resolve_template(ref.arg, row, resolve, file_values, env, preset_values_map), None
     if ref.kind == "param":
-        return (env.entity if ref.arg == "entity" else env.linked_entity), None
+        return (env.entity if ref.arg == "entity" else env.concerns), None
     if ref.kind == "filename":
         return file_values.get(ref.arg), None
     if ref.kind == "preset":
@@ -149,7 +149,7 @@ def resolve_param(
 ) -> str | None:
     """Resolve a run-level param for one row. ``ref`` (from ``parse_param_expr``) resolves
     per row when set; otherwise the plain ``literal`` is used verbatim. Non-null values are
-    stringified so the entity / linked_entity columns stay textual."""
+    stringified so the entity / concerns columns stay textual."""
     if ref is None:
         return literal
     value, _ = resolve_ref(ref, row, resolve, file_values, env, preset_values_map)

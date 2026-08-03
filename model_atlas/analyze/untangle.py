@@ -38,7 +38,7 @@ relational store by ``_ASSERTION_FRAME_SELECT``, each old flat column read from 
 settled home (the csv_migration.md mapping):
 
 - ``entity``                    -> ``entity.identifier`` (the flat contract's entity column);
-- ``linked_entity``             -> ``entity.concerns``;
+- ``concerns``             -> ``entity.concerns``;
 - ``time_*_raw`` / ``_source_field`` -> the ``lower``/``upper`` temporal components;
 - ``time_*_unix_utc_us`` -> ``timespan_integration``; ``time_accuracy_us`` -> COALESCE of
   the two split per-bound ``*_accuracy_us`` columns (the completeness bit the old column had);
@@ -96,7 +96,7 @@ DEFAULT_RESOLUTION_US = 1_000_000
 
 # Fields that count towards completeness when breaking an accuracy tie.
 _COMPLETENESS_COLUMNS: tuple[str, ...] = (
-    "entity", "linked_entity", "time_lower_raw", "time_lower_unix_utc_us",
+    "entity", "concerns", "time_lower_raw", "time_lower_unix_utc_us",
     "time_upper_raw", "time_upper_unix_utc_us", "utc_offset_hours", "time_accuracy_us", "temporal_source",
     "latitude_wgs84", "longitude_wgs84", "altitude_m", "raw_position", "position_source",
     "horizontal_accuracy_m", "vertical_accuracy_m", "horizontal_speed_kmh",
@@ -112,7 +112,7 @@ _COMPLETENESS_COLUMNS: tuple[str, ...] = (
 _ASSERTION_FRAME_SELECT: tuple[tuple[str, str], ...] = (
     ("assertion_id", "a.assertion_id"),
     ("entity", "e.identifier"),
-    ("linked_entity", "e.concerns"),
+    ("concerns", "e.concerns"),
     ("time_lower_raw", _temporal_part("lower", "raw_value")),
     ("time_lower_source_field", _temporal_part("lower", "source_field")),
     ("time_lower_unix_utc_us", "ti.lower_unix_utc_us"),

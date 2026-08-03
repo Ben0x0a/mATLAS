@@ -46,9 +46,9 @@ from tests.export._pipeline import run_relational_pipeline
 
 _GOLDEN_NEW = Path(__file__).resolve().parents[1] / "fixtures" / "golden_relational"
 _CASES = ("secondary", "primary")
-# Mirrors the old golden run's operator input (process(..., linked_entity="subject")),
+# Mirrors the old golden run's operator input (process(..., concerns="subject")),
 # so the reviewed old->new diff stays apples-to-apples.
-_LINKED_ENTITY = "subject"
+_CONCERNS = "subject"
 
 
 def _export_merged(store: RunStore, out_dir: Path) -> Path:
@@ -79,7 +79,7 @@ def test_flat_csv_matches_new_golden(case: str, tmp_path: Path) -> None:
     spec = load_preset_specs(_GOLDEN_SRC / f"{case}_cached.preset.yaml")[0]
     input_path = _GOLDEN_SRC / "cached.csv"
     with RunStore() as store:
-        run_relational_pipeline(store, input_path, [spec], linked_entity=_LINKED_ENTITY)
+        run_relational_pipeline(store, input_path, [spec], concerns=_CONCERNS)
         produced = _export_merged(store, tmp_path / "out")
     actual = _normalise_machine_path(produced.read_bytes(), input_path)
 
@@ -125,7 +125,7 @@ def test_mandatory_r6_columns_present_and_distinguishing() -> None:
     spec = load_preset_specs(_GOLDEN_SRC / "secondary_cached.preset.yaml")[0]
     with RunStore() as store:
         run_relational_pipeline(
-            store, _GOLDEN_SRC / "cached.csv", [spec], linked_entity=_LINKED_ENTITY)
+            store, _GOLDEN_SRC / "cached.csv", [spec], concerns=_CONCERNS)
         projected = build_flat_view(store.connection)
     for column in ("spatial_referential", "locates", "spatial_method", "temporal_method"):
         assert column in projected.columns
@@ -149,7 +149,7 @@ def test_multiple_presets_land_in_one_file(tmp_path: Path) -> None:
         # One evidence file, BOTH presets applied (decision 27): two assertion sets sharing
         # the raw_records. One file per format now — both sets go in the single CSV.
         run_relational_pipeline(
-            store, _GOLDEN_SRC / "cached.csv", specs, linked_entity=_LINKED_ENTITY)
+            store, _GOLDEN_SRC / "cached.csv", specs, concerns=_CONCERNS)
         written = CsvFlatExporter().export(
             store, ExportContext(output_dir=tmp_path, base_name="case"))
 
@@ -166,7 +166,7 @@ def test_multiple_presets_land_in_one_file(tmp_path: Path) -> None:
 
 def _digest_pairs(input_path: Path, spec: PresetSpec) -> set[tuple[str, str]]:
     with RunStore() as store:
-        run_relational_pipeline(store, input_path, [spec], linked_entity=_LINKED_ENTITY)
+        run_relational_pipeline(store, input_path, [spec], concerns=_CONCERNS)
         return {
             (row["content_hash"], row["claim_digest"])
             for row in _rows(store, "SELECT content_hash, claim_digest FROM assertion")

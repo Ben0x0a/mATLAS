@@ -30,8 +30,9 @@ A content hash computed over an assertion's Layer-1 claim projection alone (inde
 merges them — sameness is a query, not a stored merge (see *convergence*).
 
 **Concerns**
-The association an *entity* carries to the *linked entity* / case subject the data is *about* —
-"whose" the record is. Carried on the entity row, distinct from the entity's own identifier.
+The association an *entity* carries to the case subject the data is *about* — "whose" the record
+is. The operator supplies it as the run's subject (a preset may map it per-row); it is carried on
+the entity row, distinct from the entity's own identifier.
 
 **Concomitance**
 The analysis of who or what was *present* together in space and time. A *presence* question:
@@ -82,10 +83,6 @@ The four tiers of the run database. **L0** = acquisition (what was opened: *runs
 records*). **L1** = the *verbatim* assertion (the source's claim, un-transformed). **L2** = *derived*,
 method-stamped values (canonical space/time, normalised identifiers). **L3** = *analysis* (judgements
 about assertions, e.g. duplicate ranking, concomitance).
-
-**Linked entity**
-The person, company, account, or case subject linked to every assertion of a run (the value the
-operator supplies as the run's subject; a preset may map it per-row). See *concerns*.
 
 **Locates**
 The derived flag on a projected row saying what the assertion's *position* locates — the *entity*

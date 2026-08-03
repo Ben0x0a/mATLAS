@@ -25,7 +25,7 @@ def test_parse_param_expr_literal_vs_reference() -> None:
     assert parse_param_expr("agent(smith)") is None   # unknown kind
     assert parse_param_expr(None) is None
     # A param(...) reference is NOT allowed (would be circular) -> treated as literal.
-    assert parse_param_expr("param(linked_entity)") is None
+    assert parse_param_expr("param(concerns)") is None
 
 
 # --- references: valid ------------------------------------------------------
@@ -42,7 +42,7 @@ def test_header_filename_param() -> None:
     assert parse_ref("filename(stem)").arg == "stem"
     assert parse_ref("filename(path)").arg == "path"
     assert parse_ref("param(entity)") == Ref("param", "entity")
-    assert parse_ref("param(linked_entity)").arg == "linked_entity"
+    assert parse_ref("param(concerns)").arg == "concerns"
 
 
 @pytest.mark.parametrize("text,expected", [

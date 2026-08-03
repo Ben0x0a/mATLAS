@@ -20,7 +20,7 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | --- | --- | --- | --- |
 | entity | → | entity.identifier | now the **normalized** identifier; the verbatim form is the new `raw_identifier` column |
 | entity_type | ⇄ | entity.identifier_type + entity.type | `identifier_type` = which normalization; `type` = what the thing is (device/person/…) |
-| linked_entity | → | entity.concerns | the attributed party fixed at parsing; `concerns_origin` says who |
+| concerns | → | entity.concerns | the attributed party fixed at parsing; `concerns_origin` says who |
 | time_lower_raw | → | temporal_component(part=lower).raw_value | verbatim, component row |
 | time_lower_source_field | → | temporal_component(part=lower).source_field | |
 | time_lower_unix_utc_us | = | timespan_integration.lower_unix_utc_us | canonical UTC µs |
@@ -75,7 +75,7 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | raw_identifier | entity.raw_identifier | the identifier as written |
 | identifier_type | entity.identifier_type | which normalization applied |
 | entity_role | assertion.entity_role | the entity's part in the activity |
-| concerns_origin | entity.concerns_origin | who attributed `linked_entity` (operator vs preset) |
+| concerns_origin | entity.concerns_origin | who attributed `concerns` (operator vs preset) |
 | spatial_referential | spatial_expression.referential | encoding/CRS: epsg:4326 / geohash / address / cell_ref / … (mandatory) |
 | locates | derived from entity_position_link | self / infrastructure / referenced (mandatory; derived) |
 | spatial_method | spatial_integration.method | the derivation, mandatory |

@@ -296,7 +296,7 @@ def process(
     presets_path: Path,
     output: Path,
     *,
-    linked_entity: str,
+    concerns: str,
     base_name: str = "merged",
     case: str | None = None,
     traceability_format: str = "readable",
@@ -317,8 +317,8 @@ def process(
                               <output>/<base_name>.matlas.sqlite (created, or appended to
                               if it already exists); every other export is one file per
                               format beside it (<output>/<base_name>.<ext>).
-        linked_entity:        Required. The entity linked to every assertion (e.g. the
-                              case subject); OVERRIDES any preset-mapped linked_entity. A
+        concerns:        Required. The entity linked to every assertion (e.g. the
+                              case subject); OVERRIDES any preset-mapped concerns. A
                               plain literal applies to every row; a call-form reference
                               such as ``field(Evidence number)`` resolves per source row.
         base_name:            Stem for the case DB and every output file. Default "merged".
@@ -455,7 +455,7 @@ def process(
                 if _assemble_match(
                     store, file, preset, selector, label,
                     run_id=ingest_report.run_id,
-                    entity=entity, linked_entity=linked_entity,
+                    entity=entity, concerns=concerns,
                     activity_ordinals=activity_ordinals,
                     warnings=warnings, matched=matched, unmatched=unmatched,
                     sources_meta=sources_meta,
@@ -544,7 +544,7 @@ def _assemble_match(
     *,
     run_id: str,
     entity: str | None,
-    linked_entity: str | None,
+    concerns: str | None,
     activity_ordinals: dict[str, int],
     warnings: list[str],
     matched: list[str],
@@ -608,7 +608,7 @@ def _assemble_match(
         source_file_path=str(file.logical_path),
         selector=selector,
         entity=entity,
-        linked_entity=linked_entity,
+        concerns=concerns,
         activity_ordinals=activity_ordinals,
     )
     warnings.extend(report.warnings)

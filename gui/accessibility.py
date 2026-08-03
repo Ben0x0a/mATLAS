@@ -75,7 +75,7 @@ def configure_accessibility(controller: Any) -> None:
         ("sourceLabel", controller.source_edit),
         ("identityLabel", controller.entity_edit),
         ("entityLabel", controller.entity_edit),
-        ("linkedEntityLabel", controller.linked_entity_edit),
+        ("concernsLabel", controller.concerns_edit),
         ("presetsPathLabel", controller.presets_path_edit),
         ("caseNameLabel", controller.case_name_edit),
         ("dumpFullUfdrLabel", controller.dump_full_ufdr_check),
@@ -109,8 +109,8 @@ def configure_accessibility(controller: Any) -> None:
     controller.source_folder_button.setAccessibleDescription("Choose a source folder for processing.")
     controller.entity_edit.setAccessibleName("Entity")
     controller.entity_edit.setAccessibleDescription("Optional source entity or owner added to output rows.")
-    controller.linked_entity_edit.setAccessibleName("Linked entity")
-    controller.linked_entity_edit.setAccessibleDescription(
+    controller.concerns_edit.setAccessibleName("Concerns")
+    controller.concerns_edit.setAccessibleDescription(
         "Required person, company, account, or case subject linked to output rows. "
         "Accepts a literal, or a preset-style reference such as field(Evidence number) "
         "to take the value from that source field per row."
@@ -230,7 +230,7 @@ def _configure_tab_order(controller: Any) -> None:
         controller.source_file_button,
         controller.source_folder_button,
         controller.entity_edit,
-        controller.linked_entity_edit,
+        controller.concerns_edit,
         controller.presets_path_edit,
         controller.presets_folder_button,
         controller.presets_file_button,

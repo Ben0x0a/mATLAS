@@ -1,4 +1,4 @@
-"""Tests for the entity / linked_entity autocompletion candidates (gui.completion).
+"""Tests for the entity / concerns autocompletion candidates (gui.completion).
 
 Covers the keyword templates, the single-CSV column peek (present only for a lone .csv
 file), and the guard that folders / non-CSV / missing paths get keywords alone.

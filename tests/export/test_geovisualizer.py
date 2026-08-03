@@ -35,7 +35,7 @@ def _read_geovis_csv(path: Path) -> pd.DataFrame:
 def _build_golden_store(store: RunStore) -> None:
     spec = load_preset_specs(GOLDEN_SRC / "secondary_cached.preset.yaml")[0]
     run_relational_pipeline(
-        store, GOLDEN_SRC / "cached.csv", [spec], linked_entity="subject")
+        store, GOLDEN_SRC / "cached.csv", [spec], concerns="subject")
 
 
 # --- golden round-trip: row-count/coordinate spot-check against the flat CSV --------

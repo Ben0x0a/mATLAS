@@ -68,9 +68,9 @@ def test_xlsx_preserves_large_s2_cell_id_exactly(tmp_path: Path) -> None:
 # --- 2. formula injection neutralised in xlsx + both CSVs ---------------------
 
 def _mutate_formula_entity(store: RunStore) -> None:
-    """Make the instant assertion's entity/linked-entity a live-formula string.
+    """Make the instant assertion's entity/concerns a live-formula string.
 
-    ``linked_entity`` (entity.concerns) is the GeoVisualizer ``Target`` and a flat-CSV
+    ``concerns`` (entity.concerns) is the GeoVisualizer ``Target`` and a flat-CSV
     column; ``entity`` (entity.identifier) is another flat-CSV column — so one mutation
     plants the hostile value into a cell of every text export under test.
     """
@@ -88,7 +88,7 @@ def test_csv_flat_neutralises_formula_and_round_trips(tmp_path: Path) -> None:
                                  include_source_columns=False))
 
     records = _reread(written[0])
-    cells = [row["entity"] for row in records] + [row["linked_entity"] for row in records]
+    cells = [row["entity"] for row in records] + [row["concerns"] for row in records]
     guarded = [value for value in cells if value.startswith(FORMULA_GUARD)]
     assert guarded, "the formula cell should be apostrophe-guarded"
     for value in guarded:

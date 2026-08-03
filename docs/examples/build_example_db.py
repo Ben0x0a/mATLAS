@@ -781,7 +781,7 @@ def build() -> sqlite3.Connection:
                    "fp-wit-7700", "REQ-93", tier="secondary")
     rr = b.record(sid, 1, {"witness": "Marie Dupont",
         "statement": "J'ai vu l'homme pres de la gare vers midi le 14 mars"})
-    # concerns = the reporter (Marie Dupont), fixed at parsing (concerns absorbs the linked entity).
+    # concerns = the reporter (Marie Dupont), fixed at parsing.
     ent = b.entity(rr, 0, None, "l'homme", "none", "person",
                    concerns="Marie Dupont", concerns_origin="preset_mapped")
     sx = b.spatial(rr, 0, "place_name", "manual",

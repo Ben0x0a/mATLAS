@@ -76,14 +76,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     process_parser.add_argument(
-        "--linked-entity",
+        "--concerns",
         required=True,
         help=(
-            "Entity linked to every output row. When set it OVERRIDES any linked_entity "
+            "Entity linked to every output row. When set it OVERRIDES any concerns "
             "a preset maps (the preset value is the default otherwise), e.g. a person, "
             "company, account, or case subject. A literal is used verbatim; a preset-style "
             "reference such as field(Evidence number) resolves per source row, so one input "
-            "carrying several subjects maps each row to its own linked entity."
+            "carrying several subjects maps each row to its own concerns value."
         ),
     )
     process_parser.add_argument(
@@ -171,7 +171,7 @@ def _cmd_process(args: argparse.Namespace) -> int:
         case=args.case,
         traceability_format=args.traceability_format,
         entity=args.entity,
-        linked_entity=args.linked_entity,
+        concerns=args.concerns,
         include_source_columns=args.include_source_columns,
         root_prefix_depth=args.root_prefix_depth,
         exports=args.export,

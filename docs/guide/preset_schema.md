@@ -138,7 +138,7 @@ calls — see Conditional values below):
 | `field(NAME)` | a source field's value (NAME may be a glob; quote if it has spaces) |
 | `header("Glob *")` | the matched field's header text (e.g. a timezone in the header) |
 | `filename(name\|stem\|path)` | part of the source file identity |
-| `param(entity\|linked_entity)` | a run-level argument |
+| `param(entity\|concerns)` | a run-level argument |
 | `preset(path\|name\|table\|id\|...)` | a key from the matched `input_selector` / preset `meta` |
 | `const(VALUE)` | a literal |
 | `format("…{ref}…")` | a text template composing several refs with literal text (see Templates) |

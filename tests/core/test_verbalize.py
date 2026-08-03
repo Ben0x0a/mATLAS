@@ -43,7 +43,7 @@ _DEMO_DB = Path(__file__).resolve().parents[2] / "docs" / "examples" / "matlas_e
 _SKELETON: dict[str, Any] = {
     "entity": "+41790000000",
     "entity_type": "device",
-    "linked_entity": None,
+    "concerns": None,
     "entity_role": "subject",
     "entity_position_link": "at",
     "entity_time_link": "observed_at",
@@ -256,7 +256,7 @@ def test_both_corners_empty_still_renders() -> None:
 
 def test_concerns_clause_omitted_when_null() -> None:
     assert "referring" not in verbalize.verbalize(dict(_SKELETON))
-    with_concerns = dict(_SKELETON, linked_entity="Marie Dupont")
+    with_concerns = dict(_SKELETON, concerns="Marie Dupont")
     assert "(referring Marie Dupont; the subject)" in verbalize.verbalize(with_concerns)
 
 

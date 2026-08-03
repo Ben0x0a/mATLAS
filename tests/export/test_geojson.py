@@ -23,7 +23,7 @@ from tests.export._pipeline import GOLDEN_SRC, run_relational_pipeline
 def _build_store(store: RunStore) -> None:
     spec = load_preset_specs(GOLDEN_SRC / "secondary_cached.preset.yaml")[0]
     run_relational_pipeline(
-        store, GOLDEN_SRC / "cached.csv", [spec], linked_entity="subject")
+        store, GOLDEN_SRC / "cached.csv", [spec], concerns="subject")
 
 
 def test_geojson_round_trips_small_store(tmp_path: Path) -> None:
@@ -60,7 +60,7 @@ def test_geojson_round_trips_small_store(tmp_path: Path) -> None:
         assert "latitude_wgs84" not in properties
         assert "longitude_wgs84" not in properties
         assert properties["entity_type"] == "device"
-        assert properties["linked_entity"] == "subject"
+        assert properties["concerns"] == "subject"
 
 
 def test_geojson_writes_one_file_for_all_presets(tmp_path: Path) -> None:
@@ -71,7 +71,7 @@ def test_geojson_writes_one_file_for_all_presets(tmp_path: Path) -> None:
     ]
     with RunStore() as store:
         run_relational_pipeline(
-            store, GOLDEN_SRC / "cached.csv", specs, linked_entity="subject")
+            store, GOLDEN_SRC / "cached.csv", specs, concerns="subject")
         written = GeojsonExporter().export(
             store, ExportContext(output_dir=tmp_path, base_name="case"))
 

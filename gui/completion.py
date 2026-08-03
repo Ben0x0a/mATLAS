@@ -1,10 +1,10 @@
-"""Autocompletion candidates for the run-level entity / linked_entity fields.
+"""Autocompletion candidates for the run-level entity / concerns fields.
 
 Defines:    PARAM_KEYWORDS (the call-form keyword templates the two fields accept) and
             param_completions(source_path) -> list[str], which always offers the keyword
             templates and, ONLY when the input is a single CSV file, also offers a
             ``field(<column>)`` entry per source column (a cheap header peek).
-Used by:    gui.app (the QCompleter backing entityEdit / linkedEntityEdit).
+Used by:    gui.app (the QCompleter backing entityEdit / concernsEdit).
 Depends on: presets.expr (PARAM_EXPR_KINDS) + the stdlib csv sniffer.
 
 Peeking is deliberately restricted to a single CSV file: a folder or archive would mean
@@ -66,7 +66,7 @@ def _csv_columns(source_path: str) -> list[str]:
 
 
 def param_completions(source_path: str | None) -> list[str]:
-    """Completion candidates for the entity / linked_entity fields.
+    """Completion candidates for the entity / concerns fields.
 
     Always the keyword templates (``field(``, ``const(`` …); plus a ``field(<column>)``
     entry per column when ``source_path`` is a single CSV file."""

@@ -194,7 +194,7 @@ class MainController(QObject):
         self.output_edit: QLineEdit = child(QLineEdit, "outputEdit")
         self.case_name_edit: QLineEdit = child(QLineEdit, "caseNameEdit")
         self.entity_edit: QLineEdit = child(QLineEdit, "entityEdit")
-        self.linked_entity_edit: QLineEdit = child(QLineEdit, "linkedEntityEdit")
+        self.concerns_edit: QLineEdit = child(QLineEdit, "concernsEdit")
         self.preset_search_edit: QLineEdit = child(QLineEdit, "presetSearchEdit")
         self.available_preset_list: QListWidget = child(QListWidget, "availablePresetList")
         self.selected_preset_list: QListWidget = child(QListWidget, "selectedPresetList")
@@ -313,10 +313,10 @@ class MainController(QObject):
             self.additional_export_button.setText(f"{first_label} (+{len(selected) - 1})")
 
     def _configure_entity_completion(self) -> None:
-        """Give the entity / linked_entity fields a completer: the call-form keywords, plus
+        """Give the entity / concerns fields a completer: the call-form keywords, plus
         ``field(<column>)`` per column when the input is a single CSV (see gui.completion)."""
         self._entity_completion_model = QStringListModel(self.window)
-        for edit in (self.entity_edit, self.linked_entity_edit):
+        for edit in (self.entity_edit, self.concerns_edit):
             completer = QCompleter(self.window)
             completer.setModel(self._entity_completion_model)
             completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -325,7 +325,7 @@ class MainController(QObject):
         self._refresh_entity_completion()
 
     def _refresh_entity_completion(self) -> None:
-        """Rebuild the entity/linked_entity completion list for the current input path."""
+        """Rebuild the entity/concerns completion list for the current input path."""
         self._entity_completion_model.setStringList(param_completions(self.source_edit.text().strip()))
 
     def _on_source_changed(self, _text: str) -> None:
@@ -407,7 +407,7 @@ class MainController(QObject):
             self.add_preset_button, self.remove_preset_button,
             self.add_all_presets_button, self.remove_all_presets_button,
             self.reload_presets_button, self.auto_preset_check,
-            self.case_name_edit, self.entity_edit, self.linked_entity_edit,
+            self.case_name_edit, self.entity_edit, self.concerns_edit,
             self.include_source_columns_check, self.traceability_combo,
             self.additional_export_button,
         ):
@@ -707,11 +707,11 @@ class MainController(QObject):
         if self._reject_if_blank(output, "Choose an output folder."):
             return
         entity = self.entity_edit.text().strip() or None
-        linked_entity = self.linked_entity_edit.text().strip()
-        if not linked_entity:
-            # Linked entity is mandatory (matches the CLI's required --linked-entity):
+        concerns = self.concerns_edit.text().strip()
+        if not concerns:
+            # Concerns is mandatory (matches the CLI's required --concerns):
             # every output row must be attributable to a case subject.
-            self._show_error("Enter a linked entity (required).")
+            self._show_error("Enter the concerns (required).")
             return
         output_path = Path(output).expanduser()
         # The case name is the run's identity: the case DB is <output>/<name>.matlas.sqlite,
@@ -736,7 +736,7 @@ class MainController(QObject):
             case=case_name or None,
             traceability_format=self.traceability_combo.currentText(),
             entity=entity,
-            linked_entity=linked_entity,
+            concerns=concerns,
             include_source_columns=self.include_source_columns_check.isChecked(),
             exports=exports,
             # The worker reports phases through this thread-safe signal emit (see ProgressBridge).
@@ -982,7 +982,7 @@ class MainController(QObject):
         # Clearing the form closes the active case: reset the context, title and summary line.
         self._clear_active_case()
         self.entity_edit.clear()
-        self.linked_entity_edit.clear()
+        self.concerns_edit.clear()
         self.presets_path_edit.setText(str(Path.cwd() / "presets"))
         self.preset_search_edit.clear()
         self.selected_preset_list.clear()
