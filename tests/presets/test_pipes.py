@@ -80,3 +80,27 @@ def test_unknown_transform_is_hard_error() -> None:
 def test_arithmetic_rejects_unsafe_expression() -> None:
     with pytest.raises(ValueError):
         run(1, "arithmetic(__import__('os').system('echo hi'), on_error=error)")
+
+
+def test_bool_cast_reads_spelling_not_python_truthiness() -> None:
+    # bool("false") is True in Python; the shared to_bool rule (used by BOTH the cast pipe and
+    # coerce_scalar) must read the recognised spelling and reject an unrecognised token — never
+    # fabricate a truth value from a non-empty string.
+    from model_atlas.presets.resolve import coerce_scalar
+    from model_atlas.presets.value_maps import to_bool
+    assert to_bool("false") is False and to_bool("0") is False and to_bool("") is False
+    assert to_bool("true") is True and to_bool("1") is True and to_bool("YES") is True
+    assert to_bool(True) is True and to_bool(0) is False
+    with pytest.raises(ValueError):
+        to_bool("maybe")
+    # both public entrypoints route through the one rule
+    assert coerce_scalar("false", "bool") is False
+    assert run("true", "cast(bool)")[0] is True
+
+
+def test_lookup_rejects_colliding_normalised_keys() -> None:
+    # A table declaring both int 1 and str "1" normalises both to the SAME key; letting the last
+    # silently win would drop a mapping, so the lookup raises on the ambiguity.
+    tables = {"amb": {1: "one", "1": "uno"}}
+    with pytest.raises(TransformHardError, match="collide"):
+        run("1", "lookup(amb)", lookup_tables=tables)

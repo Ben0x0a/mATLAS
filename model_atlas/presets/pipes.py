@@ -7,7 +7,8 @@ Defines:    register_transform (decorator), TransformHardError, PipeContext, run
 Used by:    presets.resolve (runs pipes inside field resolution) and, through it, the
             ingest assembly engine.
 Depends on: presets.expr (PipeCall), presets.expression (the arithmetic sandbox),
-            presets.value_maps (lookup key normalisation); standard library.
+            presets.value_maps (lookup key normalisation + the shared to_bool cast);
+            standard library.
 
 The registry/runner half is moved verbatim from
 ``transforms/registry.py`` and the six pipe transforms from
@@ -31,14 +32,11 @@ from typing import Any, Callable
 
 from model_atlas.presets.expr import PipeCall
 from model_atlas.presets.expression import evaluate
-from model_atlas.presets.value_maps import value_map_key
+from model_atlas.presets.value_maps import to_bool, value_map_key
 
 log = logging.getLogger(__name__)
 
 _ON_ERROR_POLICIES = ("null", "raw", "error")
-
-_TRUE_TOKENS = {"1", "true", "yes", "y", "t"}
-_FALSE_TOKENS = {"0", "false", "no", "n", "f", ""}
 
 Transform = Callable[[Any, tuple[Any, ...], dict[str, Any], "PipeContext"], Any]
 _REGISTRY: dict[str, Transform] = {}
@@ -107,12 +105,7 @@ def _cast(value: Any, args: tuple[Any, ...], kwargs: dict[str, Any], ctx: PipeCo
     if to == "str":
         return str(value)
     if to == "bool":
-        token = str(value).strip().casefold()
-        if token in _TRUE_TOKENS:
-            return True
-        if token in _FALSE_TOKENS:
-            return False
-        raise ValueError(f"Cannot cast {value!r} to bool")
+        return to_bool(value)   # the single boolean-cast rule, shared with coerce_scalar
     raise TransformHardError(f"Unsupported cast target {to!r}")
 
 
@@ -140,7 +133,19 @@ def _lookup(value: Any, args: tuple[Any, ...], kwargs: dict[str, Any], ctx: Pipe
     if table is None:
         raise TransformHardError(f"lookup references unknown table {name!r}")
     on_unknown = kwargs.get("on_unknown", "raw")
-    normalised = {value_map_key(k): v for k, v in table.items()}
+    # Normalise every key through value_map_key, but REJECT a collision rather than let the
+    # last one silently win: a table declaring both ``1:`` and ``"1":`` (int and str) maps both
+    # to the same normalised key, so one mapping would vanish without warning — a forensic
+    # value-map must be unambiguous.
+    normalised: dict[str, Any] = {}
+    for raw_key, mapped in table.items():
+        norm_key = value_map_key(raw_key)
+        if norm_key in normalised:
+            raise TransformHardError(
+                f"lookup table {name!r} has keys that collide after normalisation "
+                f"(e.g. {raw_key!r} maps to {norm_key!r}, already taken); "
+                f"remove the ambiguous duplicate")
+        normalised[norm_key] = mapped
     key = value_map_key(value)
     if key in normalised:
         return normalised[key]

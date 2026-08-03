@@ -108,6 +108,17 @@ def test_malformed_conditional_raises(text: str) -> None:
         parse_cond(text)
 
 
+def test_typo_ref_kind_comparand_raises_at_parse() -> None:
+    # A comparand that LOOKS like a call but names an unknown kind (``feild`` for ``field``)
+    # must RAISE rather than silently become the unmatchable literal "feild(Y)" — which would
+    # quietly send every row to the else-branch with no error.
+    with pytest.raises(ValueError, match="reference kind"):
+        parse_cond("if field(X) == feild(Y) then const(a) else const(b)")
+    # a correctly-spelled ref comparand still parses
+    assert isinstance(
+        parse_cond("if field(X) == field(Y) then const(a) else const(b)"), Cond)
+
+
 # --- evaluation (presets.resolve.resolve_cond / cond_match) ------------------
 
 def test_na_test_true_when_missing_false_when_present() -> None:

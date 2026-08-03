@@ -337,10 +337,19 @@ def flatten_ref(ref: Ref) -> tuple[Ref, ...]:
 def _parse_operand(token: str) -> Ref:
     """Parse a conditional comparand: a call-form ref (``field(Y)``) stays a ref; anything
     else (``"NA"``, ``NA``, ``"1"``, ``42``) becomes ``const(<coerced-literal>)`` so both the
-    test's left operand and its comparand resolve through the one ``_resolve_ref`` path."""
+    test's left operand and its comparand resolve through the one ``_resolve_ref`` path.
+
+    A token that LOOKS like a call form but names an UNKNOWN kind (a typo — ``feild(Y)``) is a
+    preset error, so it RAISES at parse time instead of silently degrading to the unmatchable
+    string literal ``"feild(Y)"`` — which would make every comparison quietly take the
+    else-branch with no error. Quote a genuine literal (``"foo(bar)"``) to keep it a string."""
     match = _CALL_RE.match(token)
-    if match is not None and match.group(1) in REF_KINDS:
-        return parse_ref(token)
+    if match is not None:
+        if match.group(1) in REF_KINDS:
+            return parse_ref(token)
+        raise ValueError(
+            f"conditional comparand {token!r} looks like a call but {match.group(1)!r} is not a "
+            f"reference kind; expected one of {REF_KINDS} (quote it to use a literal string)")
     return Ref(kind="const", arg=_coerce(token))
 
 

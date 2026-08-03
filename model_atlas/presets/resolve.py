@@ -37,7 +37,7 @@ from model_atlas.core.vocabularies import column_cast, unit_factor
 from model_atlas.presets.expr import NA_LITERAL, NA_SENTINEL, Cond, Ref, Template
 from model_atlas.presets.pipes import PipeContext, run_pipe
 from model_atlas.presets.spec import FieldSpec, InputSelector, PresetSpec
-from model_atlas.presets.value_maps import value_map_key
+from model_atlas.presets.value_maps import to_bool, value_map_key
 
 
 def is_missing(value: Any) -> bool:
@@ -74,7 +74,8 @@ def coerce_scalar(value: Any, target: str) -> Any:
     if target == "str":
         return str(value)
     if target == "bool":
-        return bool(value)
+        # to_bool (shared with the cast pipe) rejects Python's ``bool("false") is True`` trap.
+        return to_bool(value)
     raise ValueError(f"unsupported cast target {target!r}")
 
 
