@@ -8,6 +8,7 @@ frame locals, metadata and traceback — without ever dumping a whole DataFrame.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -18,7 +19,12 @@ from model_atlas.app.config import DiagnosticsSettings, Settings
 from model_atlas.app.diagnostics import (
     _relativise_path,
     _render_markdown,
+    KIND_BUG,
+    KIND_ERROR,
     _summarise,
+    capture_exception,
+    error_report_count,
+    write_bug_report,
     write_crash_report,
 )
 
@@ -266,3 +272,98 @@ def test_markdown_renders_redacted_value_and_empty_frame() -> None:
     assert "model_atlas/x.py:3" in md
     assert "_redacted_" in md and "abcdef123456" in md   # short sha, never the plaintext
     assert "_(no locals)_" in md                          # the empty-locals frame
+
+
+# --- the bug report: same artefact, no exception -----------------------------
+# A bug that produces the wrong answer raises nothing, so the crash path never fires and the
+# state that explains it lives only in the running frames. These cover that second half.
+
+def test_bug_report_captures_every_live_thread(tmp_path: Path) -> None:
+    _use_diagnostics(DiagnosticsSettings(crash_dir=str(tmp_path / "reports")))
+    started, release = threading.Event(), threading.Event()
+
+    def worker() -> None:
+        worker_only_local = "state-that-explains-the-bug"   # noqa: F841 - the point of the test
+        started.set()
+        release.wait(timeout=5)
+
+    thread = threading.Thread(target=worker, name="pipeline-worker")
+    thread.start()
+    try:
+        assert started.wait(timeout=5)
+        path = write_bug_report(context={"entrypoint": "test"})
+        assert path is not None
+        report = json.loads(path.read_text(encoding="utf-8-sig"))
+    finally:
+        release.set()
+        thread.join(timeout=5)
+
+    assert report["kind"] == KIND_BUG
+    assert report["safe"]["exception_type"] is None      # no exception, by definition
+    names = {t["thread_name"] for t in report["safe"]["threads"]}
+    assert "pipeline-worker" in names, "a worker thread's stack must be captured"
+    # The locals of a thread that never raised are exactly what a silent bug leaves nowhere
+    # else — capturing the stack without them would defeat the feature.
+    worker_frames = next(t for t in report["sensitive"]["threads"]
+                         if t["thread_name"] == "pipeline-worker")["frames"]
+    captured = {name for frame in worker_frames for name in (frame.get("locals") or {})}
+    assert "worker_only_local" in captured
+
+
+def test_bug_report_excludes_the_reporters_own_frames(tmp_path: Path) -> None:
+    # The report must describe the application, not the act of reporting.
+    _use_diagnostics(DiagnosticsSettings(crash_dir=str(tmp_path / "reports")))
+    path = write_bug_report()
+    report = json.loads(path.read_text(encoding="utf-8-sig"))
+    main = next(t for t in report["safe"]["threads"] if t["is_main"])
+    functions = {frame["function"] for frame in main["frames"]}
+    assert "write_bug_report" not in functions
+    assert "_collect_thread_stacks" not in functions
+    # ... while still reaching the calling test frame.
+    assert "test_bug_report_excludes_the_reporters_own_frames" in functions
+
+
+def test_bug_and_error_reports_share_one_format(tmp_path: Path) -> None:
+    _use_diagnostics(DiagnosticsSettings(crash_dir=str(tmp_path / "reports")))
+    bug = json.loads(write_bug_report().read_text(encoding="utf-8-sig"))
+    try:
+        raise ValueError("boom")
+    except ValueError as exc:
+        error = json.loads(capture_exception(exc).read_text(encoding="utf-8-sig"))
+    assert bug["schema"] == error["schema"]
+    assert {"schema", "tool", "kind", "safe", "sensitive"} <= set(bug) & set(error)
+    assert (bug["kind"], error["kind"]) == (KIND_BUG, KIND_ERROR)
+    # Both render, and both carry the fileable template.
+    for report in (bug, error):
+        markdown = _render_markdown(report)
+        assert "## Steps to reproduce" in markdown
+        assert "## Expected vs actual" in markdown
+
+
+def test_error_count_ignores_bug_reports(tmp_path: Path) -> None:
+    """The GUI caption keys off this: filing a bug report must not claim the tool errored."""
+    _use_diagnostics(DiagnosticsSettings(crash_dir=str(tmp_path / "reports")))
+    assert error_report_count() == 0
+    write_bug_report()
+    assert error_report_count() == 0, "a bug report is not an error"
+    try:
+        raise ValueError("boom")
+    except ValueError as exc:
+        capture_exception(exc)
+    assert error_report_count() == 1
+
+
+def test_capture_exception_reports_a_swallowed_failure(tmp_path: Path) -> None:
+    """The funnel sys.excepthook never sees — every GUI background task flows through it."""
+    _use_diagnostics(DiagnosticsSettings(crash_dir=str(tmp_path / "reports")))
+    try:
+        marker_local = "visible-in-the-report"   # noqa: F841 - asserted below
+        raise RuntimeError("swallowed")
+    except RuntimeError as exc:
+        path = capture_exception(exc, context={"op": "background task"})
+    report = json.loads(path.read_text(encoding="utf-8-sig"))
+    assert report["kind"] == KIND_ERROR
+    assert report["safe"]["context"] == {"op": "background task"}
+    captured = {name for frame in report["sensitive"]["frames"]
+                for name in (frame.get("locals") or {})}
+    assert "marker_local" in captured

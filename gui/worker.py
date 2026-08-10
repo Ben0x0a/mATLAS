@@ -22,6 +22,7 @@ from typing import Any, Callable
 from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
 
 from model_atlas.app.config import get_settings
+from model_atlas.app.diagnostics import capture_exception
 from model_atlas.app.logging_setup import build_formatter
 
 
@@ -72,7 +73,13 @@ class _TaskWorker(QObject):
     def run(self) -> None:
         try:
             self.finished.emit(self._fn())
-        except Exception:  # noqa: BLE001 - surface all failures in the GUI
+        except Exception as exc:  # noqa: BLE001 - surface all failures in the GUI
+            # Write a crash report BEFORE the failure becomes a mere string. sys.excepthook
+            # never sees this: the except below swallows the exception and the GUI receives a
+            # formatted traceback with no frames and no locals behind it. Every background
+            # operation in this app flows through here, so without this call the most common
+            # failure path is the one that reports the least.
+            capture_exception(exc, context={"entrypoint": "gui", "op": "background task"})
             self.failed.emit(traceback.format_exc())
 
 

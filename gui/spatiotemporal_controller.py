@@ -16,12 +16,13 @@ Used by:    the GUI orchestrator, which constructs one ``SpatiotemporalControlle
             test_spatiotemporal_panel.py.
 Depends on: gui.spatiotemporal_query (the Qt-free UI<->request mapping seam), gui.worker
             (TaskRunner / ProgressBridge — reused, never reinvented), model_atlas.app.
-            concomitance_run (run_concomitance / ConcomitanceRunResult /
-            ConcomitanceNotYetSupported), model_atlas.analyze.concomitance_request
+            concomitance_run (run_concomitance / ConcomitanceRunResult),
+            model_atlas.analyze.concomitance_request
             (ConcomitanceRequest / Criterion / CriterionKind / EntityGroup / MatchMode /
             Problem / Severity / check_request), model_atlas.analyze.case_vocabulary
             (read_case_vocabulary / VocabularyEntry), model_atlas.ingest.writer
-            (is_matlas_run_db), PySide6, and the standard library (datetime, threading).
+            (is_matlas_run_db), gui.report_actions (the shared diagnostics button),
+            PySide6, and the standard library (datetime, threading).
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ from PySide6.QtWidgets import (
     QCompleter,
     QDoubleSpinBox,
     QFileDialog,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -48,12 +50,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from gui import report_actions
 from gui.spatiotemporal_query import DURATION_UNIT_NAMES, build_request, split_identifiers
 from gui.worker import ProgressBridge, TaskRunner
 from model_atlas.analyze.case_vocabulary import VocabularyEntry, read_case_vocabulary
@@ -64,12 +68,7 @@ from model_atlas.analyze.concomitance_request import (
     Severity,
     check_request,
 )
-from model_atlas.app.concomitance_run import (
-    ConcomitanceNotYetSupported,
-    ConcomitanceRunResult,
-    run_concomitance,
-)
-from model_atlas.app.config import get_settings
+from model_atlas.app.concomitance_run import ConcomitanceRunResult, run_concomitance
 from model_atlas.ingest.writer import is_matlas_run_db
 
 log = logging.getLogger("model_atlas.gui")
@@ -85,6 +84,10 @@ _KIND_ITEMS: tuple[tuple[str, CriterionKind], ...] = (
 # typo is a KeyError at the point of the typo rather than a silently-ignored no-op).
 _SIDE_1 = "group_1"
 _SIDE_2 = "group_2"
+
+# The progress bar is a status indicator beside the Run button, not a page element: a
+# full-width bar read as the panel's main content and dominated the action row.
+_PROGRESS_BAR_WIDTH = 150
 
 
 # --- one group's widgets + live state (kept together so the two groups build/refresh
@@ -124,18 +127,24 @@ class _GroupWidgets:
         self.chips_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         outer.addWidget(self.chips_list, 1)
 
+        # Radio buttons, not a pair of checkable QPushButtons: "exactly one of these two"
+        # is what a radio group IS, and Qt's built-in already carries the keyboard and
+        # screen-reader behaviour a hand-rolled equivalent would have to re-earn. It also
+        # avoids a semantic clash — under this theme a checked QPushButton is filled with
+        # the accent colour, which everywhere else in the app means "primary action"
+        # (the Run button), not "this option is selected".
         mode_row = QHBoxLayout()
-        self.any_button = QPushButton("Match any of these", self.box)
-        self.all_button = QPushButton("Match all of these", self.box)
-        for button in (self.any_button, self.all_button):
-            button.setCheckable(True)
-        self.any_button.setChecked(True)
+        mode_row.addWidget(QLabel("Match", self.box))
+        self.any_button = QRadioButton("any of these", self.box)
+        self.all_button = QRadioButton("all of these", self.box)
+        self.any_button.setChecked(True)   # the default mode (MatchMode.ANY)
         self.mode_group = QButtonGroup(self.box)
         self.mode_group.setExclusive(True)
         self.mode_group.addButton(self.any_button)
         self.mode_group.addButton(self.all_button)
         mode_row.addWidget(self.any_button)
         mode_row.addWidget(self.all_button)
+        mode_row.addStretch(1)
         outer.addLayout(mode_row)
 
     def kind_for_row(self, row: int) -> CriterionKind:
@@ -270,25 +279,32 @@ class SpatiotemporalController(QObject):
         return box
 
     def _build_thresholds_box(self) -> QGroupBox:
-        box = QGroupBox("Thresholds", self.root)
-        outer = QVBoxLayout(box)
+        """The two threshold rows, laid out on ONE grid.
 
-        distance_row = QHBoxLayout()
-        distance_row.addWidget(QLabel("Distance", box))
+        A grid rather than two independent QHBoxLayouts: the rows carry different
+        controls (one spin box vs two spin/unit pairs), so side-by-side box layouts gave
+        every row its own column positions and nothing lined up vertically. Sharing a
+        grid means the captions, the value fields and the unit combos each sit on one
+        column edge, which is what makes the block readable at a glance.
+        """
+        box = QGroupBox("Thresholds", self.root)
+        grid = QGridLayout(box)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+
+        grid.addWidget(QLabel("Distance", box), 0, 0)
         self.space_spin = QDoubleSpinBox(box)
         self.space_spin.setDecimals(1)
         self.space_spin.setRange(0.0, 10_000_000.0)
         self.space_spin.setSingleStep(10.0)
         self.space_spin.setValue(100.0)
         self.space_spin.setSuffix(" m")
-        distance_row.addWidget(self.space_spin)
-        distance_row.addStretch(1)
+        grid.addWidget(self.space_spin, 0, 1)
+        # The accuracy toggle belongs to the distance rule, so it rides that row's tail.
         self.accuracy_check = QCheckBox("Account for recorded accuracy", box)
-        distance_row.addWidget(self.accuracy_check)
-        outer.addLayout(distance_row)
+        grid.addWidget(self.accuracy_check, 0, 3, 1, 3)
 
-        window_row = QHBoxLayout()
-        window_row.addWidget(QLabel("Time window", box))
+        grid.addWidget(QLabel("Time window", box), 1, 0)
         self.time_before_spin = QDoubleSpinBox(box)
         self.time_before_spin.setDecimals(2)
         self.time_before_spin.setRange(0.0, 1_000_000.0)
@@ -296,9 +312,10 @@ class SpatiotemporalController(QObject):
         self.time_before_unit_combo = QComboBox(box)
         self.time_before_unit_combo.addItems(DURATION_UNIT_NAMES)
         self.time_before_unit_combo.setCurrentText("minutes")
-        window_row.addWidget(self.time_before_spin)
-        window_row.addWidget(self.time_before_unit_combo)
-        window_row.addWidget(QLabel("before", box))
+        grid.addWidget(self.time_before_spin, 1, 1)
+        grid.addWidget(self.time_before_unit_combo, 1, 2)
+        grid.addWidget(QLabel("before", box), 1, 3)
+
         self.time_after_spin = QDoubleSpinBox(box)
         self.time_after_spin.setDecimals(2)
         self.time_after_spin.setRange(0.0, 1_000_000.0)
@@ -306,10 +323,10 @@ class SpatiotemporalController(QObject):
         self.time_after_unit_combo = QComboBox(box)
         self.time_after_unit_combo.addItems(DURATION_UNIT_NAMES)
         self.time_after_unit_combo.setCurrentText("minutes")
-        window_row.addWidget(self.time_after_spin)
-        window_row.addWidget(self.time_after_unit_combo)
-        window_row.addWidget(QLabel("after", box))
-        outer.addLayout(window_row)
+        grid.addWidget(self.time_after_spin, 1, 4)
+        grid.addWidget(self.time_after_unit_combo, 1, 5)
+        grid.addWidget(QLabel("after", box), 1, 6)
+        grid.setColumnStretch(7, 1)   # slack collects on the right, not between controls
 
         return box
 
@@ -318,8 +335,11 @@ class SpatiotemporalController(QObject):
         row = QHBoxLayout(box)
         self.output_edit = QLineEdit(box)
         self.output_edit.setObjectName("outputEdit")
-        self.output_edit.setText(str(
-            Path.cwd() / f"concomitance-{dt.date.today().isoformat()}.csv"))
+        # Deliberately EMPTY until Case 1 is opened: a path pre-filled at launch points
+        # at whatever directory the app happened to start in, which is almost never where
+        # the operator wants results. _suggest_output_path fills it from the case instead.
+        self.output_edit.setPlaceholderText(
+            "chosen automatically when Case 1 is opened; or pick a folder")
         self.output_folder_button = QPushButton("Folder…", box)
         row.addWidget(QLabel("Write to", box))
         row.addWidget(self.output_edit, 1)
@@ -330,14 +350,19 @@ class SpatiotemporalController(QObject):
         row = QHBoxLayout()
         self.clear_log_button = QPushButton("Clear log", self.root)
         self.progress_bar = QProgressBar(self.root)
-        self.progress_bar.setRange(0, 0)   # busy/indeterminate until an anchor total is known
+        # Idle at rest: a 0..0 range animates forever, so an untouched panel looked like it
+        # was already working. It only becomes indeterminate once a run actually starts.
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedWidth(_PROGRESS_BAR_WIDTH)
         self.status_label = QLabel("Idle", self.root)
         row.addWidget(self.clear_log_button)
-        row.addWidget(self.progress_bar, 1)
+        row.addWidget(self.progress_bar)
         row.addWidget(self.status_label)
         row.addStretch(1)
-        self.open_error_reports_button = QPushButton("Open error reports", self.root)
+        self.open_error_reports_button = QPushButton(self.root)
+        report_actions.sync_report_button(self.open_error_reports_button)
         self.open_output_folder_button = QPushButton("Open output folder", self.root)
         self.open_output_folder_button.setEnabled(False)
         self.run_button = QPushButton("Run", self.root)
@@ -372,7 +397,6 @@ class SpatiotemporalController(QObject):
         self.output_folder_button.setAccessibleName("Choose output folder")
         self.clear_log_button.setAccessibleName("Clear log")
         self.progress_bar.setAccessibleName("Concomitance run progress")
-        self.open_error_reports_button.setAccessibleName("Open error reports")
         self.open_output_folder_button.setAccessibleName("Open output folder")
         self.run_button.setAccessibleName("Run concomitance analysis")
         self.log_edit.setAccessibleName("Spatiotemporal analysis log")
@@ -383,7 +407,7 @@ class SpatiotemporalController(QObject):
         self.compare_check.toggled.connect(self._on_compare_toggled)
         self.output_folder_button.clicked.connect(self._browse_output_folder)
         self.clear_log_button.clicked.connect(self.log_edit.clear)
-        self.open_error_reports_button.clicked.connect(self._open_error_reports)
+        self.open_error_reports_button.clicked.connect(self._on_report_button)
         self.open_output_folder_button.clicked.connect(self._open_output_folder)
         self.run_button.clicked.connect(self._on_run_clicked)
 
@@ -425,6 +449,7 @@ class SpatiotemporalController(QObject):
         if side == _SIDE_1:
             self.case_1_edit.setText(str(db_path))
             self._case_1_vocabulary = vocabulary
+            self._suggest_output_path(db_path)
             self._refresh_group(_SIDE_1)
             if not self.compare_check.isChecked():
                 self._refresh_group(_SIDE_2)
@@ -434,6 +459,18 @@ class SpatiotemporalController(QObject):
             self._groups[_SIDE_2].box.setTitle("Group 2 — Case 2")
             self._refresh_group(_SIDE_2)
         self._append_log(f"Opened case {db_path.name} for {side.replace('_', ' ')}")
+
+    def _suggest_output_path(self, case_db: Path) -> None:
+        """Propose a results file beside Case 1, the first time a case is opened.
+
+        WHY only when the field is empty: the suggestion is a convenience, and silently
+        rewriting a path the operator typed or picked would lose their choice on the next
+        case swap. The results land next to the evidence they came from, which is where
+        an analyst looks for them."""
+        if self.output_edit.text().strip():
+            return
+        name = f"concomitance-{dt.date.today().isoformat()}.csv"
+        self.output_edit.setText(str(case_db.parent / name))
 
     def _vocabulary_for(self, side: str) -> dict[CriterionKind, tuple[VocabularyEntry, ...]]:
         if side == _SIDE_2 and self.compare_check.isChecked():
@@ -637,6 +674,7 @@ class SpatiotemporalController(QObject):
 
     def _on_run_failed(self, tb: str) -> None:
         self._set_running(False)
+        report_actions.sync_report_button(self.open_error_reports_button)
         last = tb.strip().splitlines()[-1] if tb.strip() else "Concomitance run failed"
         log.error(f"Concomitance run failed:\n{tb}")
         self._append_log(last)
@@ -660,18 +698,18 @@ class SpatiotemporalController(QObject):
 
     # --- misc actions ---------------------------------------------------------------------
 
-    def _open_error_reports(self) -> None:
-        # Mirrors gui.app.MainController._open_error_reports (app-wide diagnostics folder,
-        # not scoped to this panel — every shell's unhandled error lands in the same place).
-        crash_dir = Path(get_settings().diagnostics.crash_dir).expanduser()
-        if not crash_dir.is_absolute():
-            crash_dir = Path.cwd() / crash_dir
-        if not crash_dir.is_dir():
-            QMessageBox.information(
-                self.root, "Model Atlas",
-                f"No error reports yet.\nThey would be written to:\n{crash_dir}")
-            return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(crash_dir)))
+    def _on_report_button(self) -> None:
+        """Open the error-report folder, or file a bug report — see gui.report_actions.
+
+        Shares that helper with the Transform bar rather than mirroring it: this used to be
+        a hand-copied twin of MainController's handler, and the two would have drifted the
+        moment one of them learned the bug-report half."""
+        report_actions.handle_report_button(
+            self.root, self.open_error_reports_button,
+            context={"entrypoint": "gui", "tab": "concomitance",
+                     "case_1": self.case_1_edit.text().strip() or None,
+                     "case_2": self.case_2_edit.text().strip() or None},
+        )
 
     def _open_output_folder(self) -> None:
         if self._last_output_folder is None:

@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui import accessibility, header_assets
+from gui import accessibility, header_assets, report_actions
 from gui.case_state import format_case_summary, read_case_counts
 from gui.completion import param_completions
 from gui.db_edit_controller import DbEditController
@@ -59,7 +59,6 @@ from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
 from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler, remove_gui_log_handler
 from model_atlas.app.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
-from model_atlas.app.config import get_settings
 from model_atlas.export.registry import available_exporters, load_builtin_exporters
 from model_atlas.ingest.writer import is_matlas_run_db
 from model_atlas.app.pipeline import ProcessResult, process
@@ -306,6 +305,7 @@ class MainController(QObject):
         self._sync_case_bar()
         self._configure_entity_completion()
         self._configure_exports()
+        report_actions.sync_report_button(self.open_error_report_button)
         accessibility.configure_accessibility(self)
 
     def _attach_panels(self) -> None:
@@ -412,7 +412,7 @@ class MainController(QObject):
         self.open_case_button.clicked.connect(self._open_case)
         self.close_case_button.clicked.connect(self._close_case)
         self.open_output_folder_button.clicked.connect(self._open_output_folder)
-        self.open_error_report_button.clicked.connect(self._open_error_reports)
+        self.open_error_report_button.clicked.connect(self._on_report_button)
         self.clear_form_button.clicked.connect(self._clear_form)
         self.clear_log_button.clicked.connect(self.log_edit.clear)
         self.load_profile_button.clicked.connect(self._load_profile)
@@ -914,6 +914,8 @@ class MainController(QObject):
 
     def _on_process_done(self, result: ProcessResult) -> None:
         self._set_running(False)
+        # A run may have produced a report; the caption must not lag the folder.
+        report_actions.sync_report_button(self.open_error_report_button)
         # The case database is always written (the run itself), so the output folder always
         # exists and can be opened.
         self._last_output_folder = result.output_case_db.parent
@@ -945,6 +947,7 @@ class MainController(QObject):
 
     def _on_process_failed(self, tb: str) -> None:
         self._set_running(False)
+        report_actions.sync_report_button(self.open_error_report_button)
         last = tb.strip().splitlines()[-1] if tb.strip() else "Processing failed"
         self._set_status("Failed")
         log.error(f"Processing failed:\n{tb}")
@@ -1187,20 +1190,16 @@ class MainController(QObject):
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_output_folder)))
 
-    def _open_error_reports(self) -> None:
-        """Open the crash-report folder (model_atlas.app.diagnostics writes matlas_error_*.json here
-        on any unhandled error). Always available; if nothing has failed yet the folder may not
-        exist, so tell the user rather than opening a missing path."""
-        crash_dir = Path(get_settings().diagnostics.crash_dir).expanduser()
-        if not crash_dir.is_absolute():
-            crash_dir = Path.cwd() / crash_dir
-        if not crash_dir.is_dir():
-            QMessageBox.information(
-                self.window, "Model Atlas",
-                f"No error reports yet.\nThey would be written to:\n{crash_dir}",
-            )
-            return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(crash_dir)))
+    def _on_report_button(self) -> None:
+        """Open the error-report folder, or file a bug report — see gui.report_actions.
+
+        The context tells a reader what the tool was doing when the report was filed, which
+        is most of the value when nothing raised."""
+        report_actions.handle_report_button(
+            self.window, self.open_error_report_button,
+            context={"entrypoint": "gui", "tab": self.tab_widget.tabText(
+                self.tab_widget.currentIndex()), "case": self._case_name},
+        )
 
     def _clear_form(self) -> None:
         self.source_edit.clear()

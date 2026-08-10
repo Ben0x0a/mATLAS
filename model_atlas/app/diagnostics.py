@@ -54,7 +54,22 @@ log = logging.getLogger(__name__)
 
 # Bumped when the report structure changes, so a downstream reader can branch on it. /2
 # introduced the safe/sensitive split and the side-by-side .md artefact.
-REPORT_SCHEMA = "matlas.crash-report/2"
+# /3 adds ``kind`` and, for a bug report, per-thread frame groups. The name dropped
+# "crash" because the same artefact now also carries an operator-triggered bug report:
+# a bug that raises nothing is exactly the case where the variables are hardest to get.
+REPORT_SCHEMA = "matlas.diagnostic-report/3"
+
+# The two things a report can be. Both share ONE format, so a reader (and any future
+# redaction tooling) handles them identically; only ``kind`` and the presence of an
+# exception distinguish them.
+KIND_ERROR = "error"
+KIND_BUG = "bug"
+
+# How many frames of one live thread's stack a bug report keeps (outermost trimmed first).
+# Deliberately a module constant rather than a config knob: it bounds the reporter, not the
+# tool's behaviour, and nothing an operator would tune. Deep recursion is the only case that
+# reaches it, and the innermost frames — the ones holding the interesting values — are kept.
+_MAX_STACK_FRAMES = 60
 
 # Packages whose installed version is worth recording for a repro (best-effort; a missing
 # one is simply omitted). model_atlas' own version is recorded separately from __version__.
@@ -367,37 +382,87 @@ def _sizeof(summary: Any) -> int:
         return len(str(summary))
 
 
+def _frame_entry(frame: Any, lineno: int, cfg: DiagnosticsSettings) -> dict[str, Any]:
+    """One stack frame: where it is, its source line, and its summarised locals.
+
+    Shared by the traceback walk (an error) and the live-thread walk (a bug report), so both
+    kinds of report describe a frame identically — the whole point of one format."""
+    code = frame.f_code
+    locals_summary: dict[str, Any] = {}
+    used = 0
+    truncated = False
+    for var_name, value in list(frame.f_locals.items()):
+        summary = _summarise(var_name, value, cfg, cfg.max_depth)
+        size = _sizeof(summary)
+        if used + size > cfg.max_frame_bytes:
+            truncated = True
+            break
+        locals_summary[var_name] = summary
+        used += size
+    entry: dict[str, Any] = {
+        # co_filename is used verbatim for linecache (must be the real path) but anonymised
+        # in the report so the username / directory structure does not leak.
+        "file": _relativise_path(code.co_filename, cfg, basename_fallback=True),
+        "lineno": lineno,
+        "function": code.co_name,
+        "code": _anonymise_paths(
+            linecache.getline(code.co_filename, lineno).strip(), cfg) or None,
+        "locals": locals_summary,
+    }
+    if truncated:
+        entry["locals_truncated"] = True
+    return entry
+
+
 def _collect_frames(tb: Any, cfg: DiagnosticsSettings) -> list[dict[str, Any]]:
-    """One entry per stack frame (outermost first, crash site last), each with its source line
-    and summarised locals. A per-frame byte budget stops one huge frame bloating the report."""
-    frames: list[dict[str, Any]] = []
-    for frame, lineno in traceback.walk_tb(tb):
-        code = frame.f_code
-        locals_summary: dict[str, Any] = {}
-        used = 0
-        truncated = False
-        for var_name, value in list(frame.f_locals.items()):
-            summary = _summarise(var_name, value, cfg, cfg.max_depth)
-            size = _sizeof(summary)
-            if used + size > cfg.max_frame_bytes:
-                truncated = True
-                break
-            locals_summary[var_name] = summary
-            used += size
-        entry: dict[str, Any] = {
-            # co_filename is used verbatim for linecache (must be the real path) but anonymised
-            # in the report so the username / directory structure does not leak.
-            "file": _relativise_path(code.co_filename, cfg, basename_fallback=True),
-            "lineno": lineno,
-            "function": code.co_name,
-            "code": _anonymise_paths(
-                linecache.getline(code.co_filename, lineno).strip(), cfg) or None,
-            "locals": locals_summary,
-        }
-        if truncated:
-            entry["locals_truncated"] = True
-        frames.append(entry)
-    return frames
+    """One entry per traceback frame (outermost first, crash site last)."""
+    return [_frame_entry(frame, lineno, cfg) for frame, lineno in traceback.walk_tb(tb)]
+
+
+def _collect_thread_stacks(cfg: DiagnosticsSettings,
+                           skip_frame: Any = None) -> list[dict[str, Any]]:
+    """Every live thread's current stack, outermost frame first.
+
+    WHY this exists: a bug that raises nothing leaves no traceback to walk, and by the time
+    an operator notices the wrong behaviour the values that explain it are only in the
+    running frames. ``sys._current_frames()`` is the one way to reach them from outside the
+    thread. Frames belonging to the reporter itself are dropped so the report describes the
+    application, not the act of reporting.
+
+    The mapping is a snapshot of running threads: it can name a thread that finishes while
+    we walk it, so every probe is guarded — a report that skips one racing thread is worth
+    far more than a reporter that raises."""
+    stacks: list[dict[str, Any]] = []
+    by_ident = {thread.ident: thread for thread in threading.enumerate()}
+    for ident, frame in sorted(sys._current_frames().items()):
+        try:
+            thread = by_ident.get(ident)
+            chain: list[Any] = []
+            current: Any = frame
+            while current is not None and len(chain) < _MAX_STACK_FRAMES:
+                if current is skip_frame:
+                    # Everything collected so far is INNER than the reporter, so it is the
+                    # reporter's own machinery. Drop it and keep walking outward into the
+                    # application. (Skipping the whole thread here instead would discard the
+                    # calling thread entirely — which is usually the interesting one.)
+                    chain.clear()
+                    current = current.f_back
+                    continue
+                chain.append(current)
+                current = current.f_back
+            if not chain:
+                continue
+            chain.reverse()   # outermost first, matching a traceback's order
+            stacks.append({
+                "thread_name": getattr(thread, "name", None) or f"thread-{ident}",
+                "thread_ident": ident,
+                "daemon": bool(getattr(thread, "daemon", False)),
+                "is_main": thread is threading.main_thread(),
+                "frames": [_frame_entry(f, f.f_lineno, cfg) for f in chain],
+            })
+        except Exception:  # noqa: BLE001 - one unreadable thread must not lose the others.
+            log.debug("skipped a thread while collecting stacks", exc_info=True)
+    return stacks
 
 
 def _safe_frame(frame: dict[str, Any]) -> dict[str, Any]:
@@ -492,13 +557,40 @@ def _diag_settings() -> DiagnosticsSettings:
         return DiagnosticsSettings()
 
 
-def _report_path(cfg: DiagnosticsSettings) -> Path:
+def report_dir(cfg: DiagnosticsSettings | None = None) -> Path:
+    """The absolute folder both report kinds are written to.
+
+    Exposed so a shell can name it (and count what is in it) without re-deriving the
+    relative-path rule — ``crash_dir`` may be relative, and resolving it in two places is
+    how the two would drift."""
+    cfg = cfg or _diag_settings()
+    directory = Path(cfg.crash_dir).expanduser()
+    return directory if directory.is_absolute() else Path.cwd() / directory
+
+
+def error_report_count(cfg: DiagnosticsSettings | None = None) -> int:
+    """How many ERROR reports exist (bug reports deliberately excluded).
+
+    A shell uses this to decide whether anything has actually failed. Counting bug reports
+    here would be self-fulfilling: filing one would make the tool claim it had errored."""
+    try:
+        return len(list(report_dir(cfg).glob(f"{_FILE_STEM[KIND_ERROR]}*.json")))
+    except Exception:  # noqa: BLE001 - an unreadable folder is "nothing to show", not a crash.
+        return 0
+
+
+# The filename stem per kind: distinct so error and bug reports stay countable apart on
+# disk, which is what lets the GUI tell "something failed" from "someone filed a report".
+_FILE_STEM = {KIND_ERROR: "matlas_error_", KIND_BUG: "matlas_bug_"}
+
+
+def _report_path(cfg: DiagnosticsSettings, kind: str) -> Path:
     """A Windows-safe, collision-free path: no colons in the timestamp; pid suffix; and a
     numeric suffix only if a same-second same-pid file already exists (never overwrite)."""
-    directory = Path(cfg.crash_dir)
+    directory = report_dir(cfg)
     directory.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
-    base = f"matlas_error_{stamp}_p{os.getpid()}"
+    base = f"{_FILE_STEM[kind]}{stamp}_p{os.getpid()}"
     path = directory / f"{base}.json"
     counter = 1
     while path.exists():
@@ -532,14 +624,21 @@ def _render_markdown(report: dict[str, Any]) -> str:
     safe = report.get("safe", {})
     sensitive = report.get("sensitive", {})
     md = safe.get("metadata", {})
+    is_bug = report.get("kind") == KIND_BUG
     lines: list[str] = [
-        "# mATLAS crash report",
+        "# mATLAS bug report" if is_bug else "# mATLAS crash report",
         "",
         f"_Schema {report.get('schema', '?')} — generated {md.get('generated_at_utc', '?')}_",
         "",
+        # A bug report is filed BECAUSE the tool did something wrong without failing, so the
+        # reader needs to be told what to look for; a crash report leads with its exception.
+        ("_Filed by the operator: the tool did not raise, so what follows is the live state "
+         "of every thread at the moment the report was requested. Describe the wrong "
+         "behaviour under Notes below._" if is_bug else ""),
+        "",
         "## Safe (shareable)",
         "",
-        f"**Exception:** `{safe.get('exception_type', '?')}`",
+        ("" if is_bug else f"**Exception:** `{safe.get('exception_type', '?')}`"),
         "",
         "### Environment",
     ]
@@ -553,12 +652,16 @@ def _render_markdown(report: dict[str, Any]) -> str:
     if system:
         release = (md.get("platform") or {}).get("release", "")
         lines.append(f"- **Platform:** {system} {release}".rstrip())
-    lines += ["", "### Stack (crash site last)"]
-    for i, frame in enumerate(safe.get("frames", []), start=1):
-        code = frame.get("code") or ""
-        lines.append(
-            f"{i}. `{frame.get('file')}:{frame.get('lineno')}` in "
-            f"`{frame.get('function')}` — `{code}`")
+    # One report shape, two sources: a crash has a single traceback, a bug report has one
+    # stack per live thread. Both reduce to (heading, frames) groups so the sections below
+    # are written once — the alternative, a second renderer, is how two formats are born.
+    for heading, frames in _frame_groups(safe, is_bug):
+        lines += ["", f"### {heading}"]
+        for i, frame in enumerate(frames, start=1):
+            code = frame.get("code") or ""
+            lines.append(
+                f"{i}. `{frame.get('file')}:{frame.get('lineno')}` in "
+                f"`{frame.get('function')}` — `{code}`")
 
     lines += [
         "",
@@ -567,20 +670,47 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "> Holds run-time values (evidence data, identifiers, argv, environment). Review and "
         "remove this section before sharing the report.",
         "",
-        f"**Message:** {sensitive.get('exception_message', '')}",
-        "",
-        "### Frame locals",
     ]
-    for frame in sensitive.get("frames", []):
-        lines.append(f"#### `{frame.get('function')}` (line {frame.get('lineno')})")
-        frame_locals = frame.get("locals") or {}
-        if not frame_locals:
-            lines.append("- _(no locals)_")
-        for name, value in frame_locals.items():
-            lines.append(f"- `{name}`: {_md_value(value)}")
-        if frame.get("locals_truncated"):
-            lines.append("- _(further locals dropped — per-frame byte budget)_")
+    if not is_bug:
+        lines += [f"**Message:** {sensitive.get('exception_message', '')}", ""]
+    for heading, frames in _frame_groups(sensitive, is_bug):
+        lines += [f"### Locals — {heading}"]
+        for frame in frames:
+            lines.append(f"#### `{frame.get('function')}` (line {frame.get('lineno')})")
+            frame_locals = frame.get("locals") or {}
+            if not frame_locals:
+                lines.append("- _(no locals)_")
+            for name, value in frame_locals.items():
+                lines.append(f"- `{name}`: {_md_value(value)}")
+            if frame.get("locals_truncated"):
+                lines.append("- _(further locals dropped — per-frame byte budget)_")
+
+    # The empty sections that make the file a fileable bug report rather than a raw dump.
+    lines += [
+        "",
+        "## Steps to reproduce",
+        "",
+        "1. ",
+        "",
+        "## Expected vs actual",
+        "",
+        "**Expected:** ",
+        "",
+        "**Actual:** ",
+        "",
+        "## Notes",
+        "",
+    ]
     return "\n".join(lines) + "\n"
+
+
+def _frame_groups(section: dict[str, Any], is_bug: bool) -> list[tuple[str, list]]:
+    """(heading, frames) pairs for one half of a report, whichever kind it is."""
+    if is_bug:
+        return [(f"Thread {t.get('thread_name')}"
+                 + (" (main)" if t.get("is_main") else ""), t.get("frames") or [])
+                for t in section.get("threads", [])]
+    return [("Stack (crash site last)", section.get("frames", []))]
 
 
 # --- report assembly + hook -------------------------------------------------
@@ -603,14 +733,11 @@ def write_crash_report(
         if not cfg.enabled:
             return None
         frames = _collect_frames(tb, cfg)
-        safe: dict[str, Any] = {
-            # The exception TYPE is safe (a class name); its message/args are run-time data.
-            "exception_type": _typename(exc),
-            "frames": [_safe_frame(frame) for frame in frames],
-            "metadata": _metadata(cfg),
-            "context": context or {},
-        }
-        sensitive: dict[str, Any] = {
+        safe, sensitive = _base_sections(cfg, context)
+        # The exception TYPE is safe (a class name); its message/args are run-time data.
+        safe["exception_type"] = _typename(exc)
+        safe["frames"] = [_safe_frame(frame) for frame in frames]
+        sensitive |= {
             "exception_message": _anonymise_paths(str(exc), cfg),
             "exception_args": [_summarise(None, arg, cfg, 1) for arg in getattr(exc, "args", ())],
             # __notes__ carries the build_assertions breadcrumb (source/table/line/field/value).
@@ -618,36 +745,106 @@ def write_crash_report(
                       for n in (getattr(exc, "__notes__", []) or [])] or None,
             "traceback": _anonymise_paths(
                 "".join(traceback.format_exception(exc_type, exc, tb)), cfg),
-            # argv can carry operator input (a case subject, an evidence path) — sensitive.
-            "argv": [_relativise_path(arg, cfg, basename_fallback=False) for arg in sys.argv],
             "frames": [_sensitive_frame(frame) for frame in frames],
         }
-        if cfg.capture_env:
-            # Every value passes through redaction by its NAME, so a matched secret is hashed.
-            sensitive["environ"] = {k: _summarise(k, v, cfg, 1) for k, v in os.environ.items()}
-        report = {
-            "schema": REPORT_SCHEMA, "tool": "mATLAS", "safe": safe, "sensitive": sensitive,
-        }
-
-        json_path = _report_path(cfg)
-        # utf-8-sig so Windows tooling detects the encoding (house encoding rule).
-        json_path.write_text(
-            json.dumps(report, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8-sig",
-        )
-        log.error(f"Crash report (machine) written to {json_path}")
-        # The human Markdown is a convenience alongside the authoritative JSON: render it under
-        # its OWN guard so a rendering slip loses neither the JSON nor the original exception.
-        try:
-            md_path = json_path.with_suffix(".md")
-            md_path.write_text(_render_markdown(report), encoding="utf-8-sig")
-            log.error(f"Crash report (human) written to {md_path}")
-        except Exception:  # noqa: BLE001 - the .md is best-effort; the JSON is the artefact.
-            log.exception("Failed to write Markdown crash report")
-        return json_path
+        return _emit(_envelope(KIND_ERROR, safe, sensitive),
+                     _report_path(cfg, KIND_ERROR))
     except Exception:  # noqa: BLE001 - the handler must never raise over the original error.
         log.exception("Failed to write crash report")
         return None
+
+
+def write_bug_report(context: dict[str, Any] | None = None) -> Path | None:
+    """Write a BUG report — the same artefact as a crash report, with no exception.
+
+    WHY this exists: the crash path only fires when something raises. A bug that produces
+    the wrong answer quietly raises nothing, and by the time an operator notices, the state
+    that explains it lives only in the running frames. This captures every live thread's
+    stack and locals on demand, so "it did the wrong thing" arrives with the same evidence
+    an exception would have carried.
+
+    Same schema, same safe/sensitive split and the same Markdown twin as
+    ``write_crash_report``, so one reader (and one redaction pass) handles both. Guaranteed
+    non-throwing: a failed report returns None rather than taking the app down with it."""
+    try:
+        cfg = _diag_settings()
+        if not cfg.enabled:
+            return None
+        # Our own frame is skipped so the report describes the application, not the reporter.
+        stacks = _collect_thread_stacks(cfg, skip_frame=sys._getframe())
+        safe, sensitive = _base_sections(cfg, context)
+        safe["exception_type"] = None   # a bug report has no exception, by definition
+        safe["threads"] = [
+            {key: stack[key] for key in
+             ("thread_name", "thread_ident", "daemon", "is_main")}
+            | {"frames": [_safe_frame(frame) for frame in stack["frames"]]}
+            for stack in stacks
+        ]
+        sensitive["threads"] = [
+            {"thread_name": stack["thread_name"],
+             "frames": [_sensitive_frame(frame) for frame in stack["frames"]]}
+            for stack in stacks
+        ]
+        return _emit(_envelope(KIND_BUG, safe, sensitive), _report_path(cfg, KIND_BUG))
+    except Exception:  # noqa: BLE001 - filing a bug report must never itself crash the app.
+        log.exception("Failed to write bug report")
+        return None
+
+
+def capture_exception(exc: BaseException, *, context: dict[str, Any] | None = None) -> Path | None:
+    """Write a crash report for an exception that was CAUGHT rather than left to propagate.
+
+    WHY: ``sys.excepthook`` only sees exceptions nobody handled. Every broad
+    ``except Exception: log.exception(...); return`` block — and, in this app, every
+    background task, whose runner turns a failure into a signal carrying only a formatted
+    string — swallows the exception before the hook can see it. That is the most common
+    failure path in the GUI, so without this funnel the reports that matter most are the
+    ones never written."""
+    return write_crash_report(type(exc), exc, exc.__traceback__, context=context)
+
+
+def _base_sections(cfg: DiagnosticsSettings,
+                   context: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The (safe, sensitive) parts EVERY report carries, whatever its kind.
+
+    Kept here rather than written out in each writer so the two kinds cannot drift on what
+    counts as environment or as sensitive — the whole reason they share one format."""
+    safe: dict[str, Any] = {"metadata": _metadata(cfg), "context": context or {}}
+    sensitive: dict[str, Any] = {
+        # argv can carry operator input (a case subject, an evidence path) — sensitive.
+        "argv": [_relativise_path(arg, cfg, basename_fallback=False) for arg in sys.argv],
+    }
+    if cfg.capture_env:
+        # Every value passes through redaction by its NAME, so a matched secret is hashed.
+        sensitive["environ"] = {k: _summarise(k, v, cfg, 1) for k, v in os.environ.items()}
+    return safe, sensitive
+
+
+def _envelope(kind: str, safe: dict[str, Any], sensitive: dict[str, Any]) -> dict[str, Any]:
+    """Wrap the two halves in the report envelope both kinds share."""
+    return {"schema": REPORT_SCHEMA, "tool": "mATLAS", "kind": kind,
+            "safe": safe, "sensitive": sensitive}
+
+
+def _emit(report: dict[str, Any], json_path: Path) -> Path | None:
+    """Write the JSON (authoritative) and its best-effort Markdown twin; return the JSON path.
+
+    Shared by both kinds so an error and a bug report can never drift into different files
+    on disk — the reason they are one format in the first place."""
+    # utf-8-sig so Windows tooling detects the encoding (house encoding rule).
+    json_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False, default=str), encoding="utf-8-sig")
+    log.error(f"{report.get('kind', 'diagnostic').capitalize()} report (machine) "
+              f"written to {json_path}")
+    # The human Markdown is a convenience alongside the authoritative JSON: render it under
+    # its OWN guard so a rendering slip loses neither the JSON nor the original exception.
+    try:
+        md_path = json_path.with_suffix(".md")
+        md_path.write_text(_render_markdown(report), encoding="utf-8-sig")
+        log.error(f"Report (human) written to {md_path}")
+    except Exception:  # noqa: BLE001 - the .md is best-effort; the JSON is the artefact.
+        log.exception("Failed to write Markdown report")
+    return json_path
 
 
 _installed = False

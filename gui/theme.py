@@ -133,6 +133,8 @@ def build_stylesheet() -> str:
         "__COMBO_ARROW__": _asset_url("combo-chevron-down.svg"),
         "__CHECK_ON__": _asset_url("check-white.svg"),
         "__CHECK_DISABLED__": _asset_url("check-slate.svg"),
+        "__SPIN_UP__": _asset_url("spin-up.svg"),
+        "__SPIN_DOWN__": _asset_url("spin-down.svg"),
         "__UI_FONT__": _system_font_family(
             QFontDatabase.SystemFont.GeneralFont,
             _default_ui_font(),
@@ -337,6 +339,60 @@ _QSS = """
     QToolButton:focus {
         padding-right: 25px;
     }
+    /* Spin boxes. The up/down buttons fell through to native painting — two tiny stacked
+       arrows in a foreign style beside an otherwise flat field. Styled here to match the
+       combo's drop-down: one bordered column on the field's right edge. */
+    QAbstractSpinBox {
+        padding-right: 20px;   /* room for the button column */
+    }
+    QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
+        subcontrol-origin: border;
+        width: 18px;
+        background: #f5f8fc;
+        border-left: 1px solid #d5dee9;
+    }
+    QAbstractSpinBox::up-button {
+        subcontrol-position: top right;
+        border-top-right-radius: 6px;
+        border-bottom: 1px solid #d5dee9;
+    }
+    QAbstractSpinBox::down-button {
+        subcontrol-position: bottom right;
+        border-bottom-right-radius: 6px;
+    }
+    QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {
+        background: #dbeafe;
+    }
+    QAbstractSpinBox::up-button:pressed, QAbstractSpinBox::down-button:pressed {
+        background: #bfd8fa;
+    }
+    QAbstractSpinBox::up-arrow {
+        image: url(__SPIN_UP__);
+        width: 9px;
+        height: 6px;
+    }
+    QAbstractSpinBox::down-arrow {
+        image: url(__SPIN_DOWN__);
+        width: 9px;
+        height: 6px;
+    }
+    QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::down-arrow:disabled {
+        opacity: 0.4;
+    }
+
+    /* The run-progress bar: a slim status indicator, not a page element. */
+    QProgressBar {
+        background: #ffffff;
+        border: 1px solid #c2cede;
+        border-radius: 5px;
+        max-height: 10px;
+        text-align: center;
+    }
+    QProgressBar::chunk {
+        background: #2563eb;
+        border-radius: 4px;
+    }
+
     QPushButton:disabled, QToolButton:disabled {
         background: #f2f5f9;
         color: #6b7a8d;
