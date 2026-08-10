@@ -59,6 +59,12 @@ class Reader(Protocol):
     """
 
     format: str
+    # True when a read is impossible without naming a sub-unit (a sqlite table, an Excel
+    # sheet). WHY the writer needs it: when the sub-unit probe comes back empty it must tell
+    # "a whole-file format with no sub-unit concept" (read it as one None unit) from "this
+    # file could not be opened" (report it unread) — reading None on a sub-unit format is a
+    # contract violation, not a fallback.
+    requires_subunit: bool = False
 
     def subunits(self, source: Path) -> list[str]: ...
 

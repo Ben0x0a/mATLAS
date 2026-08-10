@@ -284,6 +284,23 @@ def test_time_bound_extract_parses() -> None:
         _parse(bad)
 
 
+def test_metric_field_requires_explicit_unit() -> None:
+    """A metric field (a CANONICAL_UNIT key, e.g. altitude_m) mapped with NO unit: is rejected:
+    a bare mapping's unit is assumed canonical, so a forgotten source unit silently mis-scales
+    the value. Declaring unit: (here the canonical `m`, a valid 'already canonical' confirmation)
+    parses."""
+    no_unit = _MIN.replace(
+        "position: {latitude: field(Lat)}",
+        "position: {latitude: field(Lat), altitude_m: field(Alt)}")
+    with pytest.raises(ValueError):
+        _parse(no_unit)
+    with_unit = _MIN.replace(
+        "position: {latitude: field(Lat)}",
+        "position: {latitude: field(Lat), altitude_m: {from: field(Alt), unit: m}}")
+    altitude = {f.model_field: f for f in _parse(with_unit).assertions[0].fields}["altitude_m"]
+    assert altitude.unit == "m" and altitude.ref.arg == "Alt"
+
+
 def test_unknown_field_still_rejected() -> None:
     """The gate stays closed for genuinely-unknown targets and stray ``context`` (no dot)."""
     with pytest.raises(ValueError):

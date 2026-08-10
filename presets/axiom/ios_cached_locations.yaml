@@ -52,10 +52,10 @@ assertions:
       latitude:              field(Latitude)
       longitude:             field(Longitude)
       spatial_referential:   const(epsg:4326)   # the datum for the coordinates
-      altitude_m:            'field("Altitude (m)")'
-      horizontal_accuracy_m: 'field("Accuracy (m)")'
-      vertical_accuracy_m:   'field("Altitude Accuracy (m)")'
-      heading_deg:           field(Direction)
+      altitude_m:            { from: 'field("Altitude (m)")', unit: m }
+      horizontal_accuracy_m: { from: 'field("Accuracy (m)")', unit: m }
+      vertical_accuracy_m:   { from: 'field("Altitude Accuracy (m)")', unit: m }
+      heading_deg:           { from: field(Direction), unit: deg }
       horizontal_speed_kmh:  { from: 'field("Speed (m/s)")', unit: m/s }
     time:
       # Wildcard: the header embeds the export timezone, which is captured into

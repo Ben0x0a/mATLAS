@@ -49,7 +49,7 @@ assertions:
       latitude:              field(Position.Latitude)
       longitude:             field(Position.Longitude)
       spatial_referential:   const(epsg:4326)                 # the datum for the coordinates
-      horizontal_accuracy_m: { from: field(Position.GpsHorizontalAccuracy), optional: true }
+      horizontal_accuracy_m: { from: field(Position.GpsHorizontalAccuracy), unit: m, optional: true }
     time:
       instant: field(TimeStamp)
       format:  iso8601

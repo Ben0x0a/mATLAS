@@ -187,13 +187,18 @@ def _read_pass(
 @register_reader
 class SqliteReader:
     format = "sqlite"
+    requires_subunit = True   # a read needs a table (or an explicit params['sql'])
 
     def subunits(self, source: Path) -> list[str]:
         try:
             with contextlib.closing(_connect(source, immutable=True)) as conn:
                 cursor = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
                 return [str(row[0]) for row in cursor.fetchall()]
-        except Exception:  # noqa: BLE001 - a probe failure must never abort matching
+        except Exception as exc:  # noqa: BLE001 - a probe failure must never abort matching
+            # WARNING, not debug: an unlistable db is the operator's answer to "why was this
+            # file left unread" (encrypted keychain, truncated carve, wrong magic). The
+            # writer reports the file as unread; only this line names the underlying cause.
+            log.warning(f"cannot list the tables of {source.name}: {exc}")
             log.debug(f"sqlite subunits failed for {source}", exc_info=True)
             return []
 

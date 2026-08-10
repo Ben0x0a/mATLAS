@@ -26,11 +26,17 @@ one relational ``RunStore`` (L0..L3) and every output is a projection over it.
 Design decisions
 ----------------
 * **Two walks, one read.** ``ingest_input`` owns the walk that READS evidence (it
-  fingerprints, materialises and persists every readable file — L0 is preset-free).
-  Matching then re-walks the SAME container tree only to enumerate
-  ``SourceFile``s for the path/name selectors; its column peeks are answered FROM THE
-  STORE (the first raw_record's keys), so no source file is ever opened twice for
-  reading.
+  fingerprints, materialises and persists every file it opens — the rows it writes are
+  preset-free: a source is *what was opened*). Matching then re-walks the SAME container
+  tree only to enumerate ``SourceFile``s for the path/name selectors; its column peeks are
+  answered FROM THE STORE (the first raw_record's keys), so no source file is ever opened
+  twice for reading.
+* **L0 opens what the presets can target.** Preset-free describes the ROWS, not the scope:
+  ingest is handed a target filter (``_preset_target_fn``) built from the matcher's own
+  content-free stage, so a run over a full acquisition opens the handful of files its
+  presets locate instead of every database and every table in the archive. Files passed
+  over are counted in the ingest report, never silently dropped. The filter is exactly the
+  matcher's steps 1-2, so it can never decline a file that would later have matched.
 * **Store-backed peeks.** The matcher's two reader touch points (``peek``,
   ``subtables``) are injected closures over the run store, which guarantees matching
   sees exactly what ingest read — a separately-opened reader could disagree.
@@ -68,7 +74,13 @@ from model_atlas.ingest.containers import SourceFile
 from model_atlas.ingest.discover import FileFound, walk
 from model_atlas.ingest.format_detect import detect_path_format, detect_source_format
 from model_atlas.ingest.readers.base import RawRecord
-from model_atlas.ingest.writer import ingest_input, is_matlas_run_db, opened_input_path
+from model_atlas.ingest.writer import (
+    Target,
+    TargetFn,
+    ingest_input,
+    is_matlas_run_db,
+    opened_input_path,
+)
 from model_atlas.integrate.entity import normalise_entities
 from model_atlas.integrate.spatial import integrate_spatial
 from model_atlas.integrate.temporal import (
@@ -76,7 +88,11 @@ from model_atlas.integrate.temporal import (
     integrate_expression,
     standard_methods,
 )
-from model_atlas.presets.matcher import match_files_detailed, resolve_force_selector
+from model_atlas.presets.matcher import (
+    locate_candidates,
+    match_files_detailed,
+    resolve_force_selector,
+)
 from model_atlas.presets.spec import InputSelector, PresetSpec
 from model_atlas.presets.spec_loader import load_preset_specs
 
@@ -130,19 +146,6 @@ class ProcessResult:
 
 
 # --- small derivations shared across the run ---------------------------------
-
-def _selector_subunit(selector: InputSelector) -> str | None:
-    """The store ``subunit`` a selector targets: the sqlite table / excel sheet / xml
-    model type; None for csv (one implicit unit) AND for a ``sql:`` selector (which has
-    no persisted unit — see the module header)."""
-    if selector.format == "sqlite":
-        return selector.table
-    if selector.format == "excel":
-        return selector.sheet
-    if selector.format == "xml":
-        return selector.model
-    return None
-
 
 def _file_identity(file: SourceFile) -> tuple[str, str | None]:
     """The (input_file_path, inner_path) pair of one walked file — the SAME derivation
@@ -215,6 +218,36 @@ def _read_case_id(store: RunStore) -> str:
 
 # --- the store-backed matcher touch points -----------------------------------
 
+def _preset_target_fn(specs: list[PresetSpec], root_prefix_depth: int) -> TargetFn:
+    """The L0 target filter: which walked files the selected presets could possibly read.
+
+    HOW: run the matcher's content-free stage (location pre-filter + format/namespace guard)
+    over the file and keep the surviving selectors; a file with none is declined, and one with
+    selectors is restricted to the sub-units they declare. A selector that names no sub-unit
+    (``sql:``, or a whole-file format) widens the file back to every unit — the caller cannot
+    know up front which table such a selector will touch.
+
+    WHY the pre-filter is exactly the matcher's own first two steps: any file this declines
+    would also have been declined at match time, so nothing that could produce an assertion is
+    passed over. Step 3 (the required-column gate) is the only stage needing records, and it
+    only ever sees files this stage kept — its store-backed peek therefore never asks about a
+    file ingest skipped.
+
+    ``warn=False``: the mismatch warnings belong to the real matching pass, which runs later
+    over the same files; emitting them here too would double every line."""
+    def target(file: SourceFile, fmt: "str | None") -> "Target | None":
+        candidates = locate_candidates(
+            file, specs, root_prefix_depth=root_prefix_depth, detected=fmt, warn=False)
+        if not candidates:
+            return None
+        subunits = {selector.subunit() for _preset, selector in candidates}
+        if None in subunits:
+            return Target(subunits=None)
+        return Target(subunits=frozenset(subunits))
+
+    return target
+
+
 def _store_peek_fn(store: RunStore) -> Callable[[SourceFile, InputSelector], "set[str] | None"]:
     """A matcher ``peek`` answered from the run store: the first raw_record's keys.
 
@@ -224,7 +257,7 @@ def _store_peek_fn(store: RunStore) -> Callable[[SourceFile, InputSelector], "se
         if selector.sql:
             return None
         input_file_path, inner_path = _file_identity(file)
-        source_id = ids.source_id(input_file_path, inner_path, _selector_subunit(selector))
+        source_id = ids.source_id(input_file_path, inner_path, selector.subunit())
         rows = _rows(
             store,
             "SELECT raw_json FROM raw_record WHERE source_id = ? ORDER BY line_no LIMIT 1",
@@ -397,10 +430,17 @@ def process(
         existing_case_id = None
 
     try:
-        # --- L0: one walk that READS everything (preset-free) ----
+        # --- L0: one walk that READS the targeted evidence (preset-free rows) ----
+        # The rows written stay preset-free (a source is what was opened: paths-only id, one
+        # row per unit, no preset column). What the target filter decides is only WHICH files
+        # the run opens — an operator choice, recorded in run.settings_json + run_preset.
+        # Force mode ingests everything: it bypasses location matching by design, so a target
+        # filter built from locations would decline the very file it must apply to.
+        target = None if force_preset else _preset_target_fn(specs, root_prefix_depth)
         _emit(progress, "Discovering & ingesting sources")
         ingest_report = ingest_input(
             input_path, store,
+            target=target,
             # On CREATE the case_number is the --case label (falling back to the run name);
             # on APPEND the case identity is read from the DB and this arg is unused.
             case_number=case or base_name,
@@ -411,7 +451,9 @@ def process(
         )
         warnings.extend(ingest_report.warnings)
         log.info(f"Ingested {ingest_report.sources} source(s), "
-                 f"{ingest_report.records} record(s) from {input_path}")
+                 f"{ingest_report.records} record(s) from {input_path}"
+                 + (f"; {ingest_report.not_targeted} file(s) targeted by no preset were not "
+                    f"opened" if ingest_report.not_targeted else ""))
 
         # --- matching + L1/L2 per matched (file, preset) ----------------------
         _emit(progress, "Matching presets & assembling")
@@ -567,7 +609,7 @@ def _assemble_match(
         return False
 
     input_file_path, inner_path = _file_identity(file)
-    subunit = _selector_subunit(selector)
+    subunit = selector.subunit()
     source_id = ids.source_id(input_file_path, inner_path, subunit)
     source_rows = _rows(
         store,

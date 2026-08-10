@@ -131,7 +131,7 @@ assertions:
       latitude:  field(ZLATITUDE)             # datum-agnostic L1 part; numeric cast inferred
       longitude: field(ZLONGITUDE)
       spatial_referential: const(epsg:4326)   # the datum — required for the coords to integrate
-      altitude_m:      field(ZALTITUDE)
+      altitude_m:      { from: field(ZALTITUDE), unit: m }        # metric field: unit: required
       horizontal_speed_kmh: { from: field(ZSPEED), unit: m/s }   # source m/s -> canonical km/h
     time:
       instant: field(ZTIMESTAMP)
@@ -193,10 +193,10 @@ assertions:
       latitude:                       field(ZLATITUDE)
       longitude:                      field(ZLONGITUDE)
       spatial_referential:            const(epsg:4326)   # the datum for the coordinates
-      altitude_m:                     field(ZALTITUDE)
-      horizontal_accuracy_m:          field(ZHORIZONTALACCURACY)
-      vertical_accuracy_m:            field(ZVERTICALACCURACY)
-      heading_deg:                    field(ZCOURSE)
+      altitude_m:                     { from: field(ZALTITUDE), unit: m }
+      horizontal_accuracy_m:          { from: field(ZHORIZONTALACCURACY), unit: m }
+      vertical_accuracy_m:            { from: field(ZVERTICALACCURACY), unit: m }
+      heading_deg:                    { from: field(ZCOURSE), unit: deg }
       horizontal_speed_kmh:           { from: field(ZSPEED), unit: m/s }
       horizontal_speed_accuracy_kmh:  { from: field(ZSPEEDACCURACY), unit: m/s }
     time:
@@ -269,10 +269,10 @@ assertions:
       latitude:              field(Latitude)
       longitude:             field(Longitude)
       spatial_referential:   const(epsg:4326)   # the datum for the coordinates
-      altitude_m:            'field("Altitude (m)")'
-      horizontal_accuracy_m: 'field("Accuracy (m)")'
-      vertical_accuracy_m:   'field("Altitude Accuracy (m)")'
-      heading_deg:           field(Direction)
+      altitude_m:            { from: 'field("Altitude (m)")', unit: m }
+      horizontal_accuracy_m: { from: 'field("Accuracy (m)")', unit: m }
+      vertical_accuracy_m:   { from: 'field("Altitude Accuracy (m)")', unit: m }
+      heading_deg:           { from: field(Direction), unit: deg }
       horizontal_speed_kmh:  { from: 'field("Speed (m/s)")', unit: m/s }
     time:
       # The header embeds the export timezone; capture it with header() + regex and it is
@@ -303,7 +303,7 @@ assertions:
       latitude:              field(ZLOCATIONLATITUDE)
       longitude:             field(ZLOCATIONLONGITUDE)
       spatial_referential:   const(epsg:4326)
-      horizontal_accuracy_m: field(ZLOCATIONHORIZONTALUNCERTAINTY)
+      horizontal_accuracy_m: { from: field(ZLOCATIONHORIZONTALUNCERTAINTY), unit: m }
       position_type:         const(visit)          # the place's role -> spatial_role
     time:
       interval:                                    # the dwell window (Cocoa epoch -> us)
@@ -408,7 +408,7 @@ Marking a field `optional: true` means a mapped-but-absent source column yields 
 cell** instead of failing the match. Use it for enrichments a schema version may omit:
 
 ```yaml
-altitude_m: { from: field(Position.Elevation), optional: true }
+altitude_m: { from: field(Position.Elevation), unit: m, optional: true }
 ```
 
 Without `optional`, a **required** match field that is absent disqualifies the preset for
@@ -432,13 +432,18 @@ expression resolves to `unknown`, the coordinates are **not** integrated, and a 
 surfaced (`_spatial_referential` in `ingest/assemble.py`). The datum is never inferred from
 the presence of an angle part.
 
-### Missing `unit:` → silently canonical
+### `unit:` is required on every metric field
 
-A metric field with **no** `unit:` is read as **already in the canonical unit**. A source
-value in m/s mapped to `horizontal_speed_kmh` without `unit: m/s` is stored as if it were
-already km/h — a silent 3.6× error. Always declare the source `unit:` on a metric field
-whose source unit differs from the canonical one (reference
-[§10.2](preset_schema.md#102-unit-conversion) lists the canonical units).
+Every metric field (any `CANONICAL_UNIT` key: `altitude_m`, the accuracy, speed, heading and
+beam parts) **must** declare its source `unit:`. Map one with no `unit:` and the loader
+**raises** a `ValueError` — it will not guess. This closes a silent trap: a bare mapping's unit
+would otherwise be assumed canonical, so a source value in m/s mapped to `horizontal_speed_kmh`
+without `unit: m/s` would be stored as if it were already km/h (a silent 3.6× error). Declare
+the real source unit (`unit: m/s`), or, when the source already is canonical, confirm it
+explicitly with `unit: <canonical>` (`unit: m` on `altitude_m`, `unit: deg` on `heading_deg`) —
+the intent is now stated, not assumed. `latitude` / `longitude` are **not** metric (they are
+angles adopted via `spatial_referential`) and need no `unit:`. Reference
+[§10.2](preset_schema.md#102-unit-conversion) lists the canonical units and factors.
 
 ### `time:` with no epoch/format → assumed Unix µs
 

@@ -46,6 +46,7 @@ def _cell_text(value: object) -> str:
 @register_reader
 class ExcelReader:
     format = "excel"
+    requires_subunit = True   # a read needs a sheet name
 
     def subunits(self, source: Path) -> list[str]:
         try:

@@ -69,6 +69,7 @@ def _parse_line(line: str, delimiter: str) -> list[str]:
 @register_reader
 class CsvReader:
     format = "csv"
+    requires_subunit = False  # the whole file is the one implicit unit
 
     def subunits(self, source: Path) -> list[str]:
         return []  # a CSV file is exactly one implicit subunit

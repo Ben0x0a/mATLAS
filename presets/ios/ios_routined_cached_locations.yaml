@@ -50,10 +50,10 @@ assertions:
       latitude:                       field(ZLATITUDE)
       longitude:                      field(ZLONGITUDE)
       spatial_referential:            const(epsg:4326)   # the datum for the coordinates
-      altitude_m:                     field(ZALTITUDE)
-      horizontal_accuracy_m:          field(ZHORIZONTALACCURACY)
-      vertical_accuracy_m:            field(ZVERTICALACCURACY)
-      heading_deg:                    field(ZCOURSE)
+      altitude_m:                     { from: field(ZALTITUDE), unit: m }
+      horizontal_accuracy_m:          { from: field(ZHORIZONTALACCURACY), unit: m }
+      vertical_accuracy_m:            { from: field(ZVERTICALACCURACY), unit: m }
+      heading_deg:                    { from: field(ZCOURSE), unit: deg }
       horizontal_speed_kmh:           { from: field(ZSPEED), unit: m/s }
       horizontal_speed_accuracy_kmh:  {from: field(ZSPEEDACCURACY), unit: m/s }
     time:

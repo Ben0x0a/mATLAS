@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sqlite3
 import zipfile
 from pathlib import Path
 
@@ -28,7 +29,7 @@ def _fixture_folder(tmp_path: Path) -> Path:
     """The golden source alone in a folder: cached.csv without the preset YAMLs, so the
     run's unmatched list stays empty and folder/zip runs enumerate identical files."""
     folder = tmp_path / "input"
-    folder.mkdir()
+    folder.mkdir(parents=True)
     (folder / "cached.csv").write_bytes((_GOLDEN / "cached.csv").read_bytes())
     return folder
 
@@ -223,6 +224,51 @@ def test_two_independent_runs_produce_identical_digests(tmp_path: Path) -> None:
     d1 = digests(first.output_case_db)
     assert d1 and d1 == digests(second.output_case_db)             # identical evidence identity
     assert first.output_csv.read_bytes() == second.output_csv.read_bytes()  # identical projection
+
+
+def _mixed_input(tmp_path: Path) -> Path:
+    """The golden CSV beside evidence NO preset targets: an unrelated CSV and a SQLite db
+    with two tables — the shape of a real acquisition, where one preset targets one file."""
+    folder = tmp_path / "input"
+    folder.mkdir(parents=True)
+    (folder / "cached.csv").write_bytes((_GOLDEN / "cached.csv").read_bytes())
+    (folder / "unrelated.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    con = sqlite3.connect(folder / "keychain.sqlite")
+    con.execute("CREATE TABLE analytics (id INTEGER)")
+    con.execute("CREATE TABLE secrets (id INTEGER)")
+    con.commit()
+    con.close()
+    return folder
+
+
+def _ingested_units(case_db: Path) -> set:
+    con = sqlite3.connect(case_db)
+    try:
+        return set(con.execute("SELECT input_file_path, subunit FROM source").fetchall())
+    finally:
+        con.close()
+
+
+def test_l0_opens_only_what_the_presets_target(tmp_path: Path) -> None:
+    # The default run must not read the whole acquisition to apply one preset: only the file
+    # a selector locates becomes a source row. Previously every db and every table was read
+    # first and matched afterwards — minutes of work for one file's worth of evidence.
+    result = process(_mixed_input(tmp_path), _GOLDEN, tmp_path / "out", concerns=_LINKED)
+    units = _ingested_units(result.output_case_db)
+    assert {Path(path).name for path, _subunit in units} == {"cached.csv"}
+    assert result.row_counts["rows"] == 2       # the evidence itself is unaffected
+
+
+def test_untargeted_neighbours_do_not_change_evidence_identity(tmp_path: Path) -> None:
+    # Targeting decides what a run OPENS, never what a source IS once opened: the same
+    # cached.csv yields the same content_uid/claim_digest set whether it sits alone or beside
+    # evidence the presets pass over.
+    crowded = process(_mixed_input(tmp_path / "crowded"), _GOLDEN, tmp_path / "out1",
+                      concerns=_LINKED)
+    alone = process(_fixture_folder(tmp_path / "alone"), _GOLDEN, tmp_path / "out2",
+                    concerns=_LINKED)
+    assert _digest_pairs(_read_rows(crowded.output_csv)) == \
+        _digest_pairs(_read_rows(alone.output_csv))
 
 
 def test_output_path_that_is_a_file_is_refused(tmp_path: Path) -> None:

@@ -222,6 +222,7 @@ class XmlReader:
     """
 
     format = "xml"
+    requires_subunit = True   # a read needs a model type
 
     def __init__(self) -> None:
         self._cache: dict[Path, _ReportCache] = {}

@@ -337,7 +337,7 @@ canonical device path the preset targets regardless of how the file was read.
 | --- | --- |
 | `from` | The reference or conditional (**required** in mapping form). |
 | `type` | Override the inferred cast: one of `int`, `float`, `str`, `bool`. |
-| `unit` | Declare the **source** unit; the engine converts to the model's canonical unit (§10.2). |
+| `unit` | Declare the **source** unit; the engine converts to the model's canonical unit (§10.2). **Required on every metric field** — use `unit: <canonical>` to confirm a value is already canonical. |
 | `extract` | `pattern.group` — pull a **named** regex group of a named `patterns` entry. Selects verbatim source characters (no conversion). |
 | `pipe` | A procedural call-chain (§10). |
 | `optional` | When `true`, a mapped-but-absent field yields a null cell instead of disqualifying the preset match. |
@@ -470,9 +470,14 @@ Recognised conversions:
 | `ft` | m | 0.3048 |
 | `deg` | deg | 1.0 |
 
-An unknown unit/field pair raises at parse time. **Omitting `unit:` on a metric field means
-the value is read as already canonical** — a forgotten `unit:` silently mis-scales (see the
-guide's edge-case section).
+An unknown unit/field pair raises at parse time. **`unit:` is REQUIRED on every metric field**
+(any `CANONICAL_UNIT` key: `altitude_m`, the accuracy/speed/heading/beam parts). The loader
+**raises** a `ValueError` if such a field is mapped with no `unit:`, because a bare mapping's
+unit would otherwise be assumed canonical and a forgotten source unit would silently mis-scale
+the value. To confirm a source is already canonical, state the canonical unit explicitly
+(`unit: m` on `altitude_m`, `unit: deg` on `heading_deg`) — factor 1.0, but the intent is now
+declared rather than assumed. (`latitude` / `longitude` are **not** metric — they are angles
+adopted via `spatial_referential` — and need no `unit:`.)
 
 ### 10.3 `lookup` key normalisation
 

@@ -9,7 +9,11 @@ Covers:
     an identical preset set and still writes ``run_archive(skipped=1)``; a changed preset
     digest under the same key+version forbids the skip);
   * nested ``a.zip!b.zip!x.db`` vs ``c.zip!b.zip!x.db`` do not collide;
-  * a persisted ``*.matlas.sqlite`` fed as input is refused (the self-ingestion guard).
+  * a persisted ``*.matlas.sqlite`` fed as input is refused (the self-ingestion guard);
+  * the preset-scoped target filter: only the named file/sub-unit is opened, the rest is
+    counted as not-targeted, and no filter still acquires the whole input;
+  * a sub-unit format whose probe comes back empty is reported unread rather than read with
+    a ``None`` sub-unit its reader rejects by contract.
 """
 from __future__ import annotations
 
@@ -21,7 +25,12 @@ from pathlib import Path
 from model_atlas.core.ids import preset_id
 from model_atlas.core.store import RunStore
 from model_atlas.core.vocabularies import Preset
-from model_atlas.ingest.writer import SelfIngestionError, ingest_input, is_matlas_run_db
+from model_atlas.ingest.writer import (
+    SelfIngestionError,
+    Target,
+    ingest_input,
+    is_matlas_run_db,
+)
 
 
 # --- fixtures ---------------------------------------------------------------
@@ -295,3 +304,79 @@ def test_plain_sqlite_is_not_flagged_as_a_run_db(tmp_path: Path) -> None:
         report = ingest_input(db, store, case_number="C1")
     assert report.sources == 1
     assert report.flagged_self_ingest == 0
+
+
+# --- the preset-scoped L0 target filter -------------------------------------
+
+def test_target_filter_reads_only_the_named_file_and_subunit(tmp_path: Path) -> None:
+    """A target naming one file + one of its tables reads THAT unit only; every other file
+    is passed over unopened and counted (never silently dropped)."""
+    zip_path = tmp_path / "acq.zip"
+    zip_path.write_bytes(_zip_of({
+        "wanted.sqlite": _sqlite_bytes(table="places"),
+        "other.sqlite": _sqlite_bytes(table="places"),
+        "notes.csv": _csv_bytes(),
+    }))
+
+    def target(file, fmt):
+        if file.logical_path.name != "wanted.sqlite":
+            return None
+        return Target(subunits=frozenset({"places"}))
+
+    with RunStore() as store:
+        report = ingest_input(zip_path, store, case_number="C1", target=target)
+        units = {(row["inner_path"], row["subunit"]) for row in _sources(store)}
+    assert units == {("acq.zip!wanted.sqlite", "places")}
+    assert report.not_targeted == 2
+    # a declined file is never reported as unreadable — it was a choice, not a failure.
+    assert report.skipped_unreadable == 0
+
+
+def test_target_none_subunits_reads_every_subunit(tmp_path: Path) -> None:
+    """A target that names no sub-unit (a ``sql:`` selector, or a whole-file format) widens
+    the accepted file back to every unit it has."""
+    db = tmp_path / "two.sqlite"
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=True) as tmp:
+        conn = sqlite3.connect(tmp.name)
+        conn.execute("CREATE TABLE a (id INTEGER)")
+        conn.execute("CREATE TABLE b (id INTEGER)")
+        conn.commit()
+        conn.close()
+        db.write_bytes(Path(tmp.name).read_bytes())
+
+    with RunStore() as store:
+        ingest_input(db, store, case_number="C1", target=lambda file, fmt: Target())
+        assert {row["subunit"] for row in _sources(store)} == {"a", "b"}
+
+
+def test_no_target_still_reads_everything(tmp_path: Path) -> None:
+    """The whole-input acquisition path (``--ingest-all``) is unchanged: no filter, no skip."""
+    zip_path = tmp_path / "acq.zip"
+    zip_path.write_bytes(_zip_of({"a.sqlite": _sqlite_bytes(), "b.csv": _csv_bytes()}))
+    with RunStore() as store:
+        report = ingest_input(zip_path, store, case_number="C1")
+    assert report.sources == 2
+    assert report.not_targeted == 0
+
+
+# --- a sub-unit format whose probe comes back empty -------------------------
+
+def test_unlistable_sqlite_is_reported_unread_not_read_with_a_none_subunit(
+    tmp_path: Path,
+) -> None:
+    """A db whose table probe fails (encrypted / corrupt) is reported as unread.
+
+    WHY this test exists: the generic ``or [None]`` fallback used to hand ``subunit=None`` to
+    the sqlite reader, which rejects it by contract — the operator saw an internal contract
+    error ("needs exactly one of a table or params['sql']") instead of "this db could not be
+    opened", and every protected keychain db in an acquisition produced one."""
+    db = tmp_path / "locked.sqlite"
+    # a valid SQLite header followed by garbage: recognised as sqlite, unopenable.
+    db.write_bytes(b"SQLite format 3\x00" + b"\xff" * 4096)
+    with RunStore() as store:
+        report = ingest_input(db, store, case_number="C1")
+    assert report.sources == 0
+    assert report.skipped_unreadable == 1
+    assert report.read_failures == 0
+    assert any("no readable sqlite sub-unit" in warning for warning in report.warnings)

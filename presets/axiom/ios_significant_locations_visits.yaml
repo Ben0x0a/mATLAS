@@ -52,7 +52,7 @@ assertions:
       latitude:              field(Latitude)
       longitude:             field(Longitude)
       spatial_referential:   const(epsg:4326)   # the datum for the coordinates
-      horizontal_accuracy_m: field(Accuracy)
+      horizontal_accuracy_m: { from: field(Accuracy), unit: m }
     time:
       interval:
         lower: 'field("Vicinity Entry Date/Time")'
@@ -67,7 +67,7 @@ assertions:
       latitude:              field(Latitude)
       longitude:             field(Longitude)
       spatial_referential:   const(epsg:4326)   # the datum for the coordinates
-      horizontal_accuracy_m: field(Accuracy)
+      horizontal_accuracy_m: { from: field(Accuracy), unit: m }
     time:
       instant: 'field("Created Date/Time - * (dd.MM.yyyy)")'
       format:  "%d.%m.%Y %H:%M:%S.%f"

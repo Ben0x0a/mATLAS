@@ -39,12 +39,14 @@ A value is ONE explicit reference call (field/header/filename/param/const/format
 """
 from __future__ import annotations
 
+import dataclasses
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from model_atlas.core.vocabularies import (
+    CANONICAL_UNIT,
     EntityPositionLink,
     EntityTimeLink,
     RecordState,
@@ -161,6 +163,10 @@ class PresetMeta:
 
 
 _READER_FORMATS = ("csv", "excel", "sqlite", "xml")
+# format -> the InputSelector attribute naming its in-file unit. csv is absent: the whole
+# file is the unit. Consumed by InputSelector.subunit / .retargeted (and, through them, by
+# presets.matcher, app.pipeline and the L0 target filter).
+_SUBUNIT_ATTRIBUTE = {"sqlite": "table", "excel": "sheet", "xml": "model"}
 _READ_KEYS = ("delimiter", "encoding", "header_row", "skip_rows")
 
 
@@ -181,6 +187,28 @@ class InputSelector:
     namespace: str | None = None     # xml — the dialect's root namespace (discriminator)
     model: str | None = None         # xml — the model type to extract
     read: dict[str, Any] = field(default_factory=dict)
+
+    def subunit(self) -> str | None:
+        """The in-file unit this selector targets — the sqlite table, excel sheet or xml
+        model type — and None when there is none: csv (the whole file is the unit) or a
+        ``sql:`` selector (a query names no stored unit).
+
+        This is the ONE mapping from a format to the attribute holding its unit; the
+        matcher's grouping key, the pipeline's store lookups and the L0 target filter all
+        read it here rather than re-deriving it, so they cannot disagree about which unit a
+        selector means."""
+        attribute = _SUBUNIT_ATTRIBUTE.get(self.format)
+        return getattr(self, attribute) if attribute else None
+
+    def retargeted(self, subunit: str) -> "InputSelector":
+        """This selector aimed at another in-file unit — force mode's structural fallback,
+        which resolves a declared-but-absent table/sheet/model to the best-fitting one.
+
+        Returns the selector unchanged for a format with no unit concept (csv)."""
+        attribute = _SUBUNIT_ATTRIBUTE.get(self.format)
+        if attribute is None:
+            return self
+        return dataclasses.replace(self, **{attribute: subunit})
 
     def reader_params(self) -> dict[str, Any]:
         if self.format == "csv":
@@ -365,6 +393,19 @@ def _parse_field(
     else:
         ref, condition = _parse_ref_or_cond(raw)
         spec = FieldSpec(model_field=model_field, ref=ref, condition=condition)
+    # A metric field (one with a canonical unit) MUST declare its source unit. HOW: reject the
+    # spec if the target is a CANONICAL_UNIT key and no `unit:` was given. WHY: a bare mapping's
+    # unit is otherwise assumed canonical (factor 1.0), so a forgotten source unit silently
+    # mis-scales the measured value (e.g. an m/s speed read as km/h is ~3.6x wrong). The author
+    # states `unit: <canonical>` to explicitly confirm the value is already canonical. (Presence
+    # check only — the L2 unit_factor still validates the unit STRING itself.)
+    if model_field in CANONICAL_UNIT and spec.unit is None:
+        raise ValueError(
+            f"{path}: {model_field!r} is a measured quantity and must declare its source unit "
+            f"as {{from: <ref>, unit: <unit>}} (use unit: {CANONICAL_UNIT[model_field]!r} to "
+            f"confirm it is already canonical); a bare mapping's unit is otherwise assumed "
+            f"canonical and a wrong unit silently mis-scales the value"
+        )
     # A controlled-vocabulary field must hold a valid value however it is produced: a plain
     # const, or any const RESULT of a conditional (a const test/comparand is a value to
     # compare against, not an assigned value, so it is not enum-checked).

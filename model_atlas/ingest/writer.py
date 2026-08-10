@@ -43,6 +43,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from model_atlas.core import ids
 from model_atlas.core.determinism import (
@@ -78,6 +79,29 @@ class SelfIngestionError(Exception):
     DB must never be laundered back to L0 — its rows are derivations, not evidence."""
 
 
+@dataclass(frozen=True)
+class Target:
+    """What a ``TargetFn`` says about ONE walked file: it is worth opening, and which of
+    its sub-units are worth reading.
+
+    ``subunits=None`` means EVERY sub-unit (the caller cannot name them up front — a
+    ``sql:`` selector, or a format with no sub-unit concept); a frozenset names exactly
+    the tables/sheets/models to read."""
+
+    subunits: frozenset[str] | None = None
+
+
+# The preset-scoped L0 target filter, INJECTED by the app layer: ``(file, format) ->
+# Target | None``, where None means "no selected preset can target this file — do not open
+# it". WHY injected rather than imported: presets depend on ingest, never the reverse, so
+# the writer must not know what a selector is. WHY it exists at all: without it an L0 walk
+# opens and fully reads every file of an acquisition (every table of every SQLite db) even
+# when one preset targets one table — minutes of work for one file's worth of evidence.
+# None (no filter) reads every file: the writer's own default, and what the pipeline passes
+# in force-preset mode, where location matching is bypassed by design.
+TargetFn = Callable[[SourceFile, "str | None"], "Target | None"]
+
+
 @dataclass
 class IngestReport:
     """The counts one ``ingest_input`` run produced — the writer's testable summary."""
@@ -89,6 +113,9 @@ class IngestReport:
     sources: int = 0
     records: int = 0
     skipped_unreadable: int = 0
+    # files no selected preset could target — passed over unopened (never silently: the
+    # count is reported and each path is logged).
+    not_targeted: int = 0
     flagged_self_ingest: int = 0
     # sources already present in the case from an EARLIER run — skipped on append.
     sources_already_in_case: int = 0
@@ -171,6 +198,7 @@ def ingest_input(
     skip_reparsed_archives: bool = False,
     prior_archive_presets: dict[str, str] | None = None,
     existing_case_id: str | None = None,
+    target: TargetFn | None = None,
 ) -> IngestReport:
     """Walk ``input_path`` and write its acquisition layer into ``store``.
 
@@ -186,6 +214,10 @@ def ingest_input(
     evidence appended later produces byte-identical downstream ids/digests — appending is
     deterministic, and a duplicate source collides on its content-derived id and is rejected
     exactly as in a fresh run.
+
+    ``target`` is the optional preset-scoped L0 filter (see ``TargetFn``): a file it declines
+    is passed over unopened and counted in ``IngestReport.not_targeted``; a file it accepts is
+    read as usual, restricted to the sub-units it names. None (the default) reads everything.
     """
     input_path = Path(input_path)
     prior_archive_presets = prior_archive_presets or {}
@@ -215,6 +247,9 @@ def ingest_input(
         "input_path": str(input_path),
         "max_container_depth": max_container_depth,
         "skip_reparsed_archives": skip_reparsed_archives,
+        # decision 39: the run is reproducible from its row, so whether L0 was narrowed to
+        # what the presets target — which decides what the case DB contains — is recorded.
+        "preset_targeted_ingest": target is not None,
         "exhibit_ref": exhibit_ref,
         "examiner": examiner,
         "presets": [
@@ -254,8 +289,10 @@ def ingest_input(
             _write_archive(store, run.run_id, event, written_archive_ids, report)
         else:
             assert isinstance(event, FileFound), "walk yields only ArchiveFound / FileFound"
-            _ingest_file(store, run.run_id, event.file, exhibit_ref, report)
+            _ingest_file(store, run.run_id, event.file, exhibit_ref, report, target)
 
+    if report.not_targeted:
+        log.info(f"{report.not_targeted} file(s) targeted by no selected preset were not opened")
     return report
 
 
@@ -298,10 +335,23 @@ def _write_archive(
 
 def _ingest_file(
     store: RunStore, run_id: str, file: SourceFile, exhibit_ref: str | None,
-    report: IngestReport,
+    report: IngestReport, target: TargetFn | None = None,
 ) -> None:
     """Open one leaf file as one-or-more sources (one per subunit) and write its records."""
     fmt = detect_source_format(file)
+
+    # The preset-scoped filter runs FIRST — before the no-reader report below and before any
+    # hashing/materialisation — so an acquisition's thousands of untargeted files cost one
+    # head-bytes sniff each instead of a full read, and produce a count rather than a warning
+    # per file. WHY it may run at all: which files a run OPENS is an operator choice recorded
+    # in run.settings_json + run_preset; what a source IS once opened stays preset-free
+    # (paths-only id, one row per unit) — decision 27 governs identity, not scope.
+    wanted = target(file, fmt) if target is not None else Target(subunits=None)
+    if wanted is None:
+        report.not_targeted += 1
+        log.debug("not targeted by any selected preset: %s", file.logical_path)
+        return
+
     if fmt not in TARGETABLE_FORMATS:
         # plist / archive-at-depth / unknown: no reader ships, so nothing is read. Surfaced
         # (a run must never silently drop an input) but not an error — it is simply opaque.
@@ -329,12 +379,44 @@ def _ingest_file(
             return
 
         reader = get_reader(fmt)
-        subunits = reader.subunits(path) or [None]
+        subunits = _subunits_to_read(reader, path, file, wanted, report)
         for subunit in subunits:
             _ingest_subunit(
                 store, run_id, reader, path, subunit, file, input_file_path, inner_path,
                 fingerprint, sibling_json, exhibit_ref, report,
             )
+
+
+def _subunits_to_read(
+    reader: Reader, path: Path, file: SourceFile, wanted: Target, report: IngestReport,
+) -> list[str | None]:
+    """The sub-units of one opened file this run reads: those the target names and the file
+    actually has, or every one it has when the target names none.
+
+    WHY the ``[None]`` fallback is format-aware: a reader that REQUIRES a sub-unit (sqlite
+    needs a table, excel a sheet) cannot read ``subunit=None`` — handing it None produced a
+    contract ValueError reported as an unreadable-evidence warning, hiding the real cause
+    (an encrypted or corrupt db the probe could not open). Only a whole-file format (csv)
+    legitimately reads as a single None unit."""
+    available = reader.subunits(path)
+    if not available:
+        # getattr, not attribute access: readers are STRUCTURAL implementations of the Reader
+        # protocol (a brick registers a plain class, it does not subclass), so a reader added
+        # later does not inherit the protocol's default — and a missing declaration must mean
+        # "whole-file format", the pre-existing behaviour, not an AttributeError mid-run.
+        if getattr(reader, "requires_subunit", False):
+            report.skipped_unreadable += 1
+            message = (f"no readable {reader.format} sub-unit in {file.logical_path} "
+                       f"(encrypted, corrupt or empty); left unread")
+            log.warning(message)
+            report.warnings.append(message)
+            return []
+        return [None]
+    if wanted.subunits is None:
+        return list(available)
+    # A named sub-unit the file does not have is NOT reported here: preset matching is what
+    # decides whether a preset applies, and it reports its own misses with the preset name.
+    return [unit for unit in available if unit in wanted.subunits]
 
 
 def _ingest_subunit(

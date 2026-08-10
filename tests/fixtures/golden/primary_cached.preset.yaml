@@ -35,7 +35,7 @@ assertions:
       latitude:              field(Latitude)
       longitude:             field(Longitude)
       spatial_referential:   const(epsg:4326)   # the datum for the coordinates
-      horizontal_accuracy_m: 'field("Accuracy (m)")'
+      horizontal_accuracy_m: { from: 'field("Accuracy (m)")', unit: m }
       horizontal_speed_kmh:  { from: 'field("Speed (m/s)")', unit: m/s }
     time:
       instant: 'field("Timestamp Date/Time - UTC+00:00 (dd.MM.yyyy)")'

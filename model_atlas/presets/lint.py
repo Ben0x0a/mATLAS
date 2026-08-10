@@ -99,7 +99,6 @@ def lint_spec(spec: PresetSpec, *, preset_label: str | None = None) -> list[Lint
         _check_assertions,
         _check_unfilled_placeholders,
         _check_literal_uuid_in_path,
-        _check_speed_unit_declared,
         _check_multi_role,
     ):
         findings.extend(check(spec, label))
@@ -359,40 +358,6 @@ def _check_literal_uuid_in_path(spec: PresetSpec, label: str) -> list[LintFindin
                     f"this one acquisition — use the {{uuid}} token instead",
                     label, "input_selector.path"))
                 break
-    return out
-
-
-# Metric parts whose canonical unit is rarely the source's native unit. A metric part read
-# with NO ``unit:`` is taken as ALREADY canonical (factor 1.0), so a forgotten unit silently
-# mis-scales the value. We flag ONLY the speed parts: their canonical km/h is almost never
-# what a device source reports (iOS/Android location speed is m/s), so an undeclared unit there
-# is very likely wrong. The m/deg parts (altitude, accuracy, heading, beam) ARE natively
-# canonical in practice, so flagging them would be pure noise on correct presets.
-_UNIT_RISKY_PARTS: frozenset[str] = frozenset({
-    "horizontal_speed_kmh", "vertical_speed_kmh",
-    "horizontal_speed_accuracy_kmh", "vertical_speed_accuracy_kmh",
-})
-
-
-def _check_speed_unit_declared(spec: PresetSpec, label: str) -> list[LintFinding]:
-    """A speed part mapped with no ``unit:`` is read as ALREADY km/h; device location sources
-    almost always report m/s, so a forgotten unit silently mis-scales the speed (~3.6x). Nudge
-    the author to state the source unit. (Only the speed parts are flagged — see
-    ``_UNIT_RISKY_PARTS``: the m/deg metric parts are natively canonical, so flagging them would
-    be noise on correct presets.)"""
-    out: list[LintFinding] = []
-    candidates: list[tuple[FieldSpec, str]] = [
-        (field, f"common.{field.model_field}") for field in spec.common]
-    for index, tmpl in enumerate(spec.assertions):
-        candidates.extend(
-            (field, f"assertions[{index}].position") for field in tmpl.fields)
-    for field, where in candidates:
-        if field.model_field in _UNIT_RISKY_PARTS and field.unit is None:
-            out.append(LintFinding(
-                WARNING, "speed-no-unit",
-                f"{field.model_field} is mapped with no unit:; it is read as ALREADY km/h, but "
-                f"device sources usually report m/s — declare unit: m/s (or the real source "
-                f"unit), else the speed is silently mis-scaled", label, where))
     return out
 
 

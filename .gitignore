@@ -38,6 +38,10 @@ tasks/
 # Internal documentation (decision narrative, review records, working notes) — kept local,
 # out of the shipped docs so the published set stays clean of internal codes and audit trail
 docs/internal/
+# Local doc exports/archives: a zipped docs/ tree carries docs/internal/ INSIDE it, which
+# would smuggle the internal set past the rule above on a careless `git add .`
+docs.zip
+docs*.zip
 
 # Test and coverage
 .pytest_cache/

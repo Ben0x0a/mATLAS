@@ -1,8 +1,9 @@
 """File-centric preset matching.
 
-Defines:    match_files_detailed (path/name pre-filter -> type guard -> required-field
-            gate -> structural tie-break, returning matches + unsatisfied units) and
-            resolve_force_selector (force-preset in-file sub-unit resolution).
+Defines:    locate_candidates (the content-free stage: path/name pre-filter -> type guard),
+            match_files_detailed (that stage + required-field gate -> structural tie-break,
+            returning matches + unsatisfied units) and resolve_force_selector (force-preset
+            in-file sub-unit resolution).
 Used by:    the app-layer pipeline (``model_atlas.app.pipeline``).
 Depends on: ingest (SourceFile, pathmatch, format_detect, readers.xml_reader for the
             namespace sniff), presets.spec, presets.fields (field_refs / make_resolver /
@@ -20,7 +21,6 @@ run store's already-ingested records), so the matcher stays free of any reader c
 """
 from __future__ import annotations
 
-import dataclasses
 import logging
 import zipfile
 from typing import Callable
@@ -42,6 +42,10 @@ PeekFn = Callable[[SourceFile, InputSelector], "set[str] | None"]
 # Force-mode sub-unit listing: the in-file units (tables / sheets / model types) of one
 # file, dispatched by the selector's format. Injected for the same reason as PeekFn.
 SubtablesFn = Callable[[SourceFile, InputSelector], "list[str]"]
+
+# ``locate_candidates(detected=...)`` sentinel: None is a MEANINGFUL detected format
+# (an unrecognised file), so it cannot double as "not supplied — sniff it yourself".
+_UNDETECTED = "\x00undetected"
 
 
 def _file_namespace(file: SourceFile) -> str | None:
@@ -66,16 +70,17 @@ def _selector_location_matches(selector: InputSelector, file: SourceFile, root_p
 
 
 def _subunit_key(selector: InputSelector) -> tuple:
-    """The in-file unit a selector targets. Selectors on DIFFERENT units of one file can ALL
-    apply (e.g. one preset per XML model type, or per SQLite table); selectors on the SAME
-    unit compete and are tie-broken to one."""
-    if selector.format == "xml":
-        return ("xml", selector.model)
-    if selector.format == "sqlite":
-        return ("sqlite", selector.table or ("sql", selector.sql))
-    if selector.format == "excel":
-        return ("excel", selector.sheet)
-    return ("csv", None)  # the whole file is the unit
+    """The in-file unit a selector targets, as a grouping key. Selectors on DIFFERENT units
+    of one file can ALL apply (e.g. one preset per XML model type, or per SQLite table);
+    selectors on the SAME unit compete and are tie-broken to one.
+
+    The unit itself comes from ``InputSelector.subunit`` (the one format->attribute mapping);
+    only the ``sql:`` case is special here — a query names no stored unit, so each distinct
+    query is its own group rather than colliding with every other query on ``None``."""
+    unit = selector.subunit()
+    if unit is None and selector.sql:
+        return (selector.format, ("sql", selector.sql))
+    return (selector.format, unit)
 
 
 def _tie_break(
@@ -118,22 +123,26 @@ def _missing_required(
     return {ref for ref in required_fields(preset) if resolve(ref) is None}
 
 
-def match_files_detailed(
+def locate_candidates(
     file: SourceFile,
     presets: list[PresetSpec],
     *,
     root_prefix_depth: int = 1,
-    peek: PeekFn | None = None,
-) -> tuple[list[tuple[PresetSpec, InputSelector]], list[tuple[PresetSpec, InputSelector, set[str]]]]:
-    """Match a SourceFile, returning (matches, unsatisfied).
+    detected: str | None = _UNDETECTED,
+    warn: bool = True,
+) -> list[tuple[PresetSpec, InputSelector]]:
+    """Steps 1 + 2 of matching — location pre-filter, then type/namespace guard.
 
-    1. Location pre-filter (name or path); 2. type/namespace guard; 3. applicability gate — a
-    preset only matches if ALL its REQUIRED (mapped, non-optional) fields are present;
-    4. one winner per distinct in-file unit (model/table/sheet) via structural tie-break.
+    Returns every (preset, selector) whose declared location AND format (plus, for xml, its
+    namespace) fit the file. WHY it is public and separate from ``match_files_detailed``:
+    these two steps read NO file content — only the path and a head-bytes magic sniff — so
+    the pipeline can run them BEFORE ingest to decide which files an L0 walk needs to open
+    at all. Step 3 (the required-column gate) is the one that needs records, and it only
+    ever sees files this stage already kept.
 
-    ``unsatisfied`` lists (preset, selector, missing_fields) for a unit that WAS located and
-    type-matched but where no preset's required fields are satisfied — a faithful mapping is
-    impossible and the caller must surface it loudly (never silently drop it).
+    ``detected`` lets a caller that has already sniffed the format pass it in rather than
+    re-opening the file; ``warn=False`` silences the mismatch warnings so the pre-ingest
+    targeting pass does not duplicate the ones the real match emits.
     """
     # Step 1 — location pre-filter: keep EVERY selector matching the file's location, in
     # first-seen order. HOW: no ``break`` after the first hit. WHY: a preset may declare OR
@@ -152,13 +161,14 @@ def match_files_detailed(
             located.append((preset, hits))
     if not located:
         log.debug(f"No selector located {file.logical_path}")
-        return [], []
+        return []
 
     # Step 2 — type/namespace guard, per selector: keep every located selector whose format
     # (and, for xml, namespace) matches the file. A mismatched selector is only a genuine
     # mismatch worth warning about when NONE of the preset's located selectors match — an OR
     # sibling declared for another format/namespace is a legitimate alternative, not a mismatch.
-    detected = detect_source_format(file)
+    if detected is _UNDETECTED:
+        detected = detect_source_format(file)
     file_namespace = _file_namespace(file) if detected == "xml" else None
     candidates: list[tuple[PresetSpec, InputSelector]] = []
     for preset, hits in located:
@@ -175,11 +185,36 @@ def match_files_detailed(
         elif format_ok:
             # Format matched but the xml namespace guard rejected every located selector.
             wanted = sorted({s.namespace for s in format_ok if s.namespace is not None})
-            log.warning(f"namespace mismatch: {file.logical_path} is {file_namespace!r}, preset {preset.name} expects {wanted}; skipped")
+            if warn:
+                log.warning(f"namespace mismatch: {file.logical_path} is {file_namespace!r}, preset {preset.name} expects {wanted}; skipped")
         else:
             # The preset targeted this location but no selector matches the detected format.
             wanted = sorted({s.format for s in hits})
-            log.warning(f"format mismatch: {file.logical_path} is {detected}, preset {preset.name} expects {wanted}; skipped")
+            if warn:
+                log.warning(f"format mismatch: {file.logical_path} is {detected}, preset {preset.name} expects {wanted}; skipped")
+    return candidates
+
+
+def match_files_detailed(
+    file: SourceFile,
+    presets: list[PresetSpec],
+    *,
+    root_prefix_depth: int = 1,
+    peek: PeekFn | None = None,
+) -> tuple[list[tuple[PresetSpec, InputSelector]], list[tuple[PresetSpec, InputSelector, set[str]]]]:
+    """Match a SourceFile, returning (matches, unsatisfied).
+
+    1. Location pre-filter (name or path); 2. type/namespace guard; 3. applicability gate — a
+    preset only matches if ALL its REQUIRED (mapped, non-optional) fields are present;
+    4. one winner per distinct in-file unit (model/table/sheet) via structural tie-break.
+
+    ``unsatisfied`` lists (preset, selector, missing_fields) for a unit that WAS located and
+    type-matched but where no preset's required fields are satisfied — a faithful mapping is
+    impossible and the caller must surface it loudly (never silently drop it).
+    """
+    candidates = locate_candidates(file, presets, root_prefix_depth=root_prefix_depth)
+    if not candidates:
+        return [], []
 
     # Steps 3 + 4 — per in-file unit: gate on required columns, then tie-break the qualified.
     groups: dict[tuple, list[tuple[PresetSpec, InputSelector]]] = {}
@@ -217,9 +252,11 @@ def resolve_force_selector(
     """Force mode: ignore location, but verify ``format`` and resolve the in-file sub-unit.
 
     Picks the first selector whose format matches the file (hard error on mismatch), then
-    for excel/sqlite falls back to a structurally-best sheet/table when the declared one is
-    absent (force-mode only — auto matching stays precise). ``subtables`` / ``peek`` are
-    the caller-injected reader touch points (see the module header)."""
+    falls back to a structurally-best sub-unit when the declared table/sheet/model is absent
+    (force-mode only — auto matching stays precise). Which attribute holds that unit is
+    ``InputSelector.subunit`` / ``.retargeted``'s business, not this function's.
+    ``subtables`` / ``peek`` are the caller-injected reader touch points (see the module
+    header)."""
     selectors = [s for s in preset.input_selectors if s.format == detected]
     if not selectors:
         raise ValueError(
@@ -230,18 +267,15 @@ def resolve_force_selector(
     if selector.format == "csv" or selector.sql:
         return selector  # csv: whole file; sql: run as written (a missing table just errors)
 
-    declared = selector.sheet if selector.format == "excel" else selector.table
     units = subtables(file, selector)
-    if declared in units:
+    if selector.subunit() in units:
         return selector
 
     # Choose the qualifying sub-unit (all referenced columns present) with the best score.
     refs = list(preset.expected_fields) or field_refs(preset)
     best: tuple[int, str] | None = None
     for sub in units:
-        probe = dataclasses.replace(
-            selector, **({"sheet": sub} if selector.format == "excel" else {"table": sub})
-        )
+        probe = selector.retargeted(sub)
         columns = peek(file, probe)
         if columns is None:
             continue
@@ -255,6 +289,4 @@ def resolve_force_selector(
             f"force-preset {preset.name!r}: no {selector.format} sub-unit in "
             f"{file.logical_path} satisfies the mapped fields"
         )
-    return dataclasses.replace(
-        selector, **({"sheet": best[1]} if selector.format == "excel" else {"table": best[1]})
-    )
+    return selector.retargeted(best[1])

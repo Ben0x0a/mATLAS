@@ -10,7 +10,7 @@ import yaml
 from model_atlas.app.pipeline import process
 from model_atlas.ingest.containers import FilesystemContainer, SourceFile
 from model_atlas.ingest.format_detect import detect_source_format
-from model_atlas.presets.matcher import match_files_detailed
+from model_atlas.presets.matcher import match_files_detailed, resolve_force_selector
 from model_atlas.presets.spec import preset_spec_from_yaml
 
 
@@ -187,6 +187,35 @@ def test_two_table_selectors_extract_from_both_tables(tmp_path: Path) -> None:
     matches = match_files_detailed(file, [_preset(_TWO_TABLES)], root_prefix_depth=1, peek=peek)[0]
     assert {selector.table for _preset_spec, selector in matches} == {
         "ZRTCLLOCATION", "ZRTLEARNEDLOCATION"}
+
+
+def test_force_mode_resolves_an_absent_subunit_for_every_format(tmp_path: Path) -> None:
+    """The structural fallback must retarget the attribute that actually holds the unit.
+
+    It used to write ``table=`` whatever the format, so an xml preset whose declared model
+    was absent got a selector with the WRONG model and a stray table — the fallback silently
+    did nothing. Both formats now go through ``InputSelector.retargeted``."""
+    xml_preset = _preset(_CSV_A.replace(
+        "input_selector: {format: csv, name: loc.csv}",
+        "input_selector: {format: xml, name: report.xml, model: Absent}",
+    ))
+    excel_preset = _preset(_CSV_A.replace(
+        "input_selector: {format: csv, name: loc.csv}",
+        "input_selector: {format: excel, name: book.xlsx, sheet: Absent}",
+    ))
+    file = _file(tmp_path, "report.xml")
+
+    def peek(_file, _selector):
+        return {"lat", "lon", "ts"}
+
+    resolved = resolve_force_selector(
+        file, xml_preset, "xml", subtables=lambda f, s: ["Location"], peek=peek)
+    assert resolved.model == "Location" and resolved.table is None
+
+    resolved = resolve_force_selector(
+        _file(tmp_path, "book.xlsx"), excel_preset, "excel",
+        subtables=lambda f, s: ["Sheet1"], peek=peek)
+    assert resolved.sheet == "Sheet1"
 
 
 def test_force_mode_format_mismatch_is_hard_error(tmp_path: Path) -> None:

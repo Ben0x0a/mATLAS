@@ -29,6 +29,21 @@ of the same evidence agree on every evidence identity ("folder == zip" parity).
 A file found inside a container is located as `archive.zip!inner.csv` (and deeper, chained). This
 chain is part of the source's inner-path identity.
 
+**A run opens only what its selected presets can target.**
+Before reading anything, each discovered file is tested against the selected presets' *location*
+and *format* declarations — the two matching steps that need no file content. A file no selector
+locates is passed over unopened; a file that is located is read only for the sub-units (SQLite
+tables, Excel sheets, XML model types) its selectors declare. Files passed over are counted in
+the run report and listed in the log, never dropped in silence. Force-preset mode is the one
+exception: it bypasses location matching by design, so it reads the whole input. Which rule
+applied is recorded in `run.settings_json`, so a run states what it opened.
+*Why:* one preset targeting one table of one database must not require reading every database of
+a full acquisition — that turned a seconds-long job into a minutes-long one and filled the log
+with warnings about protected system databases nobody asked for. The narrowing is safe by
+construction: it applies exactly the matcher's own first two steps, so a file it declines could
+never have matched anyway. It changes only what a run *opens* — what a source *is* once opened
+stays preset-free (see the identity rules above).
+
 **Archive re-processing is skipped only on explicit opt-in, and only for an identical preset.**
 A recognised archive is re-opened every run by default. Skipping a previously-processed archive
 happens only when the operator opts in AND the preset signature (key + version + definition
@@ -159,10 +174,25 @@ ambiguous between "not looked at" and "nothing found".
 
 **Concomitance is a presence question.**
 "Who was together" counts presence: referenced-only pins and negated ("never during") links are
-excluded; unmapped/unknown links are *included* (unknown is not evidence of non-presence). An
-identity is never reported as together with itself.
+excluded; unmapped/unknown links are *included* (unknown is not evidence of non-presence).
 *Why:* presence and reference are different claims — a place merely *mentioned* is not a place
 someone *was*.
+
+**Same identity: excluded within one case, reported across two.**
+Inside a single case an identity is never reported as together with itself — one phone disclosed
+by two sources is *convergence*, and "where does this one thing keep appearing" is a hotspot
+question, not concomitance. When two **different** cases are compared the exclusion is lifted:
+the same IMEI in case 1 and case 2 at the same place and time is precisely the finding.
+*Why:* the inversion is deliberate. Within one case a repeated identity says nothing new about
+who was with whom; across cases it links two investigations, which is the whole point of asking.
+
+**The question is asymmetric.**
+Group 1 and group 2 are chosen independently, and the time window has a *before* and an *after*
+side measured **relative to group 1**; the emitted `time_delta_s` is signed (negative = group 2
+earlier). A pair is still reported once however many orientations satisfy the window.
+*Why:* "which placements of *these* are near which placements of *those*" is the operational
+question; a single symmetric selector cannot express it, and asking it that way returns zero,
+which reads as "nobody was with them".
 
 ---
 

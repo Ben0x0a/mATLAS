@@ -50,9 +50,9 @@ assertions:
       latitude:              field(ZLOCATIONLATITUDE)
       longitude:             field(ZLOCATIONLONGITUDE)
       spatial_referential:   const(epsg:4326)             # the datum for the coordinates
-      altitude_m:            field(ZLOCATIONALTITUDE)
-      horizontal_accuracy_m: field(ZLOCATIONHORIZONTALUNCERTAINTY)
-      vertical_accuracy_m:   field(ZLOCATIONVERTICALUNCERTAINTY)
+      altitude_m:            { from: field(ZLOCATIONALTITUDE), unit: m }
+      horizontal_accuracy_m: { from: field(ZLOCATIONHORIZONTALUNCERTAINTY), unit: m }
+      vertical_accuracy_m:   { from: field(ZLOCATIONVERTICALUNCERTAINTY), unit: m }
       position_type:         const(visit)
     time:
       interval:                      # the visit dwell window (Cocoa epoch -> us)
