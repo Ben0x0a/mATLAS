@@ -1,20 +1,108 @@
-"""Thin argparse launcher for the declarative spatio-temporal pipeline."""
+"""Thin argparse launcher for the declarative spatio-temporal pipeline.
+
+Defines:    ``build_parser`` / ``run`` (the ``matlas`` entry point) plus the ``process``
+            and ``concomitance`` subcommands. ``concomitance`` builds the SAME
+            ``ConcomitanceRequest`` and calls the SAME ``run_concomitance`` as the GUI
+            panel (``gui.spatiotemporal_controller``), so the two shells can never drift
+            on what a request means or what the engine can currently do.
+Used by:    the ``matlas`` console-script entry point.
+Depends on: ``model_atlas.app.pipeline`` (``process``), ``model_atlas.app.concomitance_run``
+            (``run_concomitance``),
+            ``model_atlas.analyze.concomitance_request`` (the request dataclasses and
+            ``check_request`` — the one validator both shells call),
+            ``model_atlas.analyze.case_vocabulary`` (``--list-entities``), and
+            ``model_atlas.analyze.concomitance_request`` for ``DURATION_UNIT_NAMES``/``duration_from`` —
+            the Qt-free duration-unit table, imported (not copied) so the CLI's ``--before``/
+            ``--after`` suffix parsing and the GUI's unit combo can never disagree on what
+            a unit means.
+"""
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import logging
+import re
+import sqlite3
 import tempfile
 from pathlib import Path
 
 from model_atlas import __version__
+from model_atlas.analyze.case_vocabulary import read_case_vocabulary
+from model_atlas.analyze.concomitance_request import (
+    ConcomitanceRequest,
+    Criterion,
+    CriterionKind,
+    EntityGroup,
+    MatchMode,
+    Severity,
+    check_request,
+)
+from model_atlas.app.concomitance_run import run_concomitance
 from model_atlas.app.config import get_settings
 from model_atlas.app.diagnostics import install_excepthook
 from model_atlas.app.logging_setup import configure_logging
 from model_atlas.app.pipeline import process
 from model_atlas.export.registry import available_exporters, load_builtin_exporters
 from model_atlas.app.profiles import build_profile_preset_folder, load_profile
+from model_atlas.analyze.concomitance_request import DURATION_UNIT_NAMES, duration_from
 
 log = logging.getLogger("model_atlas.cli")
+
+# Suffix letter -> the unit name DURATION_UNIT_NAMES/duration_from already know. Only the
+# LETTER mapping lives here; the actual unit->timedelta table stays the single copy in
+# gui.spatiotemporal_query, so the CLI cannot silently drift from the GUI combo.
+_DURATION_SUFFIXES: dict[str, str] = {
+    "s": "seconds", "m": "minutes", "h": "hours", "d": "days",
+}
+_DURATION_ARG_RE = re.compile(r"(?P<value>\d+(?:\.\d+)?)(?P<suffix>[a-zA-Z]+)")
+
+
+def _parse_duration_arg(text: str) -> dt.timedelta:
+    """Parse a CLI duration token (``30s`` / ``10m`` / ``2h`` / ``1d``) into a timedelta.
+
+    HOW: split the leading number from the trailing unit letter with a regex, map the
+    letter to the unit name via ``_DURATION_SUFFIXES``, then hand off to the GUI's own
+    ``duration_from`` for the actual multiplication — so the value*unit arithmetic is
+    never duplicated. WHY a regex and not argparse's own float/choices machinery: the
+    unit is glued onto the number with no separator ("30s"), which neither type alone
+    can parse.
+    """
+    match = _DURATION_ARG_RE.fullmatch(text.strip())
+    if match is None:
+        raise argparse.ArgumentTypeError(
+            f"invalid duration {text!r}; expected a number followed by one of "
+            f"{sorted(_DURATION_SUFFIXES)} (e.g. 30s, 10m, 2h, 1d)")
+    unit = _DURATION_SUFFIXES.get(match.group("suffix").lower())
+    if unit is None:
+        raise argparse.ArgumentTypeError(
+            f"unknown duration unit in {text!r}; allowed suffixes: "
+            f"{sorted(_DURATION_SUFFIXES)}")
+    try:
+        return duration_from(float(match.group("value")), unit)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _parse_criterion_arg(text: str) -> Criterion:
+    """Parse one ``--group1``/``--group2`` token (``KIND=VALUE``) into a ``Criterion``.
+
+    An unknown kind or a missing ``=`` raises ``ArgumentTypeError`` — argparse turns that
+    into a usage error on stderr (exit 2), never a traceback — and names the allowed
+    ``CriterionKind`` values so the operator can fix it without reading the source.
+    """
+    allowed = ", ".join(kind.value for kind in CriterionKind)
+    if "=" not in text:
+        raise argparse.ArgumentTypeError(
+            f"malformed criterion {text!r}; expected KIND=VALUE with KIND one of: {allowed}")
+    kind_text, _, value = text.partition("=")
+    try:
+        kind = CriterionKind(kind_text.strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"unknown criterion kind {kind_text!r}; allowed: {allowed}") from exc
+    if not value:
+        raise argparse.ArgumentTypeError(f"malformed criterion {text!r}; missing a value")
+    return Criterion(kind=kind, value=value)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -154,6 +242,69 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    concomitance_parser = sub.add_parser(
+        "concomitance",
+        help="Find pairs of placements near each other in space and time.",
+    )
+    concomitance_parser.add_argument(
+        "--case", type=Path, required=True,
+        help="The case database (*.matlas.sqlite) both groups are drawn from by default.",
+    )
+    concomitance_parser.add_argument(
+        "--case-2", type=Path, default=None, dest="case_2",
+        help="A second case database for group 2 (unsupported until the T102 engine).",
+    )
+    concomitance_parser.add_argument(
+        "--group1", action="append", default=[], type=_parse_criterion_arg,
+        metavar="KIND=VALUE", dest="group1",
+        help=(
+            "One selection criterion for group 1, KIND one of "
+            f"{', '.join(k.value for k in CriterionKind)}; repeatable. "
+            "Omitted entirely = every entity in the case."
+        ),
+    )
+    concomitance_parser.add_argument(
+        "--group1-match", choices=("any", "all"), default="any", dest="group1_match",
+        help="How the --group1 criteria combine (default any).",
+    )
+    concomitance_parser.add_argument(
+        "--group2", action="append", default=[], type=_parse_criterion_arg,
+        metavar="KIND=VALUE", dest="group2",
+        help="One selection criterion for group 2; repeatable. See --group1.",
+    )
+    concomitance_parser.add_argument(
+        "--group2-match", choices=("any", "all"), default="any", dest="group2_match",
+        help="How the --group2 criteria combine (default any).",
+    )
+    concomitance_parser.add_argument(
+        "--distance", type=float, default=None,
+        help="Distance threshold in metres. Required unless --list-entities is used.",
+    )
+    concomitance_parser.add_argument(
+        "--before", type=_parse_duration_arg, default=None,
+        help="How much earlier group 2 may be than group 1, e.g. 30s/10m/2h/1d.",
+    )
+    concomitance_parser.add_argument(
+        "--after", type=_parse_duration_arg, default=None,
+        help="How much later group 2 may be than group 1, e.g. 30s/10m/2h/1d.",
+    )
+    concomitance_parser.add_argument(
+        "--accuracy", action="store_true", dest="use_accuracy",
+        help="Account for recorded position accuracy (unsupported until the T102 engine).",
+    )
+    concomitance_parser.add_argument(
+        "--output", type=Path, default=None,
+        help="CSV path to write results to. Required unless --list-entities is used.",
+    )
+    concomitance_parser.add_argument(
+        "--list-entities", choices=[kind.value for kind in CriterionKind], default=None,
+        dest="list_entities", metavar="KIND",
+        help=(
+            "Print the case's vocabulary for KIND as TSV (value, qualifier, "
+            "placement_count) on stdout and exit, without running a query."
+        ),
+    )
+
     return parser
 
 
@@ -206,6 +357,75 @@ def _cmd_process(args: argparse.Namespace) -> int:
     return 0
 
 
+def _list_entities(case: Path, kind_value: str) -> int:
+    """``--list-entities KIND``: TSV (value, qualifier, placement_count) on stdout, exit 0.
+
+    ``print()`` is the documented exception to the logging rule — this is the command's
+    result output, not a diagnostic, and must survive a pipe into ``cut``/``grep`` without
+    a level/timestamp prefix corrupting it. A case that cannot be opened read-only (missing
+    file, wrong file type) is reported through logging and exits 1, never a traceback.
+    """
+    kind = CriterionKind(kind_value)
+    try:
+        vocabulary = read_case_vocabulary(case)
+    except sqlite3.Error as exc:
+        log.error(f"Cannot read case {case}: {exc}")
+        return 1
+    print("value\tqualifier\tplacement_count")
+    for entry in vocabulary[kind]:
+        print(f"{entry.value}\t{entry.qualifier or ''}\t{entry.placement_count}")
+    return 0
+
+
+def _cmd_concomitance(args: argparse.Namespace) -> int:
+    if args.list_entities is not None:
+        return _list_entities(args.case, args.list_entities)
+
+    # --distance/--before/--after/--output are only required for an actual run, not for
+    # --list-entities, so they are declared optional at the argparse level and checked here.
+    required = {"--distance": args.distance, "--before": args.before,
+                "--after": args.after, "--output": args.output}
+    missing = [name for name, value in required.items() if value is None]
+    if missing:
+        log.error(f"Missing required argument(s): {', '.join(missing)}.")
+        return 1
+
+    request = ConcomitanceRequest(
+        case_1=args.case,
+        case_2=args.case_2,
+        group_1=EntityGroup(criteria=tuple(args.group1), mode=MatchMode(args.group1_match)),
+        group_2=EntityGroup(criteria=tuple(args.group2), mode=MatchMode(args.group2_match)),
+        space_threshold_m=args.distance,
+        time_before=args.before,
+        time_after=args.after,
+        use_accuracy=args.use_accuracy,
+        output_path=args.output,
+    )
+
+    # check_request is the ONE validator both shells call; an ERROR blocks the run here
+    # exactly as the GUI blocks Run, so the two shells can never disagree on what is legal.
+    problems = check_request(request)
+    for problem in problems:
+        (log.error if problem.severity is Severity.ERROR else log.warning)(problem.message)
+    if any(problem.severity is Severity.ERROR for problem in problems):
+        return 1
+
+    try:
+        result = run_concomitance(request)
+    except ValueError as exc:
+        # run_concomitance re-checks request validity itself (no caller can bypass
+        # check_request); this mirrors the ERROR path above in case that re-check ever
+        # disagrees with the pre-run check performed here.
+        log.error(str(exc))
+        return 1
+
+    log.info(
+        f"{result.match_count} match(es) written to {result.output_path} "
+        f"(candidates: group 1 = {result.candidate_count_1}, "
+        f"group 2 = {result.candidate_count_2})")
+    return 0
+
+
 def run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -215,5 +435,7 @@ def run(argv: list[str] | None = None) -> int:
     install_excepthook(context={"entrypoint": "cli", "command": args.command})
     if args.command == "process":
         return _cmd_process(args)
+    if args.command == "concomitance":
+        return _cmd_concomitance(args)
     parser.print_help()
     return 1

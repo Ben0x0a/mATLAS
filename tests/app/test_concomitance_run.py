@@ -1,12 +1,11 @@
-"""Tests for model_atlas/app/concomitance_run.py (the Verify list).
+"""Tests for model_atlas/app/concomitance_run.py (the T102 Verify list).
 
-Covers:     the adapter raises ``ConcomitanceNotYetSupported`` for each of the four
-            unsupported shapes (two cases, asymmetric window, accuracy, different
-            groups) with the stated message, and runs for real on the supported shape
-            (one case, identical/empty groups, symmetric window) — including progress
-            callbacks, cooperative cancellation (partial count, file kept), and a
-            written CSV whose rows carry position/time absent from the raw engine
-            output.
+Covers:     the FOUR shapes T101a had to refuse — two cases, an asymmetric window,
+            accuracy-aware matching and two different entity groups — now running for
+            real through the T102 engine (the capability guards
+            are gone); plus progress callbacks (once per ANCHOR), cooperative
+            cancellation (partial count, file kept), the identical-groups warning, and
+            a written CSV whose rows carry the position/time the old output lacked.
 Uses:       ``model_atlas.app.concomitance_run`` + the same fixture-building helpers as
             tests/analyze/test_concomitance.py (real layer-typed store writers, real
             ``integrate_spatial``), persisted to a real file so the read-only URI-safe
@@ -28,7 +27,7 @@ from model_atlas.analyze.concomitance_request import (
     EntityGroup,
     MatchMode,
 )
-from model_atlas.app.concomitance_run import ConcomitanceNotYetSupported, run_concomitance
+from model_atlas.app.concomitance_run import run_concomitance
 from model_atlas.core import ids
 from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore
@@ -125,60 +124,101 @@ def _request(tmp_path: Path, db_path: Path, **overrides: object) -> Concomitance
     return ConcomitanceRequest(**defaults)
 
 
-# --- the four unsupported shapes -------------------------------------------------------
+# --- the four shapes T101a had to refuse, now running for real ---------------------------
+# Each of these was refused by a capability guard before the T102 engine landed. The
+# guards are gone, so the assertion is now that the run COMPLETES and writes a file.
 
-def test_two_cases_raises(tmp_path: Path) -> None:
+def test_two_cases_now_run(tmp_path: Path) -> None:
+    """A second case is compared for real — and the same-identity exclusion is LIFTED
+    across cases, so the same device in both is reported rather than dropped."""
+    case_1 = tmp_path / "case1.matlas.sqlite"
+    case_2 = tmp_path / "case2.matlas.sqlite"
+    _build_case(case_1)
+    _build_case(case_2)
+    request = _request(tmp_path, case_1, case_2=case_2)
+    result = run_concomitance(request)
+    assert result.candidate_count_1 == 2 and result.candidate_count_2 == 2
+    # The two cases carry the same two devices at the same place/time: every cross
+    # pair matches, including the identical-identity ones (the deliberate inversion).
+    assert result.match_count == 4
+    assert request.output_path.is_file()
+
+
+def test_the_same_case_named_twice_is_still_one_case(tmp_path: Path) -> None:
+    """case_2 pointing at case_1's file is ONE case, so the same-identity exclusion
+    must still apply — otherwise every assertion would pair with itself."""
     db_path = tmp_path / "case.matlas.sqlite"
     _build_case(db_path)
-    request = _request(tmp_path, db_path, case_2=db_path)
-    with pytest.raises(ConcomitanceNotYetSupported, match="Comparing two cases"):
-        run_concomitance(request)
+    both = run_concomitance(_request(tmp_path, db_path, case_2=db_path))
+    single = run_concomitance(_request(tmp_path, db_path))
+    assert both.match_count == single.match_count == 1
 
 
-def test_asymmetric_window_raises(tmp_path: Path) -> None:
+def test_asymmetric_window_now_runs(tmp_path: Path) -> None:
     db_path = tmp_path / "case.matlas.sqlite"
     _build_case(db_path)
     request = _request(tmp_path, db_path,
                        time_before=dt.timedelta(minutes=5),
                        time_after=dt.timedelta(minutes=30))
-    with pytest.raises(ConcomitanceNotYetSupported, match="asymmetric time window"):
-        run_concomitance(request)
+    result = run_concomitance(request)
+    assert result.match_count == 1
+    assert request.output_path.is_file()
 
 
-def test_use_accuracy_raises(tmp_path: Path) -> None:
+def test_use_accuracy_now_runs(tmp_path: Path) -> None:
     db_path = tmp_path / "case.matlas.sqlite"
     _build_case(db_path)
-    request = _request(tmp_path, db_path, use_accuracy=True)
-    with pytest.raises(ConcomitanceNotYetSupported, match="Accuracy-aware matching"):
-        run_concomitance(request)
+    result = run_concomitance(_request(tmp_path, db_path, use_accuracy=True))
+    assert result.match_count == 1
 
 
-def test_different_groups_raises(tmp_path: Path) -> None:
+def test_different_groups_now_run(tmp_path: Path) -> None:
+    """Two INDEPENDENT groups — the capability the whole rewrite exists for."""
     db_path = tmp_path / "case.matlas.sqlite"
-    _build_case(db_path)
+    a, b = _build_case(db_path)
     request = _request(
         tmp_path, db_path,
-        group_1=EntityGroup(criteria=(Criterion(CriterionKind.ENTITY_TYPE, "device"),)),
-        group_2=EntityGroup(criteria=(Criterion(CriterionKind.ENTITY_TYPE, "vehicle"),)))
-    with pytest.raises(ConcomitanceNotYetSupported, match="Two different entity groups"):
-        run_concomitance(request)
+        group_1=EntityGroup(criteria=(
+            Criterion(CriterionKind.IDENTIFIER, "+41790000001"),)),
+        group_2=EntityGroup(criteria=(
+            Criterion(CriterionKind.IDENTIFIER, "+41790000002"),)))
+    result = run_concomitance(request)
+    assert result.candidate_count_1 == 1 and result.candidate_count_2 == 1
+    assert result.match_count == 1
+    row = request.output_path.read_text(encoding="utf-8-sig").splitlines()[1].split(",")
+    # Group 1 really is the group-1 side of the row (the asymmetry is preserved).
+    assert row[0] == "+41790000001" and row[10] == "+41790000002"
+    assert row[8] == a and row[18] == b
 
 
-def test_cross_kind_any_raises(tmp_path: Path) -> None:
-    """A group mode still cannot be translated even when group_1 == group_2."""
+def test_cross_kind_any_now_runs(tmp_path: Path) -> None:
+    """``ANY`` spanning several kinds — structurally inexpressible for the old engine."""
     db_path = tmp_path / "case.matlas.sqlite"
     _build_case(db_path)
     group = EntityGroup(criteria=(
         Criterion(CriterionKind.ENTITY_TYPE, "device"),
         Criterion(CriterionKind.IDENTIFIER_TYPE, "plate")), mode=MatchMode.ANY)
     request = _request(tmp_path, db_path, group_1=group, group_2=group)
-    with pytest.raises(ConcomitanceNotYetSupported, match="spanning more than one kind"):
-        run_concomitance(request)
+    result = run_concomitance(request)
+    # Both fixture entities are devices, so the union still selects both.
+    assert result.candidate_count_1 == 2
+    assert result.match_count == 1
+
+
+def test_no_capability_guard_remains(tmp_path: Path) -> None:
+    """The T101a seam is gone: nothing in the app layer raises the capability error."""
+    import inspect
+
+    from model_atlas.app import concomitance_run
+
+    source = inspect.getsource(concomitance_run)
+    assert "raise ConcomitanceNotYetSupported" not in source
+    assert "_ensure_engine_can_run" not in source
 
 
 # --- the supported shape ----------------------------------------------------------------
 
-def test_supported_shape_runs_for_real_with_progress_and_enriched_rows(tmp_path: Path) -> None:
+def test_plain_shape_runs_for_real_with_progress_and_enriched_rows(tmp_path: Path) -> None:
     db_path = tmp_path / "case.matlas.sqlite"
     a, b = _build_case(db_path)
     request = _request(tmp_path, db_path)
@@ -194,7 +234,10 @@ def test_supported_shape_runs_for_real_with_progress_and_enriched_rows(tmp_path:
     # Both groups are empty ("everything"), which resolves to the SAME selection in one
     # case, so the identical-groups WARNING fires (see check_request) but does not block.
     assert len(result.warnings) == 1
-    assert progress_calls == [(1, 1)]
+    # Progress is now once per ANCHOR with the group-1 candidate count as the total
+    # (T102 §5) — the old adapter reported once per emitted PAIR, which could not drive
+    # a determinate progress bar because the pair count is unknown until the end.
+    assert progress_calls == [(1, 2), (2, 2)]
 
     raw = request.output_path.read_bytes()
     lines = raw.decode("utf-8-sig").splitlines()

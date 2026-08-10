@@ -31,6 +31,38 @@ class CriterionKind(Enum):
     IDENTIFIER = "identifier"
 
 
+# --- the duration vocabulary (shared by BOTH shells) ---------------------------------
+# One unit -> the timedelta of ONE of it, so value*unit yields the threshold. This lives
+# in the shared request layer, not in either shell: the GUI's unit combos and the CLI's
+# --before/--after suffixes must offer exactly the same set, and a shell importing another
+# shell to get it would invert the dependency direction (shells depend on the layers
+# below them, never on each other).
+DURATION_UNITS: dict[str, dt.timedelta] = {
+    "seconds": dt.timedelta(seconds=1),
+    "minutes": dt.timedelta(minutes=1),
+    "hours": dt.timedelta(hours=1),
+    "days": dt.timedelta(days=1),
+}
+# Ordered names for the GUI's unit combos (dict order is insertion order, kept explicit).
+DURATION_UNIT_NAMES: tuple[str, ...] = ("seconds", "minutes", "hours", "days")
+
+
+def duration_from(value: float, unit: str) -> dt.timedelta:
+    """Turn a (value, unit) pair from either shell into a timedelta threshold.
+
+    WHY validate the unit: an unrecognised unit string (a typo, or a combo/suffix table
+    that drifted from ``DURATION_UNITS``) would otherwise silently pick a wrong scale;
+    raising at the boundary keeps the threshold honest. A negative value has no duration
+    meaning, so it is rejected here too (``check_request`` also rejects it, but failing
+    fast at the boundary gives a more specific message than the validation table entry).
+    """
+    if unit not in DURATION_UNITS:
+        raise ValueError(
+            f"unknown duration unit {unit!r}; allowed: {DURATION_UNIT_NAMES}")
+    if value < 0:
+        raise ValueError(f"duration value must be >= 0, got {value}")
+    return DURATION_UNITS[unit] * value
+
 @dataclass(frozen=True)
 class Criterion:
     """One selection token: a kind + the literal value (as stored in the case)."""

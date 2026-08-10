@@ -19,39 +19,19 @@ import datetime as dt
 from pathlib import Path
 from typing import Sequence
 
-from model_atlas.analyze.concomitance_request import ConcomitanceRequest, EntityGroup, MatchMode
+# The duration vocabulary is re-exported from the shared request layer so existing
+# importers of this seam keep working; it is DEFINED there because both shells need it
+# and a shell must never import another shell.
+from model_atlas.analyze.concomitance_request import (
+    DURATION_UNIT_NAMES,
+    DURATION_UNITS,
+    ConcomitanceRequest,
+    EntityGroup,
+    MatchMode,
+    duration_from,
+)
 
 # --- temporal-threshold units --------------------------------------------------------
-# The duration units the panel offers, each as the timedelta of ONE unit so a value*unit
-# multiplication yields the threshold. Declared once here (single source of truth) so
-# the four unit combos and ``duration_from`` can never disagree on the set.
-DURATION_UNITS: dict[str, dt.timedelta] = {
-    "seconds": dt.timedelta(seconds=1),
-    "minutes": dt.timedelta(minutes=1),
-    "hours": dt.timedelta(hours=1),
-    "days": dt.timedelta(days=1),
-}
-# Ordered names for the unit combos (dict order is insertion order, kept explicit).
-DURATION_UNIT_NAMES: tuple[str, ...] = ("seconds", "minutes", "hours", "days")
-
-
-def duration_from(value: float, unit: str) -> dt.timedelta:
-    """Turn a (value, unit) pair from the UI into a timedelta threshold.
-
-    WHY validate the unit: an unrecognised unit string (a typo, or a combo that drifted
-    from ``DURATION_UNITS``) would otherwise silently pick a wrong scale; raising at the
-    boundary keeps the threshold honest. A negative value has no duration meaning, so it
-    is rejected here too (``check_request`` also rejects it, but failing fast at the
-    boundary gives a more specific message than the generic validation table entry).
-    """
-    if unit not in DURATION_UNITS:
-        raise ValueError(
-            f"unknown duration unit {unit!r}; allowed: {DURATION_UNIT_NAMES}")
-    if value < 0:
-        raise ValueError(f"duration value must be >= 0, got {value}")
-    return DURATION_UNITS[unit] * value
-
-
 def split_identifiers(text: str) -> tuple[str, ...]:
     """One free-typed field's tokens, in stated order (multi-value paste support).
 
