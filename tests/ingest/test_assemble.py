@@ -497,6 +497,61 @@ def test_cdr_activity_context_and_duration_part() -> None:
         assert assertion["entity_role"] == "caller"
 
 
+def test_duration_bound_is_written_verbatim_under_the_duration_part() -> None:
+    """A ``duration_sec:`` upper bound keeps the source's digits VERBATIM (no unit conversion
+    at L1 — that is the L2 method's job) and defaults to the part ``duration`` rather than
+    ``upper``, which is what tells every reader it holds a span, not an end clock."""
+    spec, records, _ = _example_cdr_a()
+    # The doc fixture renames the part by hand; a duration_unit makes it the DEFAULT.
+    time = replace(spec.assertions[0].temporal[0], duration_unit="s")
+    common = tuple(f for f in spec.common if f.model_field != "temporal_part_upper")
+    spec = replace(spec, common=common,
+                   assertions=(replace(spec.assertions[0], temporal=(time,)),))
+    with _assembled(spec, records) as (store, _, _):
+        bounds = _rows(store, "SELECT * FROM temporal_component ORDER BY ordinal")
+        assert [(b["part"], b["temporal_role"], b["raw_value"]) for b in bounds] == [
+            ("lower", "start", "2026-03-14 02:20:31"),
+            ("duration", "end", "187"),          # verbatim seconds, NOT scaled to µs
+        ]
+
+
+def test_mapped_source_record_uid_lands_on_every_assertion() -> None:
+    """A preset-mapped ``source_record_uid`` is resolved ONCE per source record and repeated
+    on every assertion that record fans out into — that repetition is its job (it GROUPS the
+    output rows). It stays verbatim, and it must not disturb either digest."""
+    spec, records, _ = _example_route()          # one record -> two assertions
+    with _assembled(spec, records) as (store, _, _):
+        baseline = [r["claim_digest"] for r in _rows(
+            store, "SELECT claim_digest FROM assertion ORDER BY output_ordinal")]
+
+    uid_spec = replace(spec, source_record_uid=_f("source_record_uid", "field(item_id)"))
+    uid_records = [replace(r, fields={**r.fields, "item_id": "ITEM-42"}) for r in records]
+    with _assembled(uid_spec, uid_records) as (store, _, _):
+        rows = _rows(store, "SELECT source_record_uid, claim_digest FROM assertion "
+                            "ORDER BY output_ordinal")
+        assert len(rows) == 2
+        assert [r["source_record_uid"] for r in rows] == ["ITEM-42", "ITEM-42"]
+        # A source's own key is provenance, not claim content: the digests are untouched.
+        assert [r["claim_digest"] for r in rows] == baseline
+
+    # Unmapped (or `source_record_uid: default`) leaves the column NULL, so the flat view
+    # falls back to the engine-generated raw_record_id.
+    with _assembled(spec, records) as (store, _, _):
+        assert all(r["source_record_uid"] is None
+                   for r in _rows(store, "SELECT source_record_uid FROM assertion"))
+
+
+def test_duplicate_mapped_source_record_uid_raises() -> None:
+    """A MAPPED uid must identify exactly one source record: two records claiming one uid
+    would silently merge distinct evidence, so assembly raises rather than warns."""
+    spec, records, _ = _example_cdr_a()
+    uid_spec = replace(spec, source_record_uid=_f("source_record_uid", "field(a_party)"))
+    twice = [*records, replace(records[0], line_no=2)]
+    with pytest.raises(ValueError, match="must be unique per source record"):
+        with _assembled(uid_spec, twice):
+            pass
+
+
 def test_cache_components_verbatim_and_derived_referentials() -> None:
     spec, records, _ = _example_cache()
     with _assembled(spec, records) as (store, _, _):

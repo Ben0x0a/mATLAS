@@ -41,7 +41,7 @@ input_selector:                           # required; one mapping OR a list
   path: /private/var/.../Cache.sqlite     # XOR name
   table: ZRTCLLOCATIONMO
 
-source_record_uid: field(uuid)            # optional; omit to auto-generate
+source_record_uid: field(uuid)            # optional; `default` (or omitted) auto-generates
 
 expected_fields:                          # optional; the declared inventory (globs ok)
   - ZLATITUDE
@@ -77,12 +77,17 @@ assertions:                               # required; non-empty list
 | --- | --- | --- | --- |
 | `preset` | yes | mapping | The header (see §3). |
 | `input_selector` | yes | mapping or list | Where the source is and how to read it (see §4). |
-| `source_record_uid` | no | field-spec | The per-source-record UID; omit to auto-generate (see §13). |
+| `source_record_uid` | no | field-spec or `default` | The per-source-record UID; `default` (or omission) auto-generates one (see §13). |
 | `expected_fields` | no | list of strings | The declared source-field inventory; drives the drift/frontier report (see §6). |
 | `lookup_tables` | no | mapping of name → table | Named value maps for the `lookup` pipe (see §10). |
 | `patterns` | no | mapping of name → regex | Named regexes (with named groups) for `extract` and the `regex` pipe (see §10). |
 | `common` | no | mapping | Field mappings shared by every assertion of a record (see §7). |
 | `assertions` | yes | non-empty list | One entry per position/time/links grouping (see §7). |
+
+This set is **closed**: any other top-level key is a load-time error. The rejection exists
+because a model field written at the top level instead of under `common:` (a stray
+`input_record_id:` or `context.antenna:`) used to be read by nobody and dropped in silence —
+the mapping looked present and produced nothing.
 
 Any spatial or entity field may be declared once in `common:` instead of repeating it in
 each assertion; a `common:`-mapped coordinate becomes a spatial component shared by every
@@ -458,7 +463,8 @@ unsupported cast target) **always** propagates regardless of `on_error`.
 
 `unit:` declares the **source** unit; the engine multiplies by `unit_factor(source_unit,
 field)` to reach the field's canonical unit (`CANONICAL_UNIT` in `core/vocabularies.py`).
-Recognised conversions:
+Recognised conversions (the six duration rows serve `duration_sec`, §11.1 — there the factor
+is applied at L2, never to the stored L1 value):
 
 | Source unit | Canonical | Factor |
 | --- | --- | --- |
@@ -469,6 +475,12 @@ Recognised conversions:
 | `m` | m | 1.0 |
 | `ft` | m | 0.3048 |
 | `deg` | deg | 1.0 |
+| `s` | s | 1.0 |
+| `ms` | s | 0.001 |
+| `us` | s | 0.000001 |
+| `min` | s | 60.0 |
+| `h` | s | 3600.0 |
+| `d` | s | 86400.0 |
 
 An unknown unit/field pair raises at parse time. **`unit:` is REQUIRED on every metric field**
 (any `CANONICAL_UNIT` key: `altitude_m`, the accuracy/speed/heading/beam parts). The loader
@@ -500,10 +512,58 @@ time:
 | Key | Meaning |
 | --- | --- |
 | `instant` | A single time bound. **Exactly one of `instant` / `interval`.** |
-| `interval` | `{lower: <bound>, upper: <bound>}`. **Exactly one of `instant` / `interval`.** |
+| `interval` | `{lower: <bound>, upper: <bound>}` or `{lower: <bound>, duration_sec: {from:, unit:}}`. **Exactly one of `instant` / `interval`.** |
 | `epoch` | A named epoch codec. **`epoch` and `format` are mutually exclusive.** |
 | `format` | An strptime format string, or the marker `iso8601`. |
-| `zone` | A `const(...)` or `header(...)` field-spec; the captured offset is applied during parsing. |
+| `zone` | A `const(...)` or `header(...)` field-spec; a UTC offset, `local`, or an **IANA zone name**. |
+
+### 11.1 `duration_sec` — the upper bound as an elapsed span
+
+An `interval` needs `lower` plus **exactly one of** `upper` (an end clock) or `duration_sec`
+(a span from the lower). The second is the CDR shape: operators disclose a start and a call
+length, never a start and an end.
+
+```yaml
+time:
+  interval:
+    lower:        field(TimeStamp)
+    duration_sec: { from: field(Duration), unit: s }
+  format:              "%Y-%m-%d %H:%M:%S"
+  zone:                const(Europe/Zurich)
+  temporal_role_upper: const(end)
+```
+
+`duration_sec` names its **canonical** unit in the key, exactly like `altitude_m`, and the
+**source** unit is declared with `unit:` — mandatory, as for every metric field. Admitted
+source units: `s`, `ms`, `us`, `min`, `h`, `d`.
+
+Layer 1 stays verbatim: the component holds the source's own digits (`"187"`) under the part
+**`duration`** (instead of `upper`; an explicit `temporal_part_upper` still wins), and the
+`unit:` never touches the stored value. Layer 2 derives the end — `upper = lower + duration` —
+under the composite method `…+start_plus_duration/1.0`, whose leading fragment names the rule
+that decoded the start. The derived end is exact in UTC and rendered in the offset the start
+was stated in. An unreadable or negative span costs the end bound only: the row keeps its
+start, and nothing is invented.
+
+The flat CSV projects the verbatim span in `time_upper_raw` (the column coalesces the `upper`
+and `duration` parts), with the derived end in `time_upper_unix_utc_us` / `time_upper_datetime_iso`.
+
+### 11.2 `zone` — offsets and named zones
+
+`zone:` accepts three spellings, all resolved per bound:
+
+| Spelling | Behaviour |
+| --- | --- |
+| `const(+01:00)`, `const(UTC)` | The stated **fixed** offset, applied season-blind. |
+| `const(Europe/Zurich)` | The source's own **IANA zone**: each bound resolves its own offset through the tz database, so a winter bound gets +01:00 and a summer bound +02:00. The tzdb version is stamped on the method. |
+| `const(local)`, `…[DST]` | Device-local: resolved against the operator's configured `[timezone].local_zone`. |
+
+A **named zone outranks the configured local zone** — the preset states what this source's
+clocks mean, while the configuration only says what to assume when the source says nothing.
+
+A `const(...)` zone that is neither an offset, nor `local`, nor a zone the tz database knows
+is a **load-time error**: an unrecognised zone does not fail at conversion, it silently falls
+back to assuming UTC.
 
 - `epoch` ∈ `unix_s`, `unix_ms`, `unix_us`, `unix_ns`, `cocoa` (Apple 2001 epoch),
   `webkit`. (`unix_ns` has no `TemporalReferential` member yet and derives the referential
@@ -548,11 +608,18 @@ Three columns, three jobs:
 
 - **`source_record_uid`** (optional top-level key, parsed as a non-assignable field-spec):
   reference a genuine source UID (a tool's Item ID, a real UUID column) when one exists; the
-  value is used verbatim. **Omit it for a device DB** so the engine generates a deterministic,
-  content-addressed UID independent of the file name/path (folder == zip parity). A bare
-  rowid (`Z_PK`) is not a stable UID and should not be mapped here. A **mapped** duplicate
-  `source_record_uid` across distinct source records is a hard error; the generated one never
-  collides.
+  value is used verbatim, stored on the assertion, and projected into the CSV
+  `source_record_uid` column in place of the generated id. Because it is preset-resolved it
+  lives at **L1 on the assertion**, beside `input_record_id` — never on the L0 `raw_record`,
+  which is written before any preset is matched. It repeats on every assertion one record
+  fans out into: that repetition is the point, since the column's job is to **group** them.
+  For a device DB write **`source_record_uid: default`** (or omit the key) so the engine
+  generates a deterministic, content-addressed UID independent of the file name/path
+  (folder == zip parity). The `default` token and omission behave identically; write the
+  token, because omission and oversight are otherwise indistinguishable in the file, and the
+  linter advises only on the presets that stayed silent. A bare rowid (`Z_PK`) is not a
+  stable UID and should not be mapped here. A **mapped** duplicate `source_record_uid` across
+  distinct source records is a hard error; the generated one never collides.
 - **`row_uid`** is engine-only, a deterministic uuid5 over the output row's model data + the
   source line number + the output-row ordinal.
 

@@ -13,6 +13,7 @@ import pytest
 
 from model_atlas.integrate.timeparse import (
     parse_iso8601,
+    is_known_zone,
     parse_zone_token,
     tz_offset_to_hours,
     zone_standard_offset_hours,
@@ -49,9 +50,26 @@ def test_parse_zone_token_variants() -> None:
     assert local.base_offset_hours is None and local.dst is True
     assert parse_zone_token(None) is None
     assert parse_zone_token("") is None
-    # Unparseable text keeps the raw token but claims no base offset.
+    # Unparseable text keeps the raw token but claims no base offset — and names no zone,
+    # so the caller can still tell it apart from a source that stated a real zone.
     garbage = parse_zone_token("somewhere")
     assert garbage.base_offset_hours is None and garbage.raw == "somewhere"
+    assert garbage.zone_name is None
+
+
+def test_parse_zone_token_reads_a_named_iana_zone() -> None:
+    """A source that NAMES its zone yields a token carrying that zone: the offset varies per
+    instant (dst=True), and base_offset_hours reports the STANDARD offset for the
+    header-vs-config cross-check. Without this the token would look unparseable and the bound
+    would silently fall back to assuming UTC."""
+    zurich = parse_zone_token("Europe/Zurich")
+    assert zurich.zone_name == "Europe/Zurich"
+    assert zurich.dst is True
+    assert zurich.base_offset_hours == 1.0          # CET, the non-DST offset
+    assert is_known_zone("Europe/Zurich") is True
+    assert is_known_zone("Europe/Zurish") is False  # a typo resolves to nothing
+    # A fixed offset is still a fixed offset — naming is the exception, not the new default.
+    assert parse_zone_token("UTC+01:00").zone_name is None
 
 
 def test_zone_standard_offset_hours_is_the_non_dst_offset() -> None:

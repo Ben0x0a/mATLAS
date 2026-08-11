@@ -26,6 +26,7 @@ from model_atlas.integrate.temporal import (
     AssumeUtcMethod,
     DatetimeCombineMethod,
     EpochMethod,
+    StartPlusDurationMethod,
     TemporalExpressionBundle,
     TzLocaliseMethod,
     epoch_methods,
@@ -138,6 +139,108 @@ def test_stated_fixed_offset_is_applied_season_blind(store) -> None:
     row = _row(store, bundle)
     assert float(row["utc_offset_hours_lower"]) == 1.0
     assert row["lower_unix_utc_us"] == _us(2025, 7, 6, 12, 0, 0)
+
+
+def test_source_named_zone_resolves_dst_without_any_configured_zone(store) -> None:
+    """A source that NAMES its zone (``zone: const(Europe/Zurich)``) resolves per bound
+    through the tzdb with NO operator-configured zone: +01:00 in winter, +02:00 in summer.
+    Before this, the name parsed as an unusable token and both bounds were silently
+    materialised by assuming UTC."""
+    method = TzLocaliseMethod(datetime_format="%Y-%m-%d %H:%M:%S")   # zone=None on purpose
+    bundle = _bundle(store, "named-zone", "interval", "local_string", [
+        ("lower", "Europe/Zurich", "2026-01-15 13:00:00"),
+        ("upper", "Europe/Zurich", "2026-07-15 13:00:00"),
+    ])
+    integrate_expression(store, bundle, [method])
+    row = _row(store, bundle)
+    assert float(row["utc_offset_hours_lower"]) == 1.0      # CET
+    assert float(row["utc_offset_hours_upper"]) == 2.0      # CEST
+    assert row["lower_unix_utc_us"] == _us(2026, 1, 15, 12, 0, 0)
+    assert row["upper_unix_utc_us"] == _us(2026, 7, 15, 11, 0, 0)
+    # Nothing was ASSUMED, so no trailing N/A and the tzdb reference is on the method.
+    assert row["lower_datetime_iso"] == "2026-01-15T13:00:00.000000+01:00"
+    assert "tzdb=" in row["method"] and row["method"].startswith("tz_localize/")
+
+
+def test_source_named_zone_outranks_the_configured_zone(store) -> None:
+    """The preset states what the SOURCE's clocks mean; the configured local zone only says
+    what to assume when the source says nothing. So a named zone wins over the config."""
+    method = TzLocaliseMethod(zone="America/New_York", datetime_format="%Y-%m-%d %H:%M:%S")
+    bundle = _bundle(store, "named-wins", "instant", "local_string",
+                     [("lower", "Europe/Zurich", "2026-01-15 13:00:00")])
+    integrate_expression(store, bundle, [method])
+    row = _row(store, bundle)
+    assert float(row["utc_offset_hours_lower"]) == 1.0      # Zurich, not New York (-5)
+
+
+@pytest.mark.parametrize("unit, raw, seconds", [
+    ("s", "187", 187),
+    ("ms", "187000", 187),
+    ("min", "3", 180),
+    ("h", "0.5", 1800),
+    ("d", "0.25", 21600),
+])
+def test_start_plus_duration_derives_the_upper_bound(store, unit, raw, seconds) -> None:
+    """The CDR shape: L1 holds a start clock plus the source's VERBATIM span under the part
+    ``duration``, and the method derives the end. The unit is the preset's declaration, not
+    something read from the data."""
+    inner = TzLocaliseMethod(zone="Europe/Zurich", datetime_format="%Y-%m-%d %H:%M:%S")
+    method = StartPlusDurationMethod(inner, unit)
+    bundle = _bundle(store, f"dur-{unit}", "interval", "local_string", [
+        ("lower", "Europe/Zurich", "2026-01-15 13:00:00"),
+        ("duration", "Europe/Zurich", raw),
+    ])
+    integrate_expression(store, bundle, [method])
+    row = _row(store, bundle)
+    assert row["lower_unix_utc_us"] == _us(2026, 1, 15, 12, 0, 0)
+    assert row["upper_unix_utc_us"] - row["lower_unix_utc_us"] == seconds * 1_000_000
+    # The composite stamp names the decode that produced the start, THEN the derivation.
+    assert row["method"] == f"{inner.method}+start_plus_duration/1.0"
+    assert row["timespan_integration_id"] == ids.timespan_integration_id(
+        bundle.expression.temporal_expression_id, row["method"])
+
+
+def test_start_plus_duration_keeps_the_derived_end_in_the_starts_offset(store) -> None:
+    """The derived end is exact in UTC (absolute µs arithmetic) and rendered in the offset the
+    start was stated in — including across a DST transition, where the wall-clock ISO is
+    therefore one hour off the local reading while the UTC instant stays right."""
+    inner = TzLocaliseMethod(zone="Europe/Zurich", datetime_format="%Y-%m-%d %H:%M:%S")
+    # 2026-03-29 02:00 CET -> 03:00 CEST: a 2h span from 01:30 crosses the gap.
+    bundle = _bundle(store, "dur-dst", "interval", "local_string", [
+        ("lower", "Europe/Zurich", "2026-03-29 01:30:00"),
+        ("duration", "Europe/Zurich", "7200"),
+    ])
+    integrate_expression(store, bundle, [StartPlusDurationMethod(inner, "s")])
+    row = _row(store, bundle)
+    assert row["upper_unix_utc_us"] - row["lower_unix_utc_us"] == 7200 * 1_000_000
+    assert float(row["utc_offset_hours_upper"]) == 1.0      # the start's applied offset
+
+
+def test_unreadable_duration_leaves_the_start_alone(store) -> None:
+    """A junk or negative span costs the END bound, never the whole row: the wrapper declines
+    and the plain method behind it still writes the start. Nothing is invented."""
+    inner = TzLocaliseMethod(zone="Europe/Zurich", datetime_format="%Y-%m-%d %H:%M:%S")
+    for key, raw in (("dur-junk", "n/a"), ("dur-negative", "-5")):
+        bundle = _bundle(store, key, "interval", "local_string", [
+            ("lower", "Europe/Zurich", "2026-01-15 13:00:00"),
+            ("duration", "Europe/Zurich", raw),
+        ])
+        integrate_expression(store, bundle, [StartPlusDurationMethod(inner, "s"), inner])
+        row = _row(store, bundle)
+        assert row["lower_unix_utc_us"] == _us(2026, 1, 15, 12, 0, 0)
+        assert row["upper_unix_utc_us"] is None
+        assert row["method"] == inner.method            # the plain method wrote this row
+
+
+def test_standard_methods_only_wrap_when_a_duration_unit_is_declared(store) -> None:
+    """The wrapper is opt-in per preset: with no ``duration_sec:`` the method set is unchanged,
+    so a stray ``duration`` component can never silently start deriving end bounds."""
+    plain = standard_methods(zone="Europe/Zurich")
+    wrapped = standard_methods(zone="Europe/Zurich", duration_unit="s")
+    assert not any(isinstance(m, StartPlusDurationMethod) for m in plain)
+    assert len(wrapped) == 2 * len(plain)
+    # Every wrapper precedes every plain method, so the derivation is tried first.
+    assert all(isinstance(m, StartPlusDurationMethod) for m in wrapped[:len(plain)])
 
 
 def test_value_borne_offset_is_honoured_as_parsed(store) -> None:

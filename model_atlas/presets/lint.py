@@ -4,8 +4,18 @@ Defines:    Severity, LintFinding, lint_spec / lint_file / lint_paths — a publ
             that checks one or more v3 presets and returns findings instead of raising.
 Used by:    the utils/lint_presets.py CLI, and any caller wanting to validate presets
             programmatically.
-Depends on: presets.spec (parser) + presets.expr (Ref/Cond), reporting (referenced-field
-            derivation), pyyaml.
+Depends on: presets.spec (parser + the admitted-key/assignable vocabularies) +
+            presets.expr (Ref/Cond), core.vocabularies (the free-text controlled
+            vocabularies), integrate.timeparse (zone tokens), pyyaml.
+
+Two passes:
+- ``check_raw_document`` runs on the YAML tree BEFORE parsing, so a preset that does not
+  load is still diagnosed (the parser raises on the first problem and says nothing about
+  the rest);
+- ``lint_spec`` runs the best-practice checks on the parsed spec.
+
+Findings carry an optional ``suggestion``: the YAML to write instead. A check that knows
+what is wrong usually knows what is right, and the fix is what the author needs.
 
 Three severities:
 - ERROR  : the preset does not parse/validate and will not load.
@@ -18,6 +28,7 @@ The linter never raises for a bad preset — that is the point; it reports.
 """
 from __future__ import annotations
 
+import difflib
 import fnmatch
 import re
 from dataclasses import dataclass
@@ -26,8 +37,18 @@ from typing import Iterable
 
 import yaml
 
-from model_atlas.presets.expr import Ref, flatten_ref
-from model_atlas.presets.spec import FieldSpec, PresetSpec, preset_spec_from_yaml
+from model_atlas.core import vocabularies as V
+from model_atlas.integrate.timeparse import parse_zone_token
+from model_atlas.presets.expr import Ref, flatten_ref, is_condition
+from model_atlas.presets.spec import (
+    DURATION_BOUND_NAME,
+    LINK_FIELDS,
+    TOP_LEVEL_KEYS,
+    FieldSpec,
+    PresetSpec,
+    is_assignable,
+    preset_spec_from_yaml,
+)
 
 ERROR = "error"
 WARNING = "warning"
@@ -50,26 +71,40 @@ class LintFinding:
     message: str
     preset: str              # source path or preset id
     location: str | None = None  # e.g. "assertions[0].links"
+    # The YAML to write instead — a correction the author can paste, not a restatement of the
+    # problem. WHY a separate field and not more prose in ``message``: the message says what is
+    # wrong (and is what a caller greps or groups by), the suggestion says what to do, and a
+    # renderer can show, indent or suppress the two independently.
+    suggestion: str | None = None
 
     def format(self) -> str:
         where = f" [{self.location}]" if self.location else ""
-        return f"{self.severity.upper():7} {self.code}: {self.message}{where}"
+        head = f"{self.severity.upper():7} {self.code}: {self.message}{where}"
+        return head if self.suggestion is None else f"{head}\n        → fix: {self.suggestion}"
 
 
 def lint_file(path: Path) -> list[LintFinding]:
-    """Lint a single preset YAML file."""
+    """Lint a single preset YAML file.
+
+    The raw-document checks run FIRST, on the YAML tree, so a preset that does not load is
+    still diagnosed: the parser raises on the first problem it meets and reports nothing else,
+    which for a genuinely broken preset is the least useful moment to go quiet.
+    """
     path = Path(path)
     label = str(path)
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         return [LintFinding(ERROR, "yaml-error", f"cannot read YAML: {exc}", label)]
+    findings = check_raw_document(raw, label)
     try:
         spec = preset_spec_from_yaml(raw, path)
     except ValueError as exc:
-        # The parser's message already carries the path; keep it as the single error.
-        return [LintFinding(ERROR, "parse-error", str(exc), label)]
-    return lint_spec(spec, preset_label=label)
+        # The parser's message already carries the path; keep it as the single error, ON TOP
+        # of whatever the structural pass already explained.
+        findings.append(LintFinding(ERROR, "parse-error", str(exc), label))
+        return findings
+    return findings + lint_spec(spec, preset_label=label)
 
 
 def lint_paths(paths: Iterable[Path]) -> list[LintFinding]:
@@ -100,6 +135,11 @@ def lint_spec(spec: PresetSpec, *, preset_label: str | None = None) -> list[Lint
         _check_unfilled_placeholders,
         _check_literal_uuid_in_path,
         _check_multi_role,
+        _check_free_text_vocabularies,
+        _check_coordinates_have_a_referential,
+        _check_context_needs_an_activity,
+        _check_zone_and_duration_shape,
+        _check_record_uid_declared,
     ):
         findings.extend(check(spec, label))
     return findings
@@ -153,6 +193,98 @@ def _plain_fields(spec: PresetSpec) -> set[str]:
             for override in time.overrides:
                 add_spec(override)
     return names
+
+
+# --- the raw-document pass (runs BEFORE parsing) ------------------------------
+
+def check_raw_document(raw: object, label: str) -> list[LintFinding]:
+    """Structural checks over the YAML tree, before the parser gets a say.
+
+    WHY a separate pass: ``preset_spec_from_yaml`` raises on the FIRST problem, so a preset
+    with three mistakes reports one — and the mistakes that stop it loading are exactly the
+    ones an author most needs spelled out. These checks name the fix instead.
+    """
+    if not isinstance(raw, dict):
+        return []
+    findings: list[LintFinding] = []
+    findings.extend(_raw_top_level_keys(raw, label))
+    findings.extend(_raw_conditional_links(raw, label))
+    findings.extend(_raw_glob_in_selector_name(raw, label))
+    return findings
+
+
+def _raw_top_level_keys(raw: dict, label: str) -> list[LintFinding]:
+    """An unknown top-level key — most often a model field that belongs under ``common:``."""
+    out: list[LintFinding] = []
+    for key in raw:
+        name = str(key)
+        if name in TOP_LEVEL_KEYS:
+            continue
+        if is_assignable(name):
+            out.append(LintFinding(
+                ERROR, "misplaced-top-level",
+                f"{name!r} is a model field, not a top-level key; at the top level its "
+                f"mapping is never read", label, name,
+                suggestion=f"common:\n            {name}: {_yaml_scalar(raw[key])}"))
+            continue
+        close = difflib.get_close_matches(name, sorted(TOP_LEVEL_KEYS), n=1)
+        hint = f"did you mean {close[0]!r}?" if close else \
+            f"admitted keys: {sorted(TOP_LEVEL_KEYS)}"
+        out.append(LintFinding(
+            ERROR, "unknown-top-level", f"unknown top-level key {name!r}", label, name,
+            suggestion=hint))
+    return out
+
+
+def _raw_conditional_links(raw: dict, label: str) -> list[LintFinding]:
+    """A conditional under ``links:``. The short block takes BARE ENUM TOKENS only; a value
+    that must be computed is mapped by its full column name under ``position:``."""
+    out: list[LintFinding] = []
+    for index, assertion in enumerate(raw.get("assertions") or []):
+        if not isinstance(assertion, dict):
+            continue
+        links = assertion.get("links")
+        if not isinstance(links, dict):
+            continue
+        for key, value in links.items():
+            if not is_condition(value):
+                continue
+            column = LINK_FIELDS.get(str(key), f"{key}_link")
+            out.append(LintFinding(
+                ERROR, "conditional-in-links",
+                f"links.{key} holds a conditional; the links block takes bare enum tokens "
+                f"only", label, f"assertions[{index}].links.{key}",
+                suggestion=f"move it under position: as the full column name —\n"
+                           f"            {column}: {value}"))
+    return out
+
+
+def _raw_glob_in_selector_name(raw: dict, label: str) -> list[LintFinding]:
+    """``name:`` is EXACT basename equality, never a glob — a wildcard there matches nothing,
+    so the preset silently never fires. ``path:`` is the anchored form with wildcards."""
+    selectors = raw.get("input_selector")
+    entries = selectors if isinstance(selectors, list) else [selectors]
+    out: list[LintFinding] = []
+    for index, selector in enumerate(entries):
+        if not isinstance(selector, dict):
+            continue
+        name = selector.get("name")
+        if isinstance(name, str) and any(ch in name for ch in "*?["):
+            where = f"input_selector[{index}].name" if len(entries) > 1 else "input_selector.name"
+            out.append(LintFinding(
+                WARNING, "glob-in-selector-name",
+                f"selector name {name!r} contains wildcards, but 'name' is matched as an "
+                f"EXACT basename — this preset will never match a file", label, where,
+                suggestion=f"name: {name.lstrip('*')}   # the exact basename, or use "
+                           f"path: for an anchored path with {{uuid}} / * segments"))
+    return out
+
+
+def _yaml_scalar(value: object) -> str:
+    """Render a YAML value back for a suggestion snippet (a mapping keeps its flow form)."""
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{k}: {v}" for k, v in value.items()) + "}"
+    return "" if value is None else str(value)
 
 
 # --- individual checks ------------------------------------------------------
@@ -370,3 +502,156 @@ def _check_multi_role(spec: PresetSpec, label: str) -> list[LintFinding]:
             f"preset declares multiple roles {list(spec.roles)} (multi-source AND); this needs "
             f"a python extract engine, which is not yet implemented", label, "input_selector")]
     return []
+
+
+# --- silent-degradation checks (the preset LOADS, then quietly does nothing) --------
+
+# The four columns whose vocabulary is NOT validated at load: they are free TEXT, so an
+# unrecognised value is written happily and then simply never normalised / never integrated.
+# That silence is what this check exists to break — it is the widest gap in the language,
+# because every other controlled field raises at load or at the DDL CHECK.
+_FREE_TEXT_VOCABULARIES: dict[str, frozenset[str]] = {
+    "entity_type": frozenset(e.value for e in V.EntityType),
+    "identifier_type": frozenset(e.value for e in V.IdentifierType),
+    "position_type": frozenset(e.value for e in V.SpatialRole),
+    "spatial_referential": frozenset(e.value for e in V.SpatialReferential),
+}
+
+
+def _all_field_specs(spec: PresetSpec) -> list[tuple[FieldSpec, str]]:
+    """Every mapped FieldSpec with a location label — ``common:`` plus each assertion's
+    ``position:`` and temporal overrides."""
+    out: list[tuple[FieldSpec, str]] = [(f, "common") for f in spec.common]
+    for index, tmpl in enumerate(spec.assertions):
+        out.extend((f, f"assertions[{index}].position") for f in tmpl.fields)
+        for time in tmpl.temporal:
+            out.extend((f, f"assertions[{index}].time") for f in time.overrides)
+    return out
+
+
+def _check_free_text_vocabularies(spec: PresetSpec, label: str) -> list[LintFinding]:
+    """A const on a free-text controlled column that is not a recognised member."""
+    out: list[LintFinding] = []
+    for field, where in _all_field_specs(spec):
+        allowed = _FREE_TEXT_VOCABULARIES.get(field.model_field)
+        if allowed is None or field.ref is None or field.ref.kind != "const":
+            continue
+        value = str(field.ref.arg)
+        if value in allowed:
+            continue
+        close = difflib.get_close_matches(value, sorted(allowed), n=1)
+        out.append(LintFinding(
+            WARNING, "free-text-vocab",
+            f"{field.model_field} = const({value}) is not a recognised value; this column is "
+            f"free text, so nothing rejects it — the value is simply never interpreted",
+            label, f"{where}.{field.model_field}",
+            suggestion=(f"{field.model_field}: const({close[0]})" if close
+                        else f"one of: {sorted(allowed)}")))
+    return out
+
+
+def _check_coordinates_have_a_referential(spec: PresetSpec, label: str) -> list[LintFinding]:
+    """Coordinates with no datum. The parts are datum-AGNOSTIC by design, so without an
+    explicit referential the spatial expression resolves to ``unknown`` and the coordinates
+    are never integrated — the row keeps its raw lat/lon and gains no place."""
+    out: list[LintFinding] = []
+    common = {f.model_field for f in spec.common}
+    for index, tmpl in enumerate(spec.assertions):
+        mapped = {f.model_field for f in tmpl.fields} | common
+        if not ({"latitude", "longitude"} & mapped) or "spatial_referential" in mapped:
+            continue
+        out.append(LintFinding(
+            WARNING, "coords-no-referential",
+            "coordinates are mapped but no spatial_referential is declared; the datum is "
+            "never inferred, so these coordinates are NOT integrated",
+            label, f"assertions[{index}].position",
+            suggestion="spatial_referential: const(epsg:4326)"))
+    return out
+
+
+def _check_context_needs_an_activity(spec: PresetSpec, label: str) -> list[LintFinding]:
+    """``context.<key>`` entries live on the activity, and ``activity_kind`` in ``common:`` is
+    what CREATES it. Without it no activity row is written and every context entry is dropped
+    on the floor — mapped, resolved, and then discarded."""
+    context_keys = sorted(f.model_field for f in spec.common
+                          if f.model_field.startswith("context."))
+    if not context_keys or any(f.model_field == "activity_kind" for f in spec.common):
+        return []
+    return [LintFinding(
+        WARNING, "context-without-activity",
+        f"{context_keys} are mapped but no activity_kind is; without it no activity row is "
+        f"created and the context entries are silently discarded", label, "common",
+        suggestion="activity_kind: const(observation)   # or call | message | trip | "
+                   "transaction | stay")]
+
+
+def _check_zone_and_duration_shape(spec: PresetSpec, label: str) -> list[LintFinding]:
+    """Two advisory nudges on the time block: a fixed offset where a zone name would resolve
+    DST properly, and a duration bound with no role on its derived end."""
+    out: list[LintFinding] = []
+    for index, tmpl in enumerate(spec.assertions):
+        for time in tmpl.temporal:
+            where = f"assertions[{index}].time"
+            zone = time.zone
+            if (zone is not None and zone.ref is not None and zone.ref.kind == "const"
+                    and isinstance(zone.ref.arg, str)):
+                token = parse_zone_token(zone.ref.arg)
+                if (token is not None and token.zone_name is None
+                        and token.base_offset_hours not in (None, 0.0)):
+                    out.append(LintFinding(
+                        ADVICE, "fixed-offset-zone",
+                        f"zone const({zone.ref.arg}) is a FIXED offset, applied season-blind; "
+                        f"a source that observes daylight saving is then an hour out for half "
+                        f"the year", label, f"{where}.zone",
+                        suggestion="zone: const(Europe/Zurich)   # name the IANA zone so each "
+                                   "bound resolves its own offset"))
+            if time.duration_unit is None:
+                continue
+            roles = {f.model_field for f in time.overrides}
+            if "temporal_role_upper" not in roles:
+                out.append(LintFinding(
+                    ADVICE, "duration-no-role",
+                    f"{DURATION_BOUND_NAME} states the end as an elapsed span but the bound "
+                    f"carries no role", label, where,
+                    suggestion="temporal_role_upper: const(end)"))
+            hint = _unit_hint_from_name(time.upper.arg if time.upper is not None else None)
+            if hint is not None and hint != time.duration_unit:
+                out.append(LintFinding(
+                    ADVICE, "duration-unit-mismatch",
+                    f"{DURATION_BOUND_NAME} declares unit: {time.duration_unit} but the source "
+                    f"field {time.upper.arg!r} reads as {hint}; a wrong unit mis-scales every "
+                    f"derived end bound", label, where,
+                    suggestion=f"unit: {hint}   # if the column really is {hint}"))
+    return out
+
+
+# Column-name endings that betray the unit a duration column is really in.
+_UNIT_HINTS: tuple[tuple[str, str], ...] = (
+    ("_ms", "ms"), ("millis", "ms"), ("_us", "us"), ("micros", "us"),
+    ("_min", "min"), ("minutes", "min"), ("_h", "h"), ("hours", "h"),
+)
+
+
+def _unit_hint_from_name(field_name: object) -> str | None:
+    """The unit a column NAME implies, or None when it implies nothing."""
+    if not isinstance(field_name, str):
+        return None
+    lowered = field_name.casefold()
+    for ending, unit in _UNIT_HINTS:
+        if lowered.endswith(ending):
+            return unit
+    return None
+
+
+def _check_record_uid_declared(spec: PresetSpec, label: str) -> list[LintFinding]:
+    """Neither a mapped uid nor the ``default`` token. Both give the same generated UID, so
+    this is purely about intent: a reviewer cannot tell a considered "this source has no
+    stable key" from a mapping the author forgot."""
+    if spec.source_record_uid is not None or spec.source_record_uid_default:
+        return []
+    return [LintFinding(
+        ADVICE, "implicit-record-uid",
+        "no source_record_uid: the engine generates one, but say so — omission and oversight "
+        "read identically in the file", label, "source_record_uid",
+        suggestion="source_record_uid: default   # or field(\"Item ID\") when the source has "
+                   "a real key")]

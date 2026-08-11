@@ -21,7 +21,7 @@ v3 layout (readable, examiner-first)::
       format: sqlite                       # REQUIRED, magic-verified: csv|excel|sqlite
       path: /private/.../Cache.sqlite      # XOR name; anchored, prefix-tolerant, {uuid}/*
       table: ZRTCLLOCATIONMO
-    source_record_uid: field(ArtifactID)   # optional; omit to auto-generate a deterministic per-record UID
+    source_record_uid: field(ArtifactID)   # optional; `default` (or omitted) auto-generates a per-record UID
     raw_source_path: preset(path)          # where the trace came from (mapped in `common:`)
     lookup_tables: {recovery: {Parsing: intact}}
     patterns: {coords: "(?P<lat>...) - (?P<lon>...)"}
@@ -52,8 +52,10 @@ from model_atlas.core.vocabularies import (
     RecordState,
     SourceTier,
     SpatialTemporalLink,
+    unit_factor,
 )
 from model_atlas.ingest.pathmatch import validate_selector_path
+from model_atlas.integrate.timeparse import parse_zone_token
 from model_atlas.presets.expr import (
     Cond,
     PipeCall,
@@ -80,6 +82,14 @@ from model_atlas.presets.expr import (
 # attribute the record mentions without positioning) — the key after the dot is free text,
 # so the assignable gate matches the PREFIX rather than a fixed name.
 CONTEXT_FIELD_PREFIX = "context."
+
+# The bareword a preset writes to STATE that it wants the engine-generated per-record UID —
+# ``source_record_uid: default``. It is not a reference call, so it is recognised before the
+# reference parser runs. WHY it exists when omitting the key does the same thing: omission and
+# intent read identically in the file, and an examiner reviewing a preset cannot tell a
+# considered "the source has no stable UID" from a forgotten mapping. The token says it out
+# loud, and the linter can then advise only on the presets that really did forget.
+DEFAULT_RECORD_UID_TOKEN = "default"
 
 ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
     # entity
@@ -111,7 +121,7 @@ ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
 })
 
 
-def _is_assignable(model_field: str) -> bool:
+def is_assignable(model_field: str) -> bool:
     """Whether a preset may map ``model_field``: a listed target, or a ``context.<key>``
     (whose free key names one entry of the activity context object)."""
     return model_field in ASSIGNABLE_FIELDS or model_field.startswith(CONTEXT_FIELD_PREFIX)
@@ -126,7 +136,7 @@ _ENUM_FIELDS: dict[str, frozenset[str]] = {
 }
 
 # The three `links:` keys map to these model columns.
-_LINK_FIELDS: dict[str, str] = {
+LINK_FIELDS: dict[str, str] = {
     "entity_position": "entity_position_link",
     "entity_time": "entity_time_link",
     "spatial_temporal": "spatial_temporal_link",
@@ -134,6 +144,23 @@ _LINK_FIELDS: dict[str, str] = {
 
 _TIME_STRUCTURAL_KEYS = frozenset({"instant", "interval", "epoch", "format", "zone"})
 _EPOCHS = frozenset({"unix_s", "unix_ms", "unix_us", "unix_ns", "cocoa", "webkit"})
+# The zone keyword meaning "device-local, resolve against the operator's configured zone" —
+# accepted by integrate.timeparse.parse_zone_token, so the load-time zone check must admit it.
+_LOCAL_ZONE_TOKEN = "local"
+# The interval key that states the upper bound as an elapsed span instead of an end clock.
+# It doubles as the CANONICAL_UNIT key naming its canonical unit (seconds), so the metric
+# rules — mandatory ``unit:``, unit_factor validation — apply to it unchanged.
+DURATION_BOUND_NAME = "duration_sec"
+
+# The CLOSED set of admitted top-level keys. WHY closed rather than "read what I know and
+# ignore the rest": an assignable field written at the top level instead of under ``common:``
+# (``input_record_id:``, ``context.antenna:``) parses as an unknown key and its whole mapping
+# is DROPPED — evidence silently lost, with no warning anywhere in the run. A misplaced key
+# must fail at load, where the author can still fix it.
+TOP_LEVEL_KEYS = frozenset({
+    "preset", "input_selector", "source_record_uid", "expected_fields",
+    "lookup_tables", "patterns", "common", "assertions",
+})
 
 
 # --- typed structures -------------------------------------------------------
@@ -266,6 +293,12 @@ class TimeSpec:
     # stays within the L1 no-conversion rule (same as a field's ``extract``).
     lower_extract: tuple[str, str] | None = None
     upper_extract: tuple[str, str] | None = None
+    # The SOURCE unit of a ``duration_sec:`` upper bound (s | ms | us | min | h | d), None for
+    # an ordinary ``upper:``. WHY the unit lives on the spec and not on the component: the L1
+    # component keeps the source's verbatim digits ("187"), so the only place that can say what
+    # those digits MEAN is the preset — L2 reads it from here to build the start_plus_duration
+    # method, exactly as it reads ``format`` to build the clock parser.
+    duration_unit: str | None = None
 
     # compat for presets.fields.field_refs (it reads lower_field/upper_field)
     @property
@@ -285,7 +318,7 @@ class Links:
 
     def as_field_specs(self) -> tuple[FieldSpec, ...]:
         out: list[FieldSpec] = []
-        for key, model_field in _LINK_FIELDS.items():
+        for key, model_field in LINK_FIELDS.items():
             value = getattr(self, key)
             if value is not None:
                 out.append(FieldSpec(model_field=model_field, ref=Ref(kind="const", arg=value)))
@@ -304,6 +337,11 @@ class PresetSpec:
     input_selectors: tuple[InputSelector, ...]
     path: Path
     source_record_uid: FieldSpec | None = None
+    # Whether the preset wrote ``source_record_uid: default`` — i.e. DECLARED the engine
+    # default rather than leaving the key out. Both produce ``source_record_uid=None`` (the
+    # engine generates the UID either way); the flag exists only so the linter can tell a
+    # stated choice from an omission and advise on the omission alone.
+    source_record_uid_default: bool = False
     common: tuple[FieldSpec, ...] = ()
     assertions: tuple[AssertionTemplate, ...] = ()
     lookup_tables: dict[str, dict[Any, Any]] = field(default_factory=dict)
@@ -369,7 +407,7 @@ def _parse_extract(raw: Any, patterns: dict[str, str], path: Path) -> tuple[str,
 def _parse_field(
     model_field: str, raw: Any, path: Path, patterns: dict[str, str], *, assignable: bool = True
 ) -> FieldSpec:
-    if assignable and not _is_assignable(model_field):
+    if assignable and not is_assignable(model_field):
         raise ValueError(f"{path}: {model_field!r} is not an assignable model field")
     if isinstance(raw, dict):
         if "from" not in raw:
@@ -440,13 +478,43 @@ def _parse_links(raw: Any, path: Path) -> Links:
         return Links()
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: links must be a mapping")
-    unknown = set(raw) - set(_LINK_FIELDS)
+    unknown = set(raw) - set(LINK_FIELDS)
     if unknown:
-        raise ValueError(f"{path}: unknown links key(s) {sorted(unknown)}; expected {sorted(_LINK_FIELDS)}")
-    for key, model_field in _LINK_FIELDS.items():
+        raise ValueError(f"{path}: unknown links key(s) {sorted(unknown)}; expected {sorted(LINK_FIELDS)}")
+    for key, model_field in LINK_FIELDS.items():
         if key in raw:
             _validate_enum(model_field, raw[key], path)
-    return Links(**{key: raw.get(key) for key in _LINK_FIELDS})
+    return Links(**{key: raw.get(key) for key in LINK_FIELDS})
+
+
+def _validate_zone_const(zone: FieldSpec | None, path: Path) -> None:
+    """Reject a ``zone: const(...)`` that is neither an offset nor a zone the tzdb knows.
+
+    WHY at LOAD and not at conversion: an unrecognised zone token does not fail loudly later —
+    it degrades to "no usable zone", so the run silently assumes UTC and every bound of the
+    source is stamped with the loud-but-easily-missed offset-unknown sentinel. A typo
+    (``Europe/Zurish``) must stop the preset here, where the author can still fix it. Only a
+    ``const`` is checked: a ``header(...)`` zone is read from the file at run time, so its
+    value is not knowable now.
+    """
+    if zone is None or zone.ref is None or zone.ref.kind != "const":
+        return
+    value = zone.ref.arg
+    if value is None or not isinstance(value, str):
+        return                      # a numeric offset (const(1)) or const(null) — nothing to check
+    token = parse_zone_token(value)
+    if token is None:
+        return                      # empty string: the same "unstated" as omitting zone
+    usable = (token.base_offset_hours is not None
+              or token.zone_name is not None
+              or value.strip().casefold() == _LOCAL_ZONE_TOKEN)
+    if not usable:
+        raise ValueError(
+            f"{path}: time zone {value!r} is neither a UTC offset (e.g. const(+01:00), "
+            f"const(UTC)), nor {_LOCAL_ZONE_TOKEN!r}, nor an IANA zone name the tz database "
+            f"knows (e.g. const(Europe/Zurich)); an unrecognised zone does not fail at "
+            f"conversion — it silently falls back to assuming UTC"
+        )
 
 
 def _parse_time(raw: Any, path: Path, patterns: dict[str, str]) -> TimeSpec:
@@ -461,17 +529,44 @@ def _parse_time(raw: Any, path: Path, patterns: dict[str, str]) -> TimeSpec:
     epoch = raw.get("epoch")
     if epoch is not None and epoch not in _EPOCHS:
         raise ValueError(f"{path}: unknown epoch {epoch!r}; expected one of {sorted(_EPOCHS)}")
+    duration_unit: str | None = None
     if has_instant:
         ref, extract = _parse_time_bound(raw["instant"], path, patterns)
         lower = upper = ref
         lower_extract = upper_extract = extract
     else:
         interval = raw["interval"]
-        if not isinstance(interval, dict) or "lower" not in interval or "upper" not in interval:
-            raise ValueError(f"{path}: interval needs 'lower' and 'upper'")
+        if not isinstance(interval, dict) or "lower" not in interval:
+            raise ValueError(f"{path}: interval needs 'lower'")
+        # The upper bound is stated EITHER as an end clock (``upper:``) OR as an elapsed span
+        # from the lower (``duration_sec:`` — the CDR shape: operators disclose start+duration,
+        # never start+end). Both land in the same ``upper`` slot; only ``duration_unit`` marks
+        # which was written, because that is what L2 needs to know to add rather than parse.
+        has_upper = "upper" in interval
+        has_duration = DURATION_BOUND_NAME in interval
+        if has_upper == has_duration:
+            raise ValueError(
+                f"{path}: interval needs exactly one of 'upper' or {DURATION_BOUND_NAME!r} "
+                f"(an end clock, or an elapsed span from 'lower')")
         lower, lower_extract = _parse_time_bound(interval["lower"], path, patterns)
-        upper, upper_extract = _parse_time_bound(interval["upper"], path, patterns)
+        if has_upper:
+            upper, upper_extract = _parse_time_bound(interval["upper"], path, patterns)
+        else:
+            # Parsed as a FIELD, not a bare bound, so it inherits the metric machinery: the
+            # CANONICAL_UNIT gate rejects a missing ``unit:`` and ``unit_factor`` rejects an
+            # unknown one — at load, rather than per record at conversion.
+            duration = _parse_field(
+                DURATION_BOUND_NAME, interval[DURATION_BOUND_NAME], path, patterns,
+                assignable=False)
+            if duration.ref is None:
+                raise ValueError(
+                    f"{path}: {DURATION_BOUND_NAME} must be a single reference; a conditional "
+                    f"time bound is not supported")
+            unit_factor(str(duration.unit), DURATION_BOUND_NAME)   # raises on an unknown unit
+            upper, upper_extract = duration.ref, duration.extract
+            duration_unit = str(duration.unit)
     zone = _parse_field("utc_offset_hours", raw["zone"], path, patterns) if "zone" in raw else None
+    _validate_zone_const(zone, path)
     overrides = tuple(
         _parse_field(key, value, path, patterns)
         for key, value in raw.items()
@@ -482,6 +577,7 @@ def _parse_time(raw: Any, path: Path, patterns: dict[str, str]) -> TimeSpec:
         lower=lower, upper=upper, epoch=epoch, format=raw.get("format"),
         zone=zone, overrides=overrides,
         lower_extract=lower_extract, upper_extract=upper_extract,
+        duration_unit=duration_unit,
     )
 
 
@@ -575,6 +671,15 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
         raise ValueError(f"{path}: preset must be a YAML mapping")
     raw = raw_obj
 
+    unknown = sorted(str(key) for key in raw if key not in TOP_LEVEL_KEYS)
+    if unknown:
+        raise ValueError(
+            f"{path}: unknown top-level key(s) {unknown}; admitted keys are "
+            f"{sorted(TOP_LEVEL_KEYS)}. A model field belongs under 'common:' (or an "
+            f"assertion's 'position:'), never at the top level — at the top level its "
+            f"mapping is not read at all"
+        )
+
     meta = _parse_meta(raw.get("preset"), path)
     input_selectors = _parse_input_selectors(raw.get("input_selector"), path)
 
@@ -597,9 +702,15 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
         raise ValueError(f"{path}: 'expected_fields' must be a list of field-name strings")
 
     source_record_uid_raw = raw.get("source_record_uid")
+    # ``default`` is a bareword, not a reference call, so it is matched BEFORE the reference
+    # parser — which would otherwise reject it as "not an explicit call".
+    source_record_uid_default = (
+        isinstance(source_record_uid_raw, str)
+        and source_record_uid_raw.strip().casefold() == DEFAULT_RECORD_UID_TOKEN
+    )
     source_record_uid = (
         _parse_field("source_record_uid", source_record_uid_raw, path, patterns, assignable=False)
-        if source_record_uid_raw is not None else None
+        if source_record_uid_raw is not None and not source_record_uid_default else None
     )
 
     common_raw = raw.get("common") or {}
@@ -614,7 +725,9 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
 
     return PresetSpec(
         meta=meta, input_selectors=input_selectors, path=path,
-        source_record_uid=source_record_uid, common=common, assertions=assertions,
+        source_record_uid=source_record_uid,
+        source_record_uid_default=source_record_uid_default,
+        common=common, assertions=assertions,
         lookup_tables={str(k): dict(v) for k, v in lookup_tables.items()},
         patterns=patterns,
         expected_fields=tuple(expected),

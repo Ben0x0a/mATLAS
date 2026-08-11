@@ -86,6 +86,17 @@ def _temporal_part(part: str, column: str) -> str:
             f"AND tc.part = '{part}' ORDER BY tc.ordinal LIMIT 1)")
 
 
+def _temporal_part_either(first: str, second: str, column: str) -> str:
+    """``_temporal_part`` over two alternative part names, preferring ``first``.
+
+    For a slot a source may spell two ways (an upper bound as an end clock OR as a duration):
+    the parts are mutually exclusive per expression, so COALESCE picks whichever was written
+    without either spelling shadowing the other.
+    """
+    return (f"COALESCE({_temporal_part(first, column)}, "
+            f"{_temporal_part(second, column)})")
+
+
 def _spatial_part(part: str, column: str) -> str:
     """Correlated subquery picking one spatial component's ``column`` for ``part``."""
     return (f"(SELECT sc.{column} FROM spatial_component sc "
@@ -115,8 +126,13 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("time_lower_raw", _temporal_part("lower", "raw_value")),
     ("time_lower_source_field", _temporal_part("lower", "source_field")),
     ("time_lower_unix_utc_us", "ti.lower_unix_utc_us"),
-    ("time_upper_raw", _temporal_part("upper", "raw_value")),
-    ("time_upper_source_field", _temporal_part("upper", "source_field")),
+    # The upper bound is written EITHER as an end clock (part ``upper``) or as an elapsed span
+    # (part ``duration`` — the CDR start+duration shape); exactly one exists per expression and
+    # both fill the same upper slot, so the projection coalesces them. Without this the
+    # source's own verbatim span never reaches the export and only the DERIVED end is visible —
+    # the L1 evidence silently missing from the row that rests on it.
+    ("time_upper_raw", _temporal_part_either("upper", "duration", "raw_value")),
+    ("time_upper_source_field", _temporal_part_either("upper", "duration", "source_field")),
     ("time_upper_unix_utc_us", "ti.upper_unix_utc_us"),
     ("utc_offset_hours_lower", "ti.utc_offset_hours_lower"),
     ("utc_offset_hours_upper", "ti.utc_offset_hours_upper"),
@@ -151,7 +167,10 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("raw_source_path", _RAW_SOURCE_PATH),
     ("input_file_path", "s.input_file_path"),
     ("input_record_id", "a.input_record_id"),
-    ("source_record_uid", "r.raw_record_id"),
+    # The preset-mapped source uid WINS over the engine-generated one: when the source has a
+    # genuine key (a tool's Item ID) the examiner must see THAT, not a derived uuid. NULL when
+    # unmapped (or `source_record_uid: default`), so the generated id remains the fallback.
+    ("source_record_uid", "COALESCE(a.source_record_uid, r.raw_record_id)"),
     ("row_uid", "a.assertion_id"),
     ("preset_id", "p.key"),                             # the preset KEY (migration row 61)
     ("preset_name", "p.name"),

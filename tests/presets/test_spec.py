@@ -216,6 +216,11 @@ _INVALID: dict[str, str] = {
     # field-mapping dict validation (_parse_field): the dict form must carry a 'from' reference.
     "field mapping without from": _MIN.replace(
         "latitude: field(Lat)", "latitude: {type: float}"),
+    # The top-level key set is CLOSED: an assignable field written there instead of under
+    # `common:` would have its whole mapping silently dropped, so it must fail at load.
+    "assignable field at top level": _MIN + "input_record_id: field(Row)\n",
+    "context key at top level": _MIN + "context.antenna: field(Cell)\n",
+    "unknown top-level key": _MIN + "typo_key: 1\n",
 }
 
 
@@ -299,6 +304,78 @@ def test_metric_field_requires_explicit_unit() -> None:
         "position: {latitude: field(Lat), altitude_m: {from: field(Alt), unit: m}}")
     altitude = {f.model_field: f for f in _parse(with_unit).assertions[0].fields}["altitude_m"]
     assert altitude.unit == "m" and altitude.ref.arg == "Alt"
+
+
+def test_source_record_uid_default_token() -> None:
+    """``source_record_uid: default`` STATES the engine-generated UID: it parses (a bareword
+    is not a reference call, so it must be matched before the ref parser), leaves
+    ``source_record_uid`` None exactly like omitting the key, and records the declaration so
+    the linter can tell a stated choice from a forgotten mapping."""
+    declared = _parse(_MIN + "source_record_uid: default\n")
+    assert declared.source_record_uid is None
+    assert declared.source_record_uid_default is True
+    # Omission is the same UID, a different intent.
+    assert _parse(_MIN).source_record_uid_default is False
+    # Case/whitespace tolerant, but nothing else is a bareword: a real mapping still parses
+    # as a reference and a non-call bareword is still rejected.
+    assert _parse(_MIN + "source_record_uid: '  Default '\n").source_record_uid_default is True
+    assert _parse(_MIN + "source_record_uid: field(Item)\n").source_record_uid.ref.arg == "Item"
+    with pytest.raises(ValueError):
+        _parse(_MIN + "source_record_uid: defaults\n")
+
+
+_INTERVAL = _MIN.replace(
+    'time: {instant: field(TS), format: "%Y"}',
+    'time: {interval: {lower: field(TS), duration_sec: {from: field(Dur), unit: s}}, '
+    'format: "%Y"}')
+
+
+def test_duration_bound_parses_as_the_upper_with_its_source_unit() -> None:
+    """``duration_sec:`` states the upper bound as an elapsed span. It lands in the same
+    ``upper`` slot as an end clock — so every existing consumer (field inventory, matching,
+    assembly) sees it for free — and only ``duration_unit`` records that it was a span."""
+    time = _parse(_INTERVAL).assertions[0].temporal[0]
+    assert time.kind == "interval"
+    assert time.lower.arg == "TS" and time.upper.arg == "Dur"
+    assert time.duration_unit == "s"
+    # An ordinary end clock leaves the marker unset — the two shapes stay distinguishable.
+    plain = _parse(_INTERVAL.replace("duration_sec: {from: field(Dur), unit: s}",
+                                     "upper: field(End)")).assertions[0].temporal[0]
+    assert plain.upper.arg == "End" and plain.duration_unit is None
+
+
+@pytest.mark.parametrize("unit", ["s", "ms", "us", "min", "h", "d"])
+def test_duration_units_supported(unit: str) -> None:
+    spec = _parse(_INTERVAL.replace("unit: s}", f"unit: {unit}}}"))
+    assert spec.assertions[0].temporal[0].duration_unit == unit
+
+
+def test_duration_bound_rejects_a_missing_or_unknown_unit() -> None:
+    """``duration_sec`` is a metric key (canonical: seconds), so it inherits the metric rule:
+    the source unit must be declared, and must be one the conversion table knows. Both are
+    caught at load — a wrong span would otherwise mis-scale every derived end bound."""
+    with pytest.raises(ValueError):
+        _parse(_INTERVAL.replace("{from: field(Dur), unit: s}", "field(Dur)"))
+    with pytest.raises(ValueError):
+        _parse(_INTERVAL.replace("unit: s}", "unit: fortnights}"))
+
+
+def test_interval_needs_exactly_one_upper_spelling() -> None:
+    with pytest.raises(ValueError):   # both
+        _parse(_INTERVAL.replace("lower: field(TS),", "lower: field(TS), upper: field(End),"))
+    with pytest.raises(ValueError):   # neither
+        _parse(_INTERVAL.replace(", duration_sec: {from: field(Dur), unit: s}", ""))
+
+
+def test_zone_const_must_be_an_offset_or_a_known_zone() -> None:
+    """A named IANA zone is admitted; a typo is rejected at LOAD, because an unrecognised zone
+    does not fail at conversion — it silently falls back to assuming UTC."""
+    named = _MIN.replace('format: "%Y"', 'format: "%Y", zone: const(Europe/Zurich)')
+    assert _parse(named).assertions[0].temporal[0].zone.ref.arg == "Europe/Zurich"
+    for good in ("const(UTC)", "const(+01:00)", "const(local)", 'header("TZ *")'):
+        _parse(_MIN.replace('format: "%Y"', f'format: "%Y", zone: {good}'))
+    with pytest.raises(ValueError):
+        _parse(_MIN.replace('format: "%Y"', 'format: "%Y", zone: const(Europe/Zurish)'))
 
 
 def test_unknown_field_still_rejected() -> None:

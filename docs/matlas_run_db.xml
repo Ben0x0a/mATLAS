@@ -120,6 +120,8 @@
   <row name="deleted" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>the SOURCE's own deletion claim (L1) - distinct from raw_record.recovery_state (R11)</comment></row>
   <row name="multiplicity" null="1" autoincrement="0"><datatype>INTEGER</datatype><comment>NULL = 1; aggregate records like '137 calls in March' (R15)</comment></row>
   <row name="source_label" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>the one per-claim provenance field (decision 24)</comment></row>
+  <row name="input_record_id" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>preset-mapped human locator back to the source record; LOCATES one record</comment></row>
+  <row name="source_record_uid" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>preset-mapped source key (a tool Item ID); GROUPS the rows one record fanned out into. Preset-resolved, so it lives here and not on the preset-free raw_record; NULL = the engine-generated raw_record_id is used. Feeds no digest</comment></row>
   <row name="content_hash" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>digest scoped to the preset's reading of this file; repeats legally, never a key</comment></row>
   <row name="claim_digest" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>file-independent L1-only digest (R5): overlapping disclosures converge here as a finding</comment></row>
   <key type="PRIMARY" name=""><part>id</part></key>

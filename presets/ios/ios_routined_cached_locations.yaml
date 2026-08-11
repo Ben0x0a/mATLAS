@@ -2,8 +2,8 @@ preset:
   id: ios.routined.cached_locations
   name: Routined Cached Locations (CLLocation)
   os: iOS
-  tool:                       # empty: primary source (the device's own database)
-  os_version: ">=13"
+  tool: RAW
+  os_version:
   version: 1.0
   tier: primary
 

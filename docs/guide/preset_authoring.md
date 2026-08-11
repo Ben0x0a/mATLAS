@@ -319,6 +319,57 @@ assertions:
 
 Adapted from `presets/ios/ios_routined_significant_visits.yaml`.
 
+## 5b. Worked example — start + duration (a CDR)
+
+A telecom operator discloses when a call started and how long it lasted — never when it
+ended. State the span with `duration_sec:` instead of `upper:` and the engine derives the end.
+
+```yaml
+source_record_uid: default          # the export has no stable key: say so, don't just omit
+
+common:
+  entity:          field(CDRInfo)
+  entity_type:     const(device)
+  raw_source_path: field(SourceFile)
+  activity_kind:   const(observation)   # REQUIRED for the context entry below to exist
+  context.antenna: format("{field(GlobalCellID)}")
+
+assertions:
+  - position:
+      latitude:            field(Latitude)
+      longitude:           field(Longitude)
+      spatial_referential: const(epsg:4326)
+      beam_azimuth_deg:    { from: field(Beam), unit: deg }
+      # A zero-length event happened at an instant; anything else spans the call. This has to
+      # be the full column name — the `links:` block below takes bare enum tokens only.
+      spatial_temporal_link: if field(Duration) == 0 then const(instant)
+                             else const(once_during_interval)
+    time:
+      interval:
+        lower:        field(TimeStamp)
+        duration_sec: { from: field(Duration), unit: s }
+      format:              "%Y-%m-%d %H:%M:%S"
+      zone:                const(Europe/Zurich)   # the source's OWN zone, DST-resolved
+      temporal_role_lower: const(start)
+      temporal_role_upper: const(end)
+    links:
+      entity_position: within_range_of
+      entity_time:     recorded_at
+```
+
+Three things worth copying:
+
+- **`duration_sec` keeps L1 verbatim.** The component stores the operator's own `"187"` under
+  the part `duration`; the end bound is derived at L2 and stamped
+  `…+start_plus_duration/1.0`. The `unit:` says what the digits mean, it never rewrites them.
+- **Name the zone, don't state an offset.** `const(+01:00)` would be applied season-blind and
+  put every summer call an hour out; `const(Europe/Zurich)` resolves each bound's own offset.
+- **`activity_kind` is what creates the activity.** Without it in `common:`, the
+  `context.<key>` entries are resolved and then discarded — a silent loss the linter now warns
+  about.
+
+From `presets/CDR/cdr_fulldata_csv.yaml`.
+
 ## 6. Timestamps
 
 A `time:` block decodes to Unix microseconds. Pick exactly one decoding:
@@ -456,6 +507,23 @@ A `time:` block with no `zone` assumes **UTC** and marks the assumption with a t
 ` N/A` on the materialised local datetime (`UTC_OFFSET_UNKNOWN`). The instant is still
 recorded; the flag tells the examiner the offset was assumed, not stated.
 
+### A named zone beats a fixed offset, and beats the configured one
+
+`zone: const(Europe/Zurich)` resolves each bound's own offset through the tz database, so an
+interval spanning a DST change gets two different applied offsets. `zone: const(+01:00)` is
+season-blind by design — the source declared that number, so it is applied verbatim all year.
+A named zone also **outranks** the operator's configured `[timezone].local_zone`: the preset
+states what this source's clocks mean, the config only says what to assume otherwise.
+
+A zone name the tz database does not know is rejected at **load**, because at conversion time
+it would not fail — it would quietly fall back to assuming UTC.
+
+### `name:` is an exact basename, never a glob
+
+`input_selector.name` matches by exact basename equality. A wildcard (`name: "*AllData.csv"`)
+matches nothing, so the preset loads cleanly and then never fires. Use the exact name, or
+`path:` for an anchored path with `{uuid}` / `*` segments. The linter flags this.
+
 ### The `N/A` sentinel vs an empty cell
 
 A conditional with no matching branch and no `else`, or a template whose every placeholder
@@ -510,7 +578,29 @@ python utils/lint_presets.py presets/ios/ios_routined_cached_locations.yaml --ad
 
 It reports ERRORs (won't load), WARNINGs (e.g. a half-coordinate, a missing link, a rowid
 mapped as `source_record_uid`) and ADVICE (naming, tier/tool coherence, a naive timezone,
-raw epoch arithmetic). The same checks are available as a library:
+raw epoch arithmetic).
+
+Findings carry a **suggestion** — the YAML to write instead, printed as a `→ fix:` line:
+
+```
+WARNING glob-in-selector-name: selector name '*AllData.csv' contains wildcards, but 'name'
+        is matched as an EXACT basename — this preset will never match a file
+        → fix: name: AllData.csv
+```
+
+Two groups are worth knowing about:
+
+- **Checks that run before parsing.** A preset that does not load still gets diagnosed, since
+  the parser stops at the first problem: a model field written at the top level instead of
+  under `common:`, an unknown top-level key, a conditional under `links:`, a glob in `name:`.
+- **Checks for silent degradation** — the preset loads and then quietly does less than it
+  looks like it does: a `const` on a free-text controlled column (`entity_type`,
+  `identifier_type`, `position_type`, `spatial_referential`) that no vocabulary recognises,
+  coordinates with no `spatial_referential`, `context.<key>` with no `activity_kind`, a fixed
+  offset where a zone name belongs, a `duration_sec` whose declared unit contradicts its
+  column name.
+
+The same checks are available as a library:
 
 ```python
 from model_atlas.presets import lint_file, lint_paths   # -> list[LintFinding]

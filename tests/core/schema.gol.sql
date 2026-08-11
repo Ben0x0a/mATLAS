@@ -170,6 +170,7 @@ CREATE TABLE assertion (
     multiplicity INTEGER,
     source_label TEXT,
     input_record_id TEXT,
+    source_record_uid TEXT,
     UNIQUE (raw_record_id, preset_id, output_ordinal)
 );
 

@@ -1,6 +1,9 @@
 """The L0 writer: walk an input and persist the acquisition layer into a RunStore.
 
-Defines:    ``IngestReport`` (the counts a run produces), ``SelfIngestionError`` (raised
+Defines:    ``IngestReport`` (the counts a run produces), ``Target`` / ``TargetFn`` (what the
+            injected preset-scoped filter says about one walked file: worth opening, which
+            sub-units, and the READER OPTIONS its selectors declared — the file's dialect,
+            which L0 needs before any preset has been matched), ``SelfIngestionError`` (raised
             when a persisted mATLAS run DB is fed back as evidence), ``is_matlas_run_db``
             (the self-ingestion stamp probe) and ``ingest_input`` — the single L0 entry point that writes
             ``case_metadata`` + ``run`` + ``preset``/``run_preset`` + ``archive``/
@@ -43,7 +46,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from model_atlas.core import ids
 from model_atlas.core.determinism import (
@@ -86,9 +89,18 @@ class Target:
 
     ``subunits=None`` means EVERY sub-unit (the caller cannot name them up front — a
     ``sql:`` selector, or a format with no sub-unit concept); a frozenset names exactly
-    the tables/sheets/models to read."""
+    the tables/sheets/models to read.
+
+    ``read_params`` are the READER options the targeting selectors declared (a CSV's
+    ``delimiter`` / ``encoding`` / ``header_row`` / ``skip_rows``). WHY they ride on the
+    target rather than being looked up at read time: L0 runs before preset MATCHING, so the
+    writer has no preset — but the target filter has already resolved which selectors could
+    read this file, and those selectors are the only place the file's dialect is stated. An
+    empty dict means "reader defaults", which is also what a disagreement between candidate
+    selectors falls back to."""
 
     subunits: frozenset[str] | None = None
+    read_params: dict[str, Any] = field(default_factory=dict)  # mutable default — shared if = {}
 
 
 # The preset-scoped L0 target filter, INJECTED by the app layer: ``(file, format) ->
@@ -383,7 +395,7 @@ def _ingest_file(
         for subunit in subunits:
             _ingest_subunit(
                 store, run_id, reader, path, subunit, file, input_file_path, inner_path,
-                fingerprint, sibling_json, exhibit_ref, report,
+                fingerprint, sibling_json, exhibit_ref, report, wanted.read_params,
             )
 
 
@@ -423,7 +435,7 @@ def _ingest_subunit(
     store: RunStore, run_id: str, reader: Reader, path: Path, subunit: str | None,
     file: SourceFile, input_file_path: str, inner_path: str | None,
     fingerprint: str, sibling_json: str | None, exhibit_ref: str | None,
-    report: IngestReport,
+    report: IngestReport, read_params: dict[str, Any] | None = None,
 ) -> None:
     """Write one ``source`` row (paths-only id) plus its verbatim ``raw_record`` rows."""
     # source id from PATHS ONLY (§2c): the fingerprint is a plain indexed column,
@@ -446,7 +458,10 @@ def _ingest_subunit(
         return
 
     try:
-        records = list(reader.iter_records(path, subunit))
+        # The selectors' declared dialect (a CSV's delimiter/encoding/header_row/skip_rows).
+        # Without it a ';'-delimited or BOM-less-latin1 export is read as ONE column whose
+        # name is the whole header line, and every mapped field then resolves to nothing.
+        records = list(reader.iter_records(path, subunit, read_params or {}))
     except Exception as exc:  # noqa: BLE001 — malformed evidence must not abort the run
         report.read_failures += 1
         message = f"could not read {file.logical_path} (subunit {subunit!r}): {exc}"

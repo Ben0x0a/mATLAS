@@ -133,6 +133,11 @@ TEMPORAL_ROLE_LOWER_NAME = "temporal_role_lower"
 TEMPORAL_ROLE_UPPER_NAME = "temporal_role_upper"
 TEMPORAL_PART_LOWER_NAME = "temporal_part_lower"
 TEMPORAL_PART_UPPER_NAME = "temporal_part_upper"
+# The part name an elapsed-span upper bound (``duration_sec:``) is written under. MUST match
+# ``integrate.temporal._DURATION_PART_NAME``, the read side — the same string agreement the
+# ``_date`` / ``_time`` split parts rely on — and ``V.STANDARD_TEMPORAL_PARTS``, which gates
+# export projection.
+_DURATION_PART_NAME = "duration"
 # Source-stated per-bound timing uncertainty (µs). Written as an OPTIONAL verbatim
 # component ``lower_accuracy`` / ``upper_accuracy`` (the side + suffix below) — the suffix
 # MUST match ``integrate.temporal._ACCURACY_SUFFIX_NAME``, the read side (string agreement,
@@ -395,6 +400,10 @@ def assemble_source(
     # Which template fields feed the two resolution modes (classified once, not per row).
     common_scalar, common_verbatim = _split_specs(preset.common)
 
+    # Mapped source UIDs seen in THIS source: uid -> the line that first claimed it. Only
+    # populated when the preset maps one (the generated UID cannot collide by construction).
+    seen_record_uids: dict[str, int] = {}
+
     for record in records:
         row = record.fields
         raw_record_id = ids.raw_record_id(source_id, record.line_no)
@@ -409,6 +418,27 @@ def assemble_source(
                 concerns=_resolve_param(
                     concerns_expr, concerns, row, resolve, file_values, base_env, preset_values),
             )
+
+        # The source record's own uid, resolved VERBATIM (a source key is L1 evidence: no
+        # pipe, no unit, no cast) once per record and shared by every assertion below.
+        source_record_uid: str | None = None
+        if preset.source_record_uid is not None:
+            uid_value, _ = _resolve_verbatim(
+                preset.source_record_uid, row, resolve, file_values, row_env, ctx, preset_values)
+            source_record_uid = _text(uid_value)
+            if source_record_uid is not None:
+                # Invariant: a MAPPED uid must identify exactly one source record. Two records
+                # claiming one uid would silently merge distinct evidence downstream (the uid
+                # is what groups a record's output rows), so it raises rather than warns.
+                clash = seen_record_uids.get(source_record_uid)
+                if clash is not None:
+                    raise ValueError(
+                        f"preset {preset.meta.id!r} maps source_record_uid "
+                        f"{source_record_uid!r} on both line {clash} and line "
+                        f"{record.line_no} of {source_file_name or source_id}: a mapped uid "
+                        f"must be unique per source record — map a genuinely unique column, "
+                        f"or write 'source_record_uid: default' to generate one")
+                seen_record_uids[source_record_uid] = record.line_no
 
         shared: dict[str, Any] = {}
         # Spatial parts mapped under ``common:`` become COMPONENTS shared by every assertion
@@ -523,6 +553,7 @@ def assemble_source(
                     fingerprint_sha256=fingerprint_sha256, line_no=record.line_no,
                     activity_id=activity_id, activity_projection=activity_projection,
                     entity_origin=entity_origin, operator_concerns=operator_concerns,
+                    source_record_uid=source_record_uid,
                 )
                 output_ordinal += 1
 
@@ -608,6 +639,7 @@ def _emit_assertion(
     activity_projection: ids.ActivityProjection | None,
     entity_origin: V.Origin,
     operator_concerns: bool,
+    source_record_uid: str | None,
 ) -> None:
     """Write one assertion and its owned corners, then the assertion row itself
     (parent-before-child order).
@@ -699,7 +731,12 @@ def _emit_assertion(
         upper_value = _apply_extract(upper_value, time_spec.upper_extract, ctx)
         if not _is_missing(upper_value):
             have_upper = True
-            part = _text(flat.get(TEMPORAL_PART_UPPER_NAME)) or "upper"
+            # A ``duration_sec:`` bound defaults to the part ``duration`` rather than ``upper``
+            # — the value is an elapsed span, not an end clock, and the part name is what tells
+            # L2 (and the exporter, and a reader of the row) which of the two it is holding.
+            # An explicit ``temporal_part_upper`` still wins: the preset gets the last word.
+            default_part = _DURATION_PART_NAME if time_spec.duration_unit else "upper"
+            part = _text(flat.get(TEMPORAL_PART_UPPER_NAME)) or default_part
             bounds.append((part, _text(flat.get(TEMPORAL_ROLE_UPPER_NAME)), upper_col, _text(upper_value)))
 
     temporal_expression_id: str | None = None
@@ -795,5 +832,8 @@ def _emit_assertion(
         multiplicity=multiplicity,
         source_label=_text(flat.get(_SOURCE_LABEL_NAME)),
         input_record_id=_text(flat.get(_INPUT_RECORD_ID_NAME)),
+        # Resolved ONCE per source record (not per template) and repeated on every assertion
+        # the record fans out into — that repetition IS its job: it groups those rows.
+        source_record_uid=source_record_uid,
     ))
     report.assertion_count += 1

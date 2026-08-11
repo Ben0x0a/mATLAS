@@ -21,7 +21,7 @@ expected_fields: [Lat, Lon, TS, Loc, "Item ID", Source]
 source_record_uid: 'field("Item ID")'
 common: {entity: const(device), input_record_id: field(Loc), raw_source_path: field(Source)}
 assertions:
-  - position: {latitude: field(Lat), longitude: field(Lon)}
+  - position: {latitude: field(Lat), longitude: field(Lon), spatial_referential: const(epsg:4326)}
     time: {instant: field(TS), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
 """
@@ -156,3 +156,136 @@ def test_multi_role_preset_is_flagged() -> None:
         "  - {role: account, format: csv, name: b.csv}\n",
     )
     assert "multi-role-unsupported" in _codes(lint_spec(_spec(text)), WARNING)
+
+
+# --- the raw-document pass: diagnosing a preset that does NOT load -------------------
+
+def _raw_codes(text: str, tmp_path: Path, severity=None) -> set[str]:
+    file = tmp_path / "p.yaml"
+    file.write_text(text, encoding="utf-8")
+    return _codes(lint_file(file), severity)
+
+
+def _finding(text: str, tmp_path: Path, code: str):
+    file = tmp_path / "p.yaml"
+    file.write_text(text, encoding="utf-8")
+    matches = [f for f in lint_file(file) if f.code == code]
+    assert matches, f"no {code} finding among {[f.code for f in lint_file(file)]}"
+    return matches[0]
+
+
+def test_misplaced_model_field_names_the_common_block(tmp_path: Path) -> None:
+    """The failure that motivated the pass: an assignable field written at the top level
+    parses as an unknown key, and the parser's error is the only thing reported."""
+    finding = _finding(_CLEAN + "input_record_id: field(Row)\n", tmp_path, "misplaced-top-level")
+    assert finding.severity == ERROR
+    assert "common:" in finding.suggestion and "input_record_id: field(Row)" in finding.suggestion
+    # A context.<key> is assignable too, and lands in the same place.
+    ctx = _finding(_CLEAN + "context.antenna: field(Cell)\n", tmp_path, "misplaced-top-level")
+    assert "context.antenna" in ctx.suggestion
+
+
+def test_unknown_top_level_key_suggests_the_closest_admitted_one(tmp_path: Path) -> None:
+    finding = _finding(_CLEAN + "expected_field: [A]\n", tmp_path, "unknown-top-level")
+    assert "expected_fields" in finding.suggestion
+
+
+def test_conditional_under_links_is_reported_with_the_rewrite(tmp_path: Path) -> None:
+    """``links:`` takes bare enum tokens; a conditional there is a load error whose message
+    does not say where the value belongs instead."""
+    text = _CLEAN.replace(
+        "spatial_temporal: instant}",
+        "spatial_temporal: if field(Dur) == 0 then const(instant) else const(once_during_interval)}")
+    finding = _finding(text, tmp_path, "conditional-in-links")
+    assert "spatial_temporal_link:" in finding.suggestion
+    assert "position:" in finding.suggestion
+
+
+def test_glob_in_selector_name_is_flagged(tmp_path: Path) -> None:
+    """``name:`` is EXACT basename equality — a wildcard silently matches nothing, so the
+    preset loads cleanly and then never fires."""
+    text = _CLEAN.replace("name: c.csv}", 'name: "*AllData.csv"}')
+    finding = _finding(text, tmp_path, "glob-in-selector-name")
+    assert finding.severity == WARNING
+    assert "AllData.csv" in finding.suggestion
+    # The ordinary exact name is not flagged.
+    assert "glob-in-selector-name" not in _raw_codes(_CLEAN, tmp_path)
+
+
+# --- silent-degradation checks ------------------------------------------------------
+
+def test_unrecognised_free_text_vocabulary_warns_with_the_nearest_member() -> None:
+    """These four columns are free TEXT: nothing rejects a typo, the value is just never
+    interpreted — so the linter is the only place it can surface."""
+    text = _CLEAN.replace("entity: const(device)", "entity: const(x), entity_type: const(devices)")
+    findings = [f for f in lint_spec(_spec(text)) if f.code == "free-text-vocab"]
+    assert findings and findings[0].severity == WARNING
+    assert findings[0].suggestion == "entity_type: const(device)"
+    # A recognised member is silent.
+    ok = _CLEAN.replace("entity: const(device)", "entity: const(x), entity_type: const(device)")
+    assert "free-text-vocab" not in _codes(lint_spec(_spec(ok)))
+
+
+def test_coordinates_without_a_referential_warn() -> None:
+    text = _CLEAN.replace(", spatial_referential: const(epsg:4326)", "")
+    findings = [f for f in lint_spec(_spec(text)) if f.code == "coords-no-referential"]
+    assert findings and findings[0].suggestion == "spatial_referential: const(epsg:4326)"
+
+
+def test_context_without_activity_kind_warns() -> None:
+    """context.<key> lives on the activity, and activity_kind is what creates it — without
+    it the mapped context is resolved and then discarded."""
+    text = _CLEAN.replace("entity: const(device)", "entity: const(device), context.antenna: field(Loc)")
+    findings = [f for f in lint_spec(_spec(text)) if f.code == "context-without-activity"]
+    assert findings and "activity_kind" in findings[0].suggestion
+    with_kind = text.replace("context.antenna: field(Loc)",
+                             "context.antenna: field(Loc), activity_kind: const(observation)")
+    assert "context-without-activity" not in _codes(lint_spec(_spec(with_kind)))
+
+
+def test_fixed_offset_zone_advises_naming_the_iana_zone() -> None:
+    text = _CLEAN.replace("epoch: unix_s", 'format: "%Y-%m-%d", zone: const(+01:00)')
+    findings = [f for f in lint_spec(_spec(text)) if f.code == "fixed-offset-zone"]
+    assert findings and findings[0].severity == ADVICE
+    # A named zone is the recommendation, so it must not flag itself.
+    named = _CLEAN.replace("epoch: unix_s", 'format: "%Y-%m-%d", zone: const(Europe/Zurich)')
+    assert "fixed-offset-zone" not in _codes(lint_spec(_spec(named)))
+
+
+_DURATION_TIME = ('time: {interval: {lower: field(TS), '
+                  'duration_sec: {from: field(Dur), unit: s}}, format: "%Y-%m-%d", '
+                  'zone: const(Europe/Zurich)}')
+
+
+def test_duration_bound_advice() -> None:
+    text = _CLEAN.replace("time: {instant: field(TS), epoch: unix_s}", _DURATION_TIME)
+    codes = _codes(lint_spec(_spec(text)), ADVICE)
+    assert "duration-no-role" in codes
+    with_role = text.replace("zone: const(Europe/Zurich)}",
+                             "zone: const(Europe/Zurich), temporal_role_upper: const(end)}")
+    assert "duration-no-role" not in _codes(lint_spec(_spec(with_role)), ADVICE)
+
+
+def test_duration_unit_mismatch_advice() -> None:
+    """The column name betrays the unit: a `_ms` column declared as seconds would inflate
+    every derived end bound a thousandfold."""
+    text = _CLEAN.replace("time: {instant: field(TS), epoch: unix_s}",
+                          _DURATION_TIME.replace("field(Dur)", "field(Call_ms)"))
+    findings = [f for f in lint_spec(_spec(text)) if f.code == "duration-unit-mismatch"]
+    assert findings and findings[0].suggestion.startswith("unit: ms")
+
+
+def test_implicit_record_uid_advice() -> None:
+    """Omission and oversight read identically, so the linter asks for the intent to be
+    stated — and goes quiet once it is, whichever way."""
+    text = _CLEAN.replace("source_record_uid: 'field(\"Item ID\")'\n", "")
+    assert "implicit-record-uid" in _codes(lint_spec(_spec(text)), ADVICE)
+    stated = text.replace("expected_fields:", "source_record_uid: default\nexpected_fields:")
+    assert "implicit-record-uid" not in _codes(lint_spec(_spec(stated)))
+    assert "implicit-record-uid" not in _codes(lint_spec(_spec(_CLEAN)))
+
+
+def test_findings_render_the_suggestion_as_a_fix_line() -> None:
+    text = _CLEAN.replace(", spatial_referential: const(epsg:4326)", "")
+    rendered = [f.format() for f in lint_spec(_spec(text)) if f.code == "coords-no-referential"][0]
+    assert "→ fix: spatial_referential: const(epsg:4326)" in rendered

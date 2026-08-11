@@ -4,7 +4,9 @@ Defines:    the named temporal ``Method`` implementations of the refactor-plan �
             protocol — the seven epoch decodes (``EpochMethod``: unix s/ms/µs, Apple
             CFAbsolute, WebKit, FILETIME, Excel serial), the tzdb-versioned
             ``TzLocaliseMethod``, the ``AssumeUtcMethod`` fallback, and
-            ``DatetimeCombineMethod`` (date column ⊕ time column -> one instant) —
+            ``DatetimeCombineMethod`` (date column ⊕ time column -> one instant) and
+            ``StartPlusDurationMethod`` (a DECORATOR over any of the above: upper = lower
+            + an elapsed span, the CDR start+duration shape) —
             plus ``TemporalExpressionBundle`` (the expression header + its component
             rows, the Method input), ``standard_methods`` (the ordered default set)
             and ``integrate_expression`` (first applicable method wins, writes ONE
@@ -59,6 +61,7 @@ house British spelling.
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import logging
 from dataclasses import dataclass
@@ -94,6 +97,12 @@ _UPPER_PART_NAME = "upper"
 _DATE_SUFFIX_NAME = "_date"     # the split parts: lower_date / upper_date
 _TIME_SUFFIX_NAME = "_time"     # lower_time / upper_time
 _ACCURACY_SUFFIX_NAME = "_accuracy"   # the source-stated per-bound accuracy: lower_accuracy
+# The upper bound written as an ELAPSED SPAN instead of an end clock (the CDR shape). MUST
+# match ``ingest.assemble._DURATION_PART_NAME``, the write side.
+_DURATION_PART_NAME = "duration"
+# The CANONICAL_UNIT key naming the duration's canonical unit (seconds) — the preset key that
+# declared the source unit, and what ``unit_factor`` is asked about.
+_DURATION_BOUND_COLUMN = "duration_sec"
 _INSTANT_KIND_NAME = V.TemporalKind.INSTANT.value
 
 # The string referentials the zone methods can parse (epoches are numeric, not clocks).
@@ -271,19 +280,27 @@ def _resolve_naive(naive: dt.datetime, stated_offset: str | None,
     ``_decode_time`` zone ladder, ported branch for branch.
 
     Ladder (first match wins):
-    1. stated ``[DST]``/``local`` token + a configured zone -> zoneinfo per-bound
+    1. the source NAMED its zone (``Europe/Zurich``) -> zoneinfo per-bound resolution
+       against THAT zone;
+    2. stated ``[DST]``/``local`` token + a configured zone -> zoneinfo per-bound
        resolution (warns on a header/zone base mismatch and on the DST overlap /
        gap anomalies — the old warnings, now logged);
-    2. stated DST token but NO zone -> warn and fall back to the stated base offset
+    3. stated DST token but NO zone -> warn and fall back to the stated base offset
        (or assumed UTC when the token carries none — ``local`` with no zone);
-    3. stated fixed offset -> applied verbatim, season-blind (the source declared it);
-    4. no usable token but a configured zone -> zoneinfo resolution (the configured
+    4. stated fixed offset -> applied verbatim, season-blind (the source declared it);
+    5. no usable token but a configured zone -> zoneinfo resolution (the configured
        zone IS the tz-localisation method's purpose — equivalent to the old
        ``local`` token, which presets spelt explicitly);
-    5. nothing -> materialise ASSUMING UTC and flag the offset UNKNOWN, never a
+    6. nothing -> materialise ASSUMING UTC and flag the offset UNKNOWN, never a
        misleading 0.0.
     """
     token = parse_zone_token(stated_offset)
+    if token is not None and token.zone_name is not None:
+        # Branch 1. The SOURCE's own zone outranks the operator's configured ``local_zone``:
+        # the preset states what this source's clocks MEAN, while the config only says what to
+        # assume when the source says nothing. No base-offset cross-check here — there is no
+        # second declaration to disagree with.
+        return _resolve_in_zone(naive, token.zone_name, raw)
     if token is not None and token.dst:
         if zone:
             standard = zone_standard_offset_hours(zone)
@@ -292,16 +309,7 @@ def _resolve_naive(naive: dt.datetime, stated_offset: str | None,
                 _LOG.warning(
                     f"time-zone header base offset {base}h does not match zone "
                     f"{zone!r} standard offset {standard}h; check the zone")
-            unix_us, offset, anomaly = local_naive_to_utc_us(naive, zone)
-            if anomaly == "ambiguous":
-                _LOG.warning(
-                    f"ambiguous local time {raw!r} in {zone} (DST fall-back overlap); "
-                    f"recorded as the earlier instant")
-            elif anomaly == "imaginary":
-                _LOG.warning(
-                    f"nonexistent local time {raw!r} in {zone} (DST spring-forward "
-                    f"gap); check the zone")
-            return unix_us, offset
+            return _resolve_in_zone(naive, zone, raw)
         _LOG.warning(
             f"DST/local timestamp {raw!r} but no zone configured; using base offset "
             f"{token.base_offset_hours if token.base_offset_hours is not None else 0.0}h "
@@ -312,15 +320,32 @@ def _resolve_naive(naive: dt.datetime, stated_offset: str | None,
     if token is not None and token.base_offset_hours is not None:
         return _apply_fixed(naive, token.base_offset_hours)
     if zone:
-        unix_us, offset, anomaly = local_naive_to_utc_us(naive, zone)
-        if anomaly is not None:
-            _LOG.warning(f"DST-{anomaly} local time {raw!r} in {zone}; check the zone")
-        return unix_us, offset
+        return _resolve_in_zone(naive, zone, raw)
     return _assume_utc(naive)
 
 
+def _resolve_in_zone(naive: dt.datetime, zone: str, raw: str) -> tuple[int, float]:
+    """Resolve a naive wall clock against one IANA ``zone``, DST-aware — the single zoneinfo
+    branch shared by the three ladder rungs that have a zone (source-named, ``[DST]``/``local``
+    + configured, and configured-only).
+
+    WHY the anomalies are WARNED and not raised: a DST fall-back overlap has two valid UTC
+    instants and a spring-forward gap has none, so the value IS ambiguous or impossible in
+    that zone — the examiner must see that on the log, but one such row must not sink the
+    source. ``local_naive_to_utc_us`` picks the earlier instant at a fold.
+    """
+    unix_us, offset, anomaly = local_naive_to_utc_us(naive, zone)
+    if anomaly == "ambiguous":
+        _LOG.warning(f"ambiguous local time {raw!r} in {zone} (DST fall-back overlap); "
+                     f"recorded as the earlier instant")
+    elif anomaly == "imaginary":
+        _LOG.warning(f"nonexistent local time {raw!r} in {zone} (DST spring-forward gap); "
+                     f"check the zone")
+    return unix_us, offset
+
+
 def _apply_fixed(naive: dt.datetime, base_hours: float) -> tuple[int, float]:
-    """Apply a stated FIXED offset to a naive clock (branch 3 of the ladder)."""
+    """Apply a stated FIXED offset to a naive clock (branch 4 of the ladder)."""
     aware = naive.replace(tzinfo=dt.timezone(dt.timedelta(hours=base_hours)))
     return datetime_to_us(aware), base_hours
 
@@ -786,10 +811,94 @@ class DatetimeCombineMethod(_TemporalMethodBase):
         return _Bound(unix_us, offset, accuracy)
 
 
+class StartPlusDurationMethod(_TemporalMethodBase):
+    """upper = lower + an ELAPSED SPAN — the CDR shape, where the operator discloses a start
+    and a call duration rather than a start and an end.
+
+    A DECORATOR over one inner method, not a new parser: the lower bound is still a clock (or
+    an epoch) that some existing method already knows how to decode, so this one delegates the
+    whole decode and only replaces the upper bound. That is why it wraps EVERY base method
+    rather than subclassing the clock ones — a start+duration pair works the same whether the
+    start is an ISO string, a local wall clock or a Unix epoch.
+
+    The duration's unit is NOT in the data: L1 keeps the source's verbatim digits (``"187"``)
+    under the part ``duration``, and the preset states what they mean (``duration_sec:
+    {from: field(Duration), unit: s}``), which reaches here as ``unit``.
+
+    The method string is the demo's ``+`` composite with the inner rule FIRST — e.g.
+    ``tz_localize/1.0/tzdb=2026a+start_plus_duration/1.0`` — so the audit stamp names the
+    decode that produced the start and then the rule that derived the end.
+
+    Applied offset on the upper: the lower's. ``upper_unix_utc_us`` is exact regardless (it is
+    absolute µs arithmetic), but an interval that CROSSES a DST transition renders its upper
+    local ISO with the pre-transition offset. That is a display nuance of a derived bound, not
+    a UTC error, and it keeps the derived end tagged with the offset the source's clock was
+    actually stated in.
+    """
+
+    name = "start_plus_duration"
+
+    def __init__(self, inner: _TemporalMethodBase, unit: str) -> None:
+        self._inner = inner
+        self._unit = unit
+        self._factor_us = V.unit_factor(unit, _DURATION_BOUND_COLUMN) * 1_000_000
+
+    @property
+    def method(self) -> str:
+        return f"{self._inner.method}+{self.name}/{self.version}"
+
+    def applies_to(self, expression: TemporalExpressionBundle) -> bool:
+        return (_component(expression, _DURATION_PART_NAME) is not None
+                and self._inner.applies_to(expression))
+
+    def _duration_us(self, expression: TemporalExpressionBundle) -> int | None:
+        """The span in µs, or None when the cell is unreadable or negative (warned, never
+        invented — the caller then declines and the plain inner method keeps the lower bound
+        alone rather than the row gaining a fabricated end)."""
+        text = _raw_text(_component(expression, _DURATION_PART_NAME))
+        if text is None:
+            return None
+        try:
+            value = float(text)
+        except ValueError:
+            _LOG.warning(f"unreadable duration {text!r} ({self._unit}); no upper bound derived")
+            return None
+        if value < 0:
+            _LOG.warning(f"negative duration {text!r} ({self._unit}); no upper bound derived")
+            return None
+        return int(round(value * self._factor_us))
+
+    def integrate(self, expression: TemporalExpressionBundle) -> V.TimespanIntegration | None:
+        row = self._inner.integrate(expression)
+        if row is None or row.lower_unix_utc_us is None:
+            return None                     # no start to add to: this method cannot apply
+        duration_us = self._duration_us(expression)
+        if duration_us is None:
+            return None
+        upper = _Bound(row.lower_unix_utc_us + duration_us, row.utc_offset_hours_lower,
+                       row.upper_accuracy_us)
+        upper_iso, upper_date, upper_time = _bound_cells(upper.unix_us, upper.offset)
+        method_string = self.method
+        return dataclasses.replace(
+            row,
+            # The id is derived from the method string, so it must be re-derived here — the
+            # inner method's id would claim a row this method actually produced.
+            timespan_integration_id=ids.timespan_integration_id(
+                row.temporal_expression_id, method_string),
+            method=method_string,
+            upper_unix_utc_us=upper.unix_us,
+            upper_datetime_iso=upper_iso,
+            upper_date=upper_date,
+            upper_time=upper_time,
+            utc_offset_hours_upper=upper.offset,
+        )
+
+
 # --- the default set + the store-writing entry point ----------------------------
 
 def standard_methods(zone: str | None = None, datetime_format: str | None = None,
                      date_format: str = "%Y-%m-%d", time_format: str = "%H:%M:%S",
+                     duration_unit: str | None = None,
                      ) -> tuple[_TemporalMethodBase, ...]:
     """The ordered default method set for one source's configuration.
 
@@ -797,13 +906,21 @@ def standard_methods(zone: str | None = None, datetime_format: str | None = None
     and disjoint; the combine method claims only split-part expressions; TzLocalise
     claims clock expressions WITH zone knowledge; AssumeUtc is the deliberate last
     resort so an assumption is only ever made when nothing better applies.
+
+    ``duration_unit`` (set when the preset states ``duration_sec:``) prepends one
+    duration-deriving wrapper per base method. WHY ahead of the plain set rather than instead
+    of it: the wrapper declines when the span is unreadable, and the plain method behind it
+    then still writes the start — a bad duration costs the end bound, never the whole row.
     """
-    return (
+    base: tuple[_TemporalMethodBase, ...] = (
         *epoch_methods(),
         DatetimeCombineMethod(zone=zone, date_format=date_format, time_format=time_format),
         TzLocaliseMethod(zone=zone, datetime_format=datetime_format),
         AssumeUtcMethod(datetime_format=datetime_format),
     )
+    if duration_unit is None:
+        return base
+    return (*(StartPlusDurationMethod(method, duration_unit) for method in base), *base)
 
 
 def integrate_expression(store: RunStore, expression: TemporalExpressionBundle,

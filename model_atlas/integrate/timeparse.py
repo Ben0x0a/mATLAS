@@ -2,7 +2,8 @@
 
 Defines:    ``tz_offset_to_hours`` (offset token -> signed hours), ``ZoneToken`` +
             ``parse_zone_token`` (source zone declarations: ``UTC+01:00`` /
-            ``UTC+01:00[DST]`` / ``local``), ``zone_standard_offset_hours`` (a zone's
+            ``UTC+01:00[DST]`` / ``local`` / a named IANA zone) + ``is_known_zone``
+            (the cached tzdb membership test), ``zone_standard_offset_hours`` (a zone's
             non-DST offset), ``local_naive_to_utc_us`` (DST-aware naive-local ->
             UTC µs with the ambiguous/imaginary anomaly), ``datetime_to_us`` (aware
             datetime -> Unix µs) and ``parse_iso8601``.
@@ -28,6 +29,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 _UNIX_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
@@ -60,19 +62,45 @@ class ZoneToken:
     """A source zone declaration parsed from a captured header/const token.
 
     ``base_offset_hours`` is the fixed/standard offset (None for ``local`` or unparseable);
-    ``dst`` is True when the source applies daylight saving (AXIOM's ``[DST]`` marker, or the
-    ``local`` keyword) — i.e. the per-row offset varies and a single number is not enough."""
+    ``dst`` is True when the source applies daylight saving (AXIOM's ``[DST]`` marker, the
+    ``local`` keyword, or a named IANA zone) — i.e. the per-row offset varies and a single
+    number is not enough. ``zone_name`` is the IANA zone the SOURCE named
+    (``Europe/Zurich``), None for every other spelling; when set it is the authoritative
+    resolver for this token's bounds."""
 
     base_offset_hours: float | None
     dst: bool
     raw: str | None
+    zone_name: str | None = None
+
+
+@lru_cache(maxsize=None)
+def is_known_zone(name: str) -> bool:
+    """Whether ``name`` is a zone the tz database knows (``Europe/Zurich``).
+
+    HOW: attempt the ``ZoneInfo`` lookup — the same resolver that will later convert the
+    bounds — and cache the verdict, since a preset repeats one zone on every row of a source.
+    WHY the real lookup rather than a name-shape regex: only the tzdb can say whether a
+    plausible-looking name actually resolves, and a name that does not resolve here would
+    otherwise fail later, per record, at conversion time.
+    """
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    return True
 
 
 def parse_zone_token(value: Any) -> "ZoneToken | None":
-    """Parse a source-zone token: ``UTC+01:00`` / ``UTC+01:00[DST]`` / ``local`` / a number.
+    """Parse a source-zone token: ``UTC+01:00`` / ``UTC+01:00[DST]`` / ``local`` / an IANA
+    zone name / a number.
 
     AXIOM writes the standard offset plus a ``[DST]`` suffix when daylight saving is applied;
-    ``local`` means device-local (resolve via the configured zone). None/empty -> None."""
+    ``local`` means device-local (resolve via the configured zone); a named IANA zone is the
+    source stating its OWN zone, which resolves per bound through the tzdb. None/empty -> None.
+    """
     if value is None:
         return None
     token = str(value).strip()
@@ -87,6 +115,13 @@ def parse_zone_token(value: Any) -> "ZoneToken | None":
     try:
         base = tz_offset_to_hours(core)
     except ValueError:
+        # Not an offset — try the tzdb before giving up. WHY this branch matters: without it
+        # a preset that names its zone (``zone: const(Europe/Zurich)``) yields an offsetless
+        # token, the caller falls through to the CONFIGURED zone and, with none configured,
+        # silently assumes UTC — the stated zone ignored, the error invisible on the row.
+        if is_known_zone(core):
+            return ZoneToken(base_offset_hours=zone_standard_offset_hours(core),
+                             dst=True, raw=token, zone_name=core)
         return ZoneToken(base_offset_hours=None, dst=dst, raw=token)
     return ZoneToken(base_offset_hours=base, dst=dst, raw=token)
 

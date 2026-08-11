@@ -291,7 +291,7 @@ CREATE TABLE assertion (assertion_id TEXT PRIMARY KEY,
         REFERENCES temporal_expression(temporal_expression_id),
     entity_role TEXT, entity_position_link TEXT, entity_time_link TEXT,
     spatial_temporal_link TEXT, deleted TEXT, multiplicity INTEGER,
-    source_label TEXT, input_record_id TEXT,
+    source_label TEXT, input_record_id TEXT, source_record_uid TEXT,
     content_hash TEXT NOT NULL, claim_digest TEXT NOT NULL,
     UNIQUE (raw_record_id, preset_id, output_ordinal));
 CREATE INDEX ix_assertion_ch ON assertion(content_hash);
@@ -503,7 +503,7 @@ class Builder:
     def assertion(self, rrid, preset_id, preset_key, ordinal, entity_pair,
                   spatial_pair, temporal_pair, activity_pair, role, epl, etl, stl,
                   deleted=None, multiplicity=None, label=None, input_record_id=None,
-                  entity_origin="preset_mapped"):
+                  source_record_uid=None, entity_origin="preset_mapped"):
         eid, entity_l1 = entity_pair
         sx, spatial_l1 = spatial_pair or (None, None)
         tx, temporal_l1 = temporal_pair or (None, None)
@@ -529,10 +529,10 @@ class Builder:
             [_txt(fp), preset_key, str(line_no), str(ordinal), l1]))
         aid = u5("assertion", rrid, preset_key, ordinal)
         self.cx.execute("INSERT INTO assertion VALUES "
-                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (aid, rrid, preset_id, ordinal, eid, entity_origin, act_id, sx, tx,
              role, epl, etl, stl, deleted, multiplicity, label, input_record_id,
-             content_hash, claim_digest))
+             source_record_uid, content_hash, claim_digest))
         return aid
 
     def analysis(self, aid, method, record_type, record_rank):

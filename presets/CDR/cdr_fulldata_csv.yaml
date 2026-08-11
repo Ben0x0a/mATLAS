@@ -1,0 +1,95 @@
+preset:
+  id: cdr.cdr-geo.csv-all-data
+  name: CSV all Data Tableau
+  os: CDR
+  tool: CDR-Geo
+  os_version: N/A
+  version: 1.0
+  tier: secondary
+
+input_selector:
+  format: csv
+  name: "*AllData.csv"
+  delimiter: ";"
+  encoding: "utf-8"
+
+expected_fields:
+  - "Table"
+  - "A_ID"
+  - "A_Orig"
+  - "A_Clean"
+  - "A_Subscriber"
+  - "A_IMEI"
+  - "A_IMSI"
+  - "A_IP"
+  - "Type1"
+  - "Type2"
+  - "TimeStamp"
+  - "TimeFormatted"
+  - "Duration"
+  - "B_ID"
+  - "B_Orig"
+  - "B_Clean"
+  - "B_Subscriber"
+  - "B_IMEI"
+  - "B_IMSI"
+  - "B_IP"
+  - "C_ID"
+  - "C_Orig"
+  - "C_Clean"
+  - "C_Subscriber"
+  - "ThirdParties"
+  - "LocOwner"
+  - "SE"
+  - "Address"
+  - "Latitude"
+  - "Longitude"
+  - "CellID"
+  - "GlobalCellID"
+  - "Beam"
+  - "Comment/Desc."
+  - "CDRInfo"
+  - "SourceFile"
+  - "SourceRow"
+
+# The export carries no stable per-record key (SourceFile:SourceRow locates a row, it is not
+# an identifier the operator assigned), so the engine generates a deterministic UID. Stated
+# rather than omitted, so a reader sees it was a decision.
+source_record_uid: default
+
+common:
+  entity:          field(CDRInfo)
+  entity_type:     const(device)
+  source_label:    field(Table)
+  position_source: const(Register)
+  # A tool export: the row's origin is the operator file the extraction came from.
+  raw_source_path: field(SourceFile)
+  input_record_id: format("{field(SourceFile)}:{field(SourceRow)}")
+  # activity_kind is what CREATES the record's activity row; without it the context entries
+  # below have nowhere to live and are silently dropped.
+  activity_kind:   const(observation)
+  context.antenna: format("{field(GlobalCellID)}")
+
+assertions:
+  - position:
+      latitude:                       field(Latitude)
+      longitude:                      field(Longitude)
+      spatial_referential:            const(epsg:4326)
+      beam_azimuth_deg:               { from: field(Beam), unit: deg }
+      # A zero-duration event happened at an instant; anything else spans the call. Written as
+      # the full column name because the short `links:` block takes bare enum tokens only.
+      spatial_temporal_link: if field(Duration) == 0 then const(instant)
+                             else const(once_during_interval)
+    time:
+      interval:
+        lower:        field(TimeStamp)
+        # The operator discloses start + call length, never start + end: L1 keeps the digits
+        # verbatim under the part `duration` and L2 derives the end (start_plus_duration).
+        duration_sec: { from: field(Duration), unit: s }
+      format:              "%Y-%m-%d %H:%M:%S"
+      zone:                const(Europe/Zurich)
+      temporal_role_lower: const(start)
+      temporal_role_upper: const(end)
+    links:
+      entity_position:  within_range_of
+      entity_time:      recorded_at

@@ -765,6 +765,15 @@ class Assertion:
     # assertion (L1), not the raw_record (L0): the value is preset-resolved, and L0 is
     # preset-free. NULL when the preset maps none (line_no + raw_json still locate it).
     input_record_id: str | None = None
+    # The source record's OWN uid (a tool's Item ID, a real UUID column), preset-mapped and
+    # verbatim — the sibling of ``input_record_id`` above, and on the assertion for the SAME
+    # reason: the value is preset-resolved and L0 is preset-free. Different job, though:
+    # ``input_record_id`` LOCATES one source record, this one GROUPS the output rows a single
+    # source record fanned out into, so every assertion of one record repeats it. NULL when the
+    # preset maps none (or writes ``source_record_uid: default``) — the export then falls back
+    # to the engine-generated ``raw_record_id``. Feeds NO digest: identity comes from the L1
+    # projection, and a source's own key is provenance, not claim content.
+    source_record_uid: str | None = None
 
 
 @dataclass(frozen=True)
@@ -939,6 +948,12 @@ CANONICAL_UNIT: dict[str, str] = {
     "horizontal_speed_accuracy_kmh": "km/h", "vertical_speed_accuracy_kmh": "km/h",
     "heading_deg": "deg", "heading_accuracy_deg": "deg",
     "beam_azimuth_deg": "deg", "beam_width_deg": "deg",
+    # An elapsed span, canonical in seconds — the temporal analogue of ``altitude_m``: the
+    # unit is in the NAME, so the preset key ``duration_sec`` is unambiguous while the SOURCE
+    # unit stays declared per preset ({from: field(Duration), unit: ms}). Not a component part
+    # name: the component stays the source's verbatim digits under the part ``duration``, and
+    # the conversion is the L2 start_plus_duration method's job.
+    "duration_sec": "s",
 }
 
 # Multiplicative factor (source_unit, canonical_unit) -> factor.
@@ -950,6 +965,14 @@ _UNIT_FACTORS: dict[tuple[str, str], float] = {
     ("m", "m"): 1.0,
     ("ft", "m"): 0.3048,
     ("deg", "deg"): 1.0,
+    # Durations. Operators disclose call lengths in seconds; ms/us appear in app databases and
+    # ``d`` in Excel exports, whose day-fraction serials measure spans in days.
+    ("s", "s"): 1.0,
+    ("ms", "s"): 0.001,
+    ("us", "s"): 0.000001,
+    ("min", "s"): 60.0,
+    ("h", "s"): 3600.0,
+    ("d", "s"): 86400.0,
 }
 
 

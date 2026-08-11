@@ -201,6 +201,18 @@ def _datetime_format(spec: PresetSpec) -> str | None:
     return None
 
 
+def _duration_unit(spec: PresetSpec) -> str | None:
+    """The SOURCE unit of the spec's ``duration_sec:`` bound — the instruction L2's
+    start_plus_duration method needs to turn the verbatim span into an end bound. None when
+    the spec states an ordinary ``upper:`` clock. Sibling of ``_datetime_format`` above: both
+    read a decode instruction that lives in the preset, never in the store."""
+    for template in spec.assertions:
+        for time_spec in template.temporal:
+            if time_spec.duration_unit is not None:
+                return time_spec.duration_unit
+    return None
+
+
 def _rows(store: RunStore, sql: str, *args: object) -> list[dict]:
     cursor = store.connection.execute(sql, args)
     columns = [description[0] for description in cursor.description]
@@ -240,12 +252,33 @@ def _preset_target_fn(specs: list[PresetSpec], root_prefix_depth: int) -> Target
             file, specs, root_prefix_depth=root_prefix_depth, detected=fmt, warn=False)
         if not candidates:
             return None
+        read_params = _agreed_read_params(candidates, file)
         subunits = {selector.subunit() for _preset, selector in candidates}
         if None in subunits:
-            return Target(subunits=None)
-        return Target(subunits=frozenset(subunits))
+            return Target(subunits=None, read_params=read_params)
+        return Target(subunits=frozenset(subunits), read_params=read_params)
 
     return target
+
+
+def _agreed_read_params(candidates: list, file: SourceFile) -> dict:
+    """The reader options the candidate selectors agree on — the file's declared dialect.
+
+    HOW: collect each candidate selector's ``reader_params()`` and keep them only when every
+    candidate declares the SAME thing; on a disagreement, warn and fall back to the reader
+    defaults. WHY not "first one wins": L0 reads the file ONCE for all of them, so a silent
+    pick would read the bytes under one preset's dialect and hand them to another's mapping —
+    a mis-read that surfaces later as inexplicably absent fields, not as a dialect problem.
+    """
+    variants = {json.dumps(selector.reader_params(), sort_keys=True, default=str)
+                for _preset, selector in candidates}
+    if len(variants) == 1:
+        return json.loads(variants.pop())
+    log.warning(
+        f"{file.logical_path}: the presets targeting this file declare different reader "
+        f"options ({sorted(variants)}); reading with the reader defaults — give the "
+        f"selectors the same delimiter/encoding/header_row/skip_rows")
+    return {}
 
 
 def _store_peek_fn(store: RunStore) -> Callable[[SourceFile, InputSelector], "set[str] | None"]:
@@ -296,7 +329,8 @@ def _integrate_temporal_for_preset(store: RunStore, spec: PresetSpec, local_zone
     configured local zone. WHY per preset (not one whole-store pass): the parsing
     format lives in the preset, not the store, so each preset's expressions must be
     integrated with THAT preset's decode configuration."""
-    methods = standard_methods(zone=local_zone, datetime_format=_datetime_format(spec))
+    methods = standard_methods(zone=local_zone, datetime_format=_datetime_format(spec),
+                               duration_unit=_duration_unit(spec))
     preset_id = ids.preset_id(spec.meta.id, spec.meta.version)
     expressions = _rows(
         store,
