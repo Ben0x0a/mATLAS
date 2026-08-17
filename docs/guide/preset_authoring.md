@@ -209,7 +209,7 @@ assertions:
       spatial_temporal: instant
 ```
 
-This is based on the bundled `presets/ios/ios_routined_cached_locations.yaml` (its
+This is based on the mATLAS-presets `ios/ios_routined_cached_locations.yaml` (its
 `expected_fields` inventory is trimmed here for brevity).
 
 ## 4. Worked example — CSV tool export (secondary source)
@@ -286,7 +286,7 @@ assertions:
       spatial_temporal: instant
 ```
 
-This is based on the bundled `presets/axiom/ios_cached_locations.yaml` (its
+This is based on the mATLAS-presets `axiom/ios_cached_locations.yaml` (its
 `expected_fields` inventory is trimmed here for brevity). Note the field names with
 spaces are quoted (`'field("Item ID")'`), and the glob `* (dd.MM.yyyy)` matches the header
 whatever timezone it carries.
@@ -317,7 +317,7 @@ assertions:
       spatial_temporal: continuous_during_interval
 ```
 
-Adapted from `presets/ios/ios_routined_significant_visits.yaml`.
+Adapted from the mATLAS-presets `ios/ios_routined_significant_visits.yaml`.
 
 ## 5b. Worked example — start + duration (a CDR)
 
@@ -368,7 +368,7 @@ Three things worth copying:
   `context.<key>` entries are resolved and then discarded — a silent loss the linter now warns
   about.
 
-From `presets/CDR/cdr_fulldata_csv.yaml`.
+From the mATLAS-presets `CDR/cdr_fulldata_csv.yaml`.
 
 ## 6. Timestamps
 
@@ -559,7 +559,7 @@ iterating:
 ```bash
 python matlas.py process \
   --input ./evidence/Cache.sqlite \
-  --presets presets/ios/ios_routined_cached_locations.yaml \
+  --presets ../presets/mATLAS-presets/ios/ios_routined_cached_locations.yaml \
   --output ./out/routined.csv \
   --concerns "Case Subject"
 ```
@@ -573,7 +573,7 @@ frontier) and any surfaced assumptions (a missing referential, an assumed zone).
 Before relying on a preset, lint it for errors, likely mistakes and best-practice nudges:
 
 ```bash
-python utils/lint_presets.py presets/ios/ios_routined_cached_locations.yaml --advice
+python utils/lint_presets.py ../presets/mATLAS-presets/ios/ios_routined_cached_locations.yaml --advice
 ```
 
 It reports ERRORs (won't load), WARNINGs (e.g. a half-coordinate, a missing link, a rowid

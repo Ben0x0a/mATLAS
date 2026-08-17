@@ -1,7 +1,7 @@
 """Tests for the preset linter (presets.lint).
 
 Covers the ERROR path (unparseable presets) and each WARNING/ADVICE check, plus a
-clean preset producing no errors/warnings and the shipped presets being error-free.
+clean preset producing no errors/warnings.
 Used by:    pytest.
 Depends on: model_atlas.presets.lint, pyyaml.
 """
@@ -107,13 +107,6 @@ def test_expected_fields_glob_covers_mapped_field() -> None:
     text = _CLEAN.replace('expected_fields: [Lat, Lon, TS, Loc, "Item ID", Source]',
                           'expected_fields: [Lat, Lon, "T*", Loc, "Item ID", Source]')
     assert "mapped-not-declared" not in _codes(lint_spec(_spec(text)), WARNING)
-
-
-def test_lint_paths_over_shipped_presets_has_no_errors() -> None:
-    presets_dir = Path(__file__).resolve().parents[2] / "presets"
-    findings = lint_paths([presets_dir])
-    errors = [f for f in findings if f.severity == ERROR]
-    assert errors == [], f"shipped presets have lint errors: {[f.format() for f in errors]}"
 
 
 # --- new-schema checks ----------------------------------------------------

@@ -230,16 +230,6 @@ def test_invalid_presets_are_rejected(case: str) -> None:
         _parse(_INVALID[case])
 
 
-def test_shipped_presets_all_load() -> None:
-    """Guard: every preset committed under presets/ must parse and validate."""
-    from model_atlas.presets.spec_loader import load_preset_specs
-
-    specs = load_preset_specs(Path(__file__).resolve().parents[2] / "presets")
-    assert len(specs) >= 5
-    ids = [s.meta.id for s in specs]
-    assert len(ids) == len(set(ids))  # ids are unique
-
-
 def test_extended_l1_vocabulary_is_assignable() -> None:
     """A preset may now map the extended L1 targets (entity_role, activity_kind,
     multiplicity, referentials) and any ``context.<key>`` in its ``common:`` block, and a

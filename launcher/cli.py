@@ -144,8 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
     process_parser.add_argument(
         "--presets",
         type=Path,
-        default=Path("presets"),
-        help="Declarative preset YAML file or folder. Ignored when --profile is supplied.",
+        default=None,
+        help=(
+            "Declarative preset YAML file or folder (e.g. a checkout of the mATLAS-presets "
+            "repo). Required unless --profile is supplied; ignored when it is."
+        ),
     )
     process_parser.add_argument(
         "--profile",
@@ -328,6 +331,9 @@ def _cmd_process(args: argparse.Namespace) -> int:
         exports=args.export,
     )
     if args.profile is None:
+        if args.presets is None:
+            log.error("Missing required argument: --presets (or supply --profile instead).")
+            return 1
         result = process(args.input, args.presets, args.output, **kwargs)
     else:
         with tempfile.TemporaryDirectory(prefix="matlas-profile-") as tmp:

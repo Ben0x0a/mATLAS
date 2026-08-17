@@ -15,6 +15,23 @@ Excel — is a projection of that database. A PySide6 GUI is available as an opt
 
 The GUI dependency is optional and installed through the `gui` extra.
 
+## Installation
+
+Two separate clones are needed: the app (this repo) and the preset library — a separate
+`presets` repo, distributed independently from the app. Clone it as a sibling folder:
+
+```text
+some-folder/
+├── mATLAS/            # this repo (or its packaged executable)
+└── presets/            # the presets repo
+    └── mATLAS-presets/
+```
+
+Presets are **not bundled** with the app and are versioned independently, so they can be
+updated without an app release — and can also go stale relative to the source formats
+they map. See that repo's own README for details, and "Presets" below for how to point
+the app at them and what to check before trusting one.
+
 ## CLI run
 
 From a clone of this folder:
@@ -22,7 +39,7 @@ From a clone of this folder:
 ```bash
 python matlas.py process \
   --input ./evidence \
-  --presets ./presets \
+  --presets ../presets/mATLAS-presets \
   --output ./out \
   --name operation-falcon \
   --concerns "Case Subject"
@@ -52,11 +69,11 @@ re-adding evidence already in the case is a recorded skip, never a duplicate or 
 
 ```bash
 python matlas.py process --help
-python matlas.py process --input ./evidence --presets ./presets --output ./out --concerns Subject --export kml --export geojson
-python matlas.py process --input ./evidence --presets ./presets --output ./out --concerns Subject --traceability-format prov
-python matlas.py process --input ./evidence --presets ./presets --output ./out --concerns Subject --no-source-columns
+python matlas.py process --input ./evidence --presets ../presets/mATLAS-presets --output ./out --concerns Subject --export kml --export geojson
+python matlas.py process --input ./evidence --presets ../presets/mATLAS-presets --output ./out --concerns Subject --traceability-format prov
+python matlas.py process --input ./evidence --presets ../presets/mATLAS-presets --output ./out --concerns Subject --no-source-columns
 python matlas.py process --input ./evidence --profile ./profiles/ios-locations.mATLAS-profile --output ./out --concerns Subject
-python matlas.py --log-level DEBUG process --input ./evidence --presets ./presets --output ./out --concerns Subject
+python matlas.py --log-level DEBUG process --input ./evidence --presets ../presets/mATLAS-presets --output ./out --concerns Subject
 ```
 
 `--export NAME` (repeatable) writes an additional projection alongside the CSV — one file per
@@ -100,7 +117,9 @@ package API as the CLI.
 ## Presets
 
 Presets are YAML files loaded recursively from the folder passed with `--presets`, or loaded
-directly when `--presets` points to one YAML file. A preset has:
+directly when `--presets` points to one YAML file. `--presets` has no default in the CLI — the
+GUI defaults to `<current folder>/presets/mATLAS-presets`, matching the sibling-clone layout
+under "Installation" above. A preset has:
 
 - a `preset` header (id, name, os/tool, version, os_version, tier);
 - an `input_selector` identifying the source (CSV, Excel, SQLite or XML, direct or inside a ZIP);
@@ -109,10 +128,16 @@ directly when `--presets` points to one YAML file. A preset has:
   timestamp codecs (`epoch:`), declarative `unit:` conversion, and `pipe` chains for procedural
   cases.
 
-Example presets live under `presets/axiom/` (AXIOM CSV exports) and `presets/ios/` (direct SQLite
-presets read from a full-filesystem ZIP). Preset authoring is documented in
-[docs/guide/preset_authoring.md](docs/guide/preset_authoring.md) and the full YAML reference in
-[docs/guide/preset_schema.md](docs/guide/preset_schema.md).
+Example presets live under `mATLAS-presets/axiom/` (AXIOM CSV exports) and `mATLAS-presets/ios/`
+(direct SQLite presets read from a full-filesystem ZIP) in the presets repo. Preset authoring is
+documented in [docs/guide/preset_authoring.md](docs/guide/preset_authoring.md) and the full YAML
+reference in [docs/guide/preset_schema.md](docs/guide/preset_schema.md).
+
+**Presets can go stale.** A preset encodes one mapping of one tool/source's export format at the
+time it was written; source formats change across tool and OS versions. Before relying on a
+preset's output in a real case, check its `preset.version`/`os_version`, confirm your export's
+columns still match its `expected_fields`, and run `utils/lint_presets.py` against it. When
+unsure, treat the preset as a starting point to verify, not a guarantee.
 
 ## Configuration (`matlas_config.toml`)
 

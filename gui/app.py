@@ -285,7 +285,7 @@ class MainController(QObject):
         self.additional_export_button: QToolButton = child(QToolButton, "additionalExportButton")
 
     def _configure_ui_defaults(self) -> None:
-        default_presets = Path.cwd() / "presets"
+        default_presets = Path.cwd() / "presets" / "mATLAS-presets"
         self.presets_path_edit.setText(str(default_presets))
         self.log_edit.setAcceptRichText(True)
         self.log_edit.document().setMaximumBlockCount(5000)
@@ -621,7 +621,7 @@ class MainController(QObject):
         path = QFileDialog.getExistingDirectory(
             self.window,
             "Choose presets folder",
-            self.presets_path_edit.text() or str(Path.cwd() / "presets"),
+            self.presets_path_edit.text() or str(Path.cwd() / "presets" / "mATLAS-presets"),
         )
         if path:
             self.presets_path_edit.setText(path)
@@ -631,7 +631,7 @@ class MainController(QObject):
         path, _ = QFileDialog.getOpenFileName(
             self.window,
             "Choose preset YAML",
-            self.presets_path_edit.text() or str(Path.cwd() / "presets"),
+            self.presets_path_edit.text() or str(Path.cwd() / "presets" / "mATLAS-presets"),
             "YAML presets (*.yaml *.yml);;All files (*)",
         )
         if path:
@@ -1207,7 +1207,7 @@ class MainController(QObject):
         self._close_case()
         self.entity_edit.clear()
         self.concerns_edit.clear()
-        self.presets_path_edit.setText(str(Path.cwd() / "presets"))
+        self.presets_path_edit.setText(str(Path.cwd() / "presets" / "mATLAS-presets"))
         self.preset_search_edit.clear()
         self.selected_preset_list.clear()
         self.traceability_combo.setCurrentText("readable")

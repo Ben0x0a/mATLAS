@@ -4,9 +4,12 @@ Runs the package linter (``model_atlas.presets.lint``) over one or more preset f
 or folders and prints grouped findings. Exits non-zero when any ERROR is found, so it
 is usable as a CI gate.
 
+Presets live in the separate mATLAS-presets repo (see presets/README.md once cloned
+as a sibling checkout) — there is no bundled default, pass its path explicitly.
+
 Usage:
-    python utils/lint_presets.py [paths ...]          # default: ./presets
-    python utils/lint_presets.py presets/ios --advice # include best-practice advice
+    python utils/lint_presets.py path/to/presets/mATLAS-presets
+    python utils/lint_presets.py path/to/presets/mATLAS-presets/ios --advice
 """
 from __future__ import annotations
 
@@ -24,15 +27,15 @@ _ORDER = {ERROR: 0, WARNING: 1, ADVICE: 2}
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("paths", nargs="*", type=Path, default=[Path("presets")],
-                        help="Preset files or folders to lint (default: ./presets).")
+    parser.add_argument("paths", nargs="+", type=Path,
+                        help="Preset files or folders to lint.")
     parser.add_argument("--advice", action="store_true",
                         help="Include best-practice ADVICE findings (off by default).")
     parser.add_argument("--strict", action="store_true",
                         help="Exit non-zero if any WARNING (not just ERROR) is found.")
     args = parser.parse_args(argv)
 
-    findings = lint_paths(args.paths or [Path("presets")])
+    findings = lint_paths(args.paths)
     if not args.advice:
         findings = [f for f in findings if f.severity != ADVICE]
 

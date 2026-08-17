@@ -110,6 +110,7 @@ def test_root_prefix_depth_unset_falls_back_to_config(monkeypatch, tmp_path):
     rc = cli.run([
         "process",
         "--input", str(source),
+        "--presets", str(tmp_path / "presets"),
         "--output", str(tmp_path / "out"),
         "--concerns", "subject",
     ])
