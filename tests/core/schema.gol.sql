@@ -150,8 +150,8 @@ CREATE TABLE temporal_component (
     UNIQUE (temporal_expression_id, ordinal)
 );
 
-CREATE TABLE assertion (
-    assertion_id TEXT PRIMARY KEY NOT NULL,
+CREATE TABLE observation (
+    observation_id TEXT PRIMARY KEY NOT NULL,
     raw_record_id TEXT NOT NULL REFERENCES raw_record(raw_record_id),
     preset_id TEXT NOT NULL REFERENCES preset(preset_id),
     output_ordinal INTEGER NOT NULL,
@@ -174,11 +174,11 @@ CREATE TABLE assertion (
     UNIQUE (raw_record_id, preset_id, output_ordinal)
 );
 
-CREATE INDEX ix_assertion_ch ON assertion(content_hash);
+CREATE INDEX ix_observation_ch ON observation(content_hash);
 
-CREATE INDEX ix_assertion_cd ON assertion(claim_digest);
+CREATE INDEX ix_observation_cd ON observation(claim_digest);
 
-CREATE INDEX ix_assertion_act ON assertion(activity_id);
+CREATE INDEX ix_observation_act ON observation(activity_id);
 
 CREATE TABLE spatial_integration (
     spatial_integration_id TEXT PRIMARY KEY NOT NULL,
@@ -228,11 +228,11 @@ CREATE TABLE timespan_integration (
 
 CREATE TABLE analysis (
     analysis_id TEXT PRIMARY KEY NOT NULL,
-    assertion_id TEXT NOT NULL REFERENCES assertion(assertion_id),
+    observation_id TEXT NOT NULL REFERENCES observation(observation_id),
     method TEXT NOT NULL,
     record_type TEXT,
     record_rank INTEGER,
-    UNIQUE (assertion_id, method)
+    UNIQUE (observation_id, method)
 );
 
 CREATE TABLE edit_log (
@@ -256,7 +256,7 @@ CREATE VIEW duplicate_sources AS
 CREATE VIEW possible_same_evidence AS
     SELECT a.claim_digest, COUNT(*) AS copies,
            GROUP_CONCAT(s.input_file_path, ' | ') AS files
-    FROM assertion a
+    FROM observation a
     JOIN raw_record r ON r.raw_record_id = a.raw_record_id
     JOIN source s ON s.source_id = r.source_id
     GROUP BY a.claim_digest HAVING COUNT(*) > 1;

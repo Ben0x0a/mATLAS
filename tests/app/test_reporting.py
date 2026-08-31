@@ -75,7 +75,7 @@ def test_readable_and_prov_share_one_finish_time() -> None:
     readable = build_traceability_readable(
         started_at=started_at, finished_at=finished_at,
         input_path=Path("/in/cached.csv"), presets_path=Path("/in/presets"),
-        output_csv=Path("/out/merged.csv"), row_counts={"assertions": 2},
+        output_csv=Path("/out/merged.csv"), row_counts={"observations": 2},
         sources=[_SOURCE], warning_count=0,
     )
     prov = build_traceability_prov(

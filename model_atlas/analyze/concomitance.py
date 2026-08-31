@@ -28,7 +28,7 @@ left empty (everything).
 
 The algorithm (no O(n²) main path)
 ----------------------------------
-1. ONE indexed SQL pass per side selects the candidate assertions: the group predicate
+1. ONE indexed SQL pass per side selects the candidate observations: the group predicate
    applied, presence-only (see below), both coordinates and both time bounds present,
    joined through ``spatial_integration``/``spatial_index``/``timespan_integration``.
 2. For each group-1 anchor, a search radius is derived (``space_threshold_m``, widened
@@ -105,19 +105,19 @@ i.e. the partner also matches group 1 AND the anchor also matches group 2, in ON
 store. Only then does a tie-break apply:
 
     an anchor is responsible for a partner when the partner's spatial accuracy is
-    SMALLER, or equal with a greater assertion_id.
+    SMALLER, or equal with a greater observation_id.
 
 The responsible side always reaches: responsibility means ``acc(anchor) >=
 acc(partner)``, so its radius ``threshold + 2*acc(anchor) >= threshold + acc(anchor) +
 acc(partner) >= d`` for any true match. So exactly one visit exists, it is the one that
 can see the pair, and no seen-set, streaming dedup or caching is needed anywhere. With
 ``use_accuracy=False`` every accuracy term is the literal 0, the first disjunct is never
-true and the predicate collapses to ``a.assertion_id > :anchor_id`` — one code path,
+true and the predicate collapses to ``a.observation_id > :anchor_id`` — one code path,
 both behaviours.
 
 WHY the tie-break is CONDITIONAL on the pair being reachable both ways (this is the
 one place the engine departs from a literal reading of the task): when the groups are
-DISJOINT, only one visit exists, and applying ``assertion_id > anchor`` unconditionally
+DISJOINT, only one visit exists, and applying ``observation_id > anchor`` unconditionally
 would discard that single visit whenever the partner's id happens to sort lower —
 silently losing half of all cross-group matches, including the task's own motivating
 case (group 1 = one identifier, group 2 = empty). The brute-force parity tests fail
@@ -134,7 +134,7 @@ rows would hide evidence (process everything by default).
 
 Same identity: one store excludes, two stores do not (deliberate inversion)
 ---------------------------------------------------------------------------
-Within ONE case, two assertions carrying the same normalised
+Within ONE case, two observations carrying the same normalised
 ``(identifier_type, identifier)`` are never paired: one phone seen by two sources is
 convergence, not concomitance, and "where does this one thing keep appearing" is a
 hotspot question, not this one. Across TWO cases the exclusion is LIFTED: the same IMEI
@@ -144,14 +144,14 @@ either way (two unmarked devices may genuinely be two devices).
 
 Determinism
 -----------
-Anchors are iterated in ``assertion_id`` order and each anchor's partners are returned
-in ``assertion_id`` order, so the emitted stream is ordered by
-``(anchor assertion_id, partner assertion_id)`` and the same request over the same
+Anchors are iterated in ``observation_id`` order and each anchor's partners are returned
+in ``observation_id`` order, so the emitted stream is ordered by
+``(anchor observation_id, partner observation_id)`` and the same request over the same
 case(s) produces a byte-identical file.
 
 In the symmetric single-store case the anchor is always the smaller id AND the two
 orientations of a pair are interchangeable, so that order coincides exactly with the
-old engine's ``(assertion_a, assertion_b)`` sort — produced WITHOUT buffering, which a
+old engine's ``(observation_a, observation_b)`` sort — produced WITHOUT buffering, which a
 final sort would have required. With an ASYMMETRIC window the coincidence stops: a pair
 that satisfies the window only the other way round is emitted partner-first, because
 its ``time_delta_s`` must describe the orientation that actually matched. The stream
@@ -229,7 +229,7 @@ class RunSummary:
 
     ``candidates_examined`` is the number of (anchor, partner) pairs that reached the
     EXACT filter, i.e. the work the S2 index did not manage to skip. It exists so the
-    two ``SpatialStrategy`` options can be compared on evidence rather than assertion
+    two ``SpatialStrategy`` options can be compared on evidence rather than observation
     (see the strategy benchmark in tests/analyze/test_concomitance.py); it never
     affects membership.
     """
@@ -333,7 +333,7 @@ def _cell_block_ranges(latitude: float, longitude: float,
     arithmetic: a cell at one of the cube's 8 corners has SEVEN neighbours, not eight,
     and face-crossing cells wrap in ways only ``get_all_neighbors`` gets right.
     API gotcha: ``get_all_neighbors(level)`` asserts ``level >= self.level()``, and it
-    returns a GENERATOR — so the assertion fires on ITERATION, not on the call. It must
+    returns a GENERATOR — so the observation fires on ITERATION, not on the call. It must
     therefore be called on the parent at the chosen level, never on the level-30 leaf.
     """
     level = s2_level_for_radius(radius_m)
@@ -383,14 +383,14 @@ def _ranges_for(strategy: SpatialStrategy, latitude: float, longitude: float,
 
 @dataclass(frozen=True)
 class _Candidate:
-    """One candidate assertion: identity, integrated point, canonical interval and the
+    """One candidate observation: identity, integrated point, canonical interval and the
     stated uncertainties, plus the rendered strings a result row carries.
 
     Every accuracy field is already NULL-collapsed to 0 by the loader — a point with
     no stated uncertainty is taken at face value.
     """
 
-    assertion_id: str
+    observation_id: str
     identifier: str | None
     identifier_type: str
     entity_type: str
@@ -420,7 +420,7 @@ class _Candidate:
 # point, so a point without one is not a queryable point.
 
 _FROM_JOINS = (
-    " FROM assertion a"
+    " FROM observation a"
     " JOIN entity e ON e.entity_id = a.entity_id"
     " JOIN spatial_integration si"
     "   ON si.spatial_expression_id = a.spatial_expression_id"
@@ -445,9 +445,9 @@ _PRESENCE_PARAMS: tuple[str, ...] = (
     _REFERENCES_TOKEN, _NEVER_ET_TOKEN, _NEVER_ST_TOKEN)
 
 # Every column a _Candidate needs. Selected by the candidate load only; the per-anchor
-# scan selects just the assertion_id and looks the rest up in the preloaded dict.
+# scan selects just the observation_id and looks the rest up in the preloaded dict.
 _CANDIDATE_COLUMNS = (
-    "SELECT a.assertion_id, e.identifier, e.identifier_type, e.type,"
+    "SELECT a.observation_id, e.identifier, e.identifier_type, e.type,"
     " si.latitude_wgs84, si.longitude_wgs84, si.horizontal_accuracy_m,"
     " ti.lower_unix_utc_us, ti.upper_unix_utc_us,"
     " ti.lower_accuracy_us, ti.upper_accuracy_us,"
@@ -501,7 +501,7 @@ def _group_clause(group: EntityGroup) -> tuple[str, list[str]]:
 
 def _load_candidates(connection: sqlite3.Connection,
                      group: EntityGroup) -> dict[str, _Candidate]:
-    """Every candidate assertion for one group, keyed by assertion_id, in id order.
+    """Every candidate observation for one group, keyed by observation_id, in id order.
 
     One indexed pass; the ORDER BY makes the anchor iteration — and therefore the
     emitted stream — deterministic without buffering the results.
@@ -510,14 +510,14 @@ def _load_candidates(connection: sqlite3.Connection,
     group_sql = f" AND {clause}" if clause else ""
     rows = connection.execute(
         _CANDIDATE_COLUMNS + _FROM_JOINS + _PRESENCE_WHERE + group_sql
-        + " ORDER BY a.assertion_id",
+        + " ORDER BY a.observation_id",
         (*_PRESENCE_PARAMS, *params))
     candidates: dict[str, _Candidate] = {}
-    for (assertion_id, identifier, identifier_type, entity_type,
+    for (observation_id, identifier, identifier_type, entity_type,
          latitude, longitude, accuracy_m, lower_us, upper_us,
          lower_acc_us, upper_acc_us, time_start, time_end, source) in rows:
-        candidates[assertion_id] = _Candidate(
-            assertion_id=assertion_id,
+        candidates[observation_id] = _Candidate(
+            observation_id=observation_id,
             identifier=identifier, identifier_type=identifier_type,
             entity_type=entity_type,
             latitude=latitude, longitude=longitude, accuracy_m=accuracy_m,
@@ -650,14 +650,14 @@ def _to_match_row(g1: _Candidate, g2: _Candidate, distance_m: float,
         g1_latitude=g1.latitude, g1_longitude=g1.longitude,
         g1_accuracy_m=g1.accuracy_m,
         g1_time_start=g1.time_start, g1_time_end=g1.time_end,
-        g1_assertion_id=g1.assertion_id, g1_source=g1.source,
+        g1_observation_id=g1.observation_id, g1_source=g1.source,
         g2_identifier=g2.identifier,
         g2_identifier_type=g2.identifier_type,
         g2_entity_type=g2.entity_type,
         g2_latitude=g2.latitude, g2_longitude=g2.longitude,
         g2_accuracy_m=g2.accuracy_m,
         g2_time_start=g2.time_start, g2_time_end=g2.time_end,
-        g2_assertion_id=g2.assertion_id, g2_source=g2.source,
+        g2_observation_id=g2.observation_id, g2_source=g2.source,
         distance_m=distance_m,
         distance_within_accuracy=distance_m > space_threshold_m,
         time_delta_s=gap_us / 1_000_000.0,
@@ -747,12 +747,12 @@ def find_concomitant(
     # column with a 0 bind: with the column, a partner carrying a stated accuracy
     # would fail BOTH disjuncts of the tie-break against a zero-accuracy anchor and
     # the pair would be silently suppressed. The literal keeps the predicate exactly
-    # equal to the old engine's ``a.assertion_id > ?`` — one code path, both behaviours.
+    # equal to the old engine's ``a.observation_id > ?`` — one code path, both behaviours.
     partner_accuracy_sql = (
         "COALESCE(si.horizontal_accuracy_m, 0)" if use_accuracy else "0")
 
     scan_sql_head = (
-        "SELECT a.assertion_id" + _FROM_JOINS + _PRESENCE_WHERE
+        "SELECT a.observation_id" + _FROM_JOINS + _PRESENCE_WHERE
         + (f" AND {group_2_clause}" if group_2_clause else ""))
 
     match_count = 0
@@ -797,19 +797,19 @@ def find_concomitant(
         # genuinely reachable from both sides, i.e. in ONE store with the anchor also
         # in group 2 and the partner also in group 1; otherwise a single visit exists
         # and suppressing it would lose the match outright. See the module docstring.
-        anchor_in_group_2 = one_store and anchor.assertion_id in partners
+        anchor_in_group_2 = one_store and anchor.observation_id in partners
         if anchor_in_group_2:
             sql += (f" AND (NOT ({partner_in_group_1_sql})"
                     f" OR {partner_accuracy_sql} < ?"
-                    f" OR ({partner_accuracy_sql} = ? AND a.assertion_id > ?))")
+                    f" OR ({partner_accuracy_sql} = ? AND a.observation_id > ?))")
             params.extend(group_1_params)
             params.extend((anchor.spatial_accuracy_m if use_accuracy else 0,
                            anchor.spatial_accuracy_m if use_accuracy else 0,
-                           anchor.assertion_id))
+                           anchor.observation_id))
 
         # ORDER BY keeps each anchor's emissions deterministic, so the streamed file
         # is byte-identical across runs without ever buffering the results.
-        sql += " ORDER BY a.assertion_id"
+        sql += " ORDER BY a.observation_id"
 
         for (partner_id,) in connection_2.execute(sql, params).fetchall():
             partner = partners.get(partner_id)
@@ -820,8 +820,8 @@ def find_concomitant(
             assert partner is not None, (
                 f"partner {partner_id} matched the range scan but is not a "
                 f"candidate: the scan and load predicates drifted")
-            if one_store and partner.assertion_id == anchor.assertion_id:
-                continue          # an assertion is never concomitant with itself
+            if one_store and partner.observation_id == anchor.observation_id:
+                continue          # an observation is never concomitant with itself
             if one_store and _same_identity(anchor, partner):
                 continue          # convergence, not concomitance (see the docstring)
 

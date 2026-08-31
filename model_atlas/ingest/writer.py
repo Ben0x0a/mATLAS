@@ -443,7 +443,7 @@ def _ingest_subunit(
     source_id = ids.source_id(input_file_path, inner_path, subunit)
 
     # APPEND idempotency: a source already in the case from an EARLIER run must not be
-    # re-ingested — its assertions already exist and a second write would collide. Skip it and
+    # re-ingested — its observations already exist and a second write would collide. Skip it and
     # RECORD the skip (no silent loss); the assemble loop skips it too (run_id mismatch). A
     # within-run duplicate (same run_id) is a DIFFERENT matter: the discover dedup should have
     # prevented it, so it falls through to write_source and raises, surfacing the breach loudly.

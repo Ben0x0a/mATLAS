@@ -3,7 +3,7 @@
 Defines:    the ``Exporter`` protocol (refactor_plan.md §3 — ``export(store, ctx)``),
             ``ExportContext`` (the output settings one export needs), and
             ``CsvFlatExporter`` — the shipped flat-CSV brick. It projects the run store
-            through ``core.flat_view`` (one row per assertion, the authoritative
+            through ``core.flat_view`` (one row per observation, the authoritative
             ``docs/csv_migration.md`` column order plus the per-run ``orig_<col>`` tail)
             and writes it as a single ``utf-8-sig`` semicolon CSV (one file per format —
             the ``preset_id`` column separates presets for a caller who wants that).
@@ -16,7 +16,7 @@ Depends on: ``model_atlas.core.flat_view`` (``build_flat_view`` / ``CANONICAL_CO
 
 Why the flat view and not a hand-built frame
 -------------------------------------------
-The flat CSV stopped being a 45-column dict assembled per assertion; it is now a
+The flat CSV stopped being a 45-column dict assembled per observation; it is now a
 GENERATED query over the run database (docs/csv_migration.md). This brick therefore owns
 no column knowledge of its own — the order, the numeric dtypes and the ``orig_<col>``
 explosion all come from ``core.flat_view``. The four mandatory columns

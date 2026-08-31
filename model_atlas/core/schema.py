@@ -176,7 +176,7 @@ def _table_specs() -> "list[dict[str, Any]]":
          "not_null": ["source_id", "line_no", "raw_json"],
          "fks": {"source_id": ("source", "source_id")},
          "unique": [("source_id", "line_no")]},
-        # -- Layer 1: assertion ----------------------------------------------
+        # -- Layer 1: observation ----------------------------------------------
         {"name": "activity", "dataclass": V.Activity, "pk": "activity_id"},
         {"name": "activity_record", "dataclass": V.ActivityRecord,
          "pk": "activity_record_id",
@@ -208,7 +208,7 @@ def _table_specs() -> "list[dict[str, Any]]":
          "fks": {"temporal_expression_id":
                  ("temporal_expression", "temporal_expression_id")},
          "unique": [("temporal_expression_id", "ordinal")]},
-        {"name": "assertion", "dataclass": V.Assertion, "pk": "assertion_id",
+        {"name": "observation", "dataclass": V.Observation, "pk": "observation_id",
          "not_null": ["raw_record_id", "preset_id", "output_ordinal", "entity_id",
                       "content_hash", "claim_digest"],
          "fks": {"raw_record_id": ("raw_record", "raw_record_id"),
@@ -219,13 +219,13 @@ def _table_specs() -> "list[dict[str, Any]]":
                  ("spatial_expression", "spatial_expression_id"),
                  "temporal_expression_id":
                  ("temporal_expression", "temporal_expression_id")},
-         # The owned corners + the entity are 1:1 with the assertion (§2 guard: two
-         # assertions may never share a corner row or an entity row).
+         # The owned corners + the entity are 1:1 with the observation (§2 guard: two
+         # observations may never share a corner row or an entity row).
          "unique_cols": ["entity_id", "spatial_expression_id", "temporal_expression_id"],
          "unique": [("raw_record_id", "preset_id", "output_ordinal")],
-         "indexes": [("ix_assertion_ch", ("content_hash",)),
-                     ("ix_assertion_cd", ("claim_digest",)),
-                     ("ix_assertion_act", ("activity_id",))]},
+         "indexes": [("ix_observation_ch", ("content_hash",)),
+                     ("ix_observation_cd", ("claim_digest",)),
+                     ("ix_observation_act", ("activity_id",))]},
         # -- Layer 2: integration --------------------------------------------
         {"name": "spatial_integration", "dataclass": V.SpatialIntegration,
          "pk": "spatial_integration_id",
@@ -247,9 +247,9 @@ def _table_specs() -> "list[dict[str, Any]]":
          "unique_cols": ["temporal_expression_id"]},
         # -- Layer 3: analysis -----------------------------------------------
         {"name": "analysis", "dataclass": V.Analysis, "pk": "analysis_id",
-         "not_null": ["assertion_id", "method"],
-         "fks": {"assertion_id": ("assertion", "assertion_id")},
-         "unique": [("assertion_id", "method")]},
+         "not_null": ["observation_id", "method"],
+         "fks": {"observation_id": ("observation", "observation_id")},
+         "unique": [("observation_id", "method")]},
         {"name": "edit_log", "dataclass": V.EditLog, "pk": "edit_id",
          "not_null": ["ordinal"],
          "unique_cols": ["ordinal"]},   # a monotonic UNIQUE journal position
@@ -279,7 +279,7 @@ _POSSIBLE_SAME_EVIDENCE_VIEW = (
     "CREATE VIEW possible_same_evidence AS\n"
     "    SELECT a.claim_digest, COUNT(*) AS copies,\n"
     "           GROUP_CONCAT(s.input_file_path, ' | ') AS files\n"
-    "    FROM assertion a\n"
+    "    FROM observation a\n"
     "    JOIN raw_record r ON r.raw_record_id = a.raw_record_id\n"
     "    JOIN source s ON s.source_id = r.source_id\n"
     "    GROUP BY a.claim_digest HAVING COUNT(*) > 1;"

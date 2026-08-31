@@ -4,7 +4,7 @@ Defines:    ``GOLDEN_SRC`` (the committed golden fixture directory), ``rows`` (a
             dict-row SELECT helper), ``run_relational_pipeline`` (drives the full
             new-engine brick chain over a golden fixture into a ``RunStore`` — the
             same runner ``test_csv_flat.py`` used before this extraction) and
-            ``build_manual_store`` (a small, hand-authored two-assertion store, for
+            ``build_manual_store`` (a small, hand-authored two-observation store, for
             exercising GeoVisualizer's interval-bound expansion and IMEI extraction
             under full control, without going through a preset).
 Used by:    tests/export/test_csv_flat.py, test_kml.py, test_geojson.py,
@@ -55,7 +55,7 @@ def _preset_row(spec: PresetSpec) -> V.Preset:
     """The store's ``preset`` row for a loaded spec.
 
     ``preset_id`` derives from (key ⟂ version) exactly as ``assemble_source``
-    re-derives it, so the assertion FK matches by construction; ``name`` carries the
+    re-derives it, so the observation FK matches by construction; ``name`` carries the
     spec's display title (the human string the old flat model showed as
     ``preset_name``); the ``definition_digest`` is the YAML bytes' sha256 (stable +
     change-detecting for D40).
@@ -84,7 +84,7 @@ def _source_units(specs: list[PresetSpec]) -> dict[str, str]:
         for field_spec in spec.common:
             if field_spec.unit:
                 units[field_spec.model_field] = field_spec.unit
-        for template in spec.assertions:
+        for template in spec.observations:
             for field_spec in template.fields:
                 if field_spec.unit:
                     units[field_spec.model_field] = field_spec.unit
@@ -94,7 +94,7 @@ def _source_units(specs: list[PresetSpec]) -> dict[str, str]:
 def _datetime_format(spec: PresetSpec) -> str | None:
     """The strptime format the spec's (single) time declares — the local_string decode
     instruction L2's TzLocalise needs; None for an epoch/ISO spec."""
-    for template in spec.assertions:
+    for template in spec.observations:
         for time_spec in template.temporal:
             return time_spec.format
     return None
@@ -103,7 +103,7 @@ def _datetime_format(spec: PresetSpec) -> str | None:
 def _integrate_temporal_for_preset(store: RunStore, spec: PresetSpec) -> None:
     """Integrate the not-yet-integrated temporal expressions this spec produced.
 
-    HOW: re-read each temporal_expression reachable from this preset's assertions plus
+    HOW: re-read each temporal_expression reachable from this preset's observations plus
     its verbatim component rows, wrap them as a method bundle, and run the standard
     method set configured with the spec's own datetime format. WHY per preset (not one
     whole-store pass): the parsing format/zone live in the preset, not the store, so
@@ -116,7 +116,7 @@ def _integrate_temporal_for_preset(store: RunStore, spec: PresetSpec) -> None:
         store,
         "SELECT DISTINCT te.temporal_expression_id, te.kind, te.referential, "
         "te.temporal_source FROM temporal_expression te "
-        "JOIN assertion a ON a.temporal_expression_id = te.temporal_expression_id "
+        "JOIN observation a ON a.temporal_expression_id = te.temporal_expression_id "
         "WHERE a.preset_id = ? AND te.temporal_expression_id NOT IN "
         "(SELECT temporal_expression_id FROM timespan_integration)",
         preset_id,
@@ -220,7 +220,7 @@ MANUAL_IMEI = "490154203237518"
 MANUAL_IMEI_IDENTIFIER = f"dev_{MANUAL_IMEI}-x"
 
 
-def _write_assertion(
+def _write_observation(
     store: RunStore,
     *,
     tag: str,
@@ -238,7 +238,7 @@ def _write_assertion(
     upper_field: str,
     line_no: int,
 ) -> None:
-    """Write one complete, self-contained assertion: its raw_record, entity, owned
+    """Write one complete, self-contained observation: its raw_record, entity, owned
     corners (spatial + temporal, header + one component each) and their L2
     integrations. ``lower_us``/``upper_us`` equal for an instant, distinct for a
     genuine interval — the case GeoVisualizer's row-per-bound expansion exists for.
@@ -247,7 +247,7 @@ def _write_assertion(
     entity_id = f"entity-{tag}"
     spatial_expression_id = f"sx-{tag}"
     temporal_expression_id = f"tx-{tag}"
-    assertion_id = f"assertion-{tag}"
+    observation_id = f"observation-{tag}"
 
     store.write_raw_record(V.RawRecord(
         raw_record_id=raw_record_id, source_id=_SOURCE_ID, line_no=line_no, raw_json="{}"))
@@ -287,8 +287,8 @@ def _write_assertion(
         method="tz_localize/1.0", lower_unix_utc_us=lower_us, upper_unix_utc_us=upper_us,
         utc_offset_hours_lower=offset_lower, utc_offset_hours_upper=offset_upper))
 
-    store.write_assertion(V.Assertion(
-        assertion_id=assertion_id, raw_record_id=raw_record_id, preset_id=_PRESET_ID,
+    store.write_observation(V.Observation(
+        observation_id=observation_id, raw_record_id=raw_record_id, preset_id=_PRESET_ID,
         output_ordinal=0, entity_id=entity_id, content_hash=f"content-{tag}",
         claim_digest=f"claim-{tag}", entity_role=V.EntityRole.SUBJECT,
         entity_position_link=V.EntityPositionLink.AT,
@@ -301,7 +301,7 @@ def _write_assertion(
 
 
 def build_manual_store(store: RunStore) -> None:
-    """Write a small, hand-authored store: TWO assertions crafted directly (not via a
+    """Write a small, hand-authored store: TWO observations crafted directly (not via a
     preset run):
       - "instant": a bare device entity (no identifier), a single-instant time
         (lower == upper) — the shape the golden fixtures also use.
@@ -320,7 +320,7 @@ def build_manual_store(store: RunStore) -> None:
         source_id=_SOURCE_ID, run_id=_RUN_ID,
         input_file_path="/manual/source.csv", format="csv"))
 
-    _write_assertion(
+    _write_observation(
         store, tag="instant", identifier=None, identifier_type=V.IdentifierType.NONE,
         latitude=46.5197, longitude=6.6323, horizontal_accuracy_m=12.0,
         horizontal_speed_kmh=10.8,
@@ -328,7 +328,7 @@ def build_manual_store(store: RunStore) -> None:
         offset_lower=0.0, offset_upper=0.0,
         lower_field="Timestamp", upper_field="Timestamp", line_no=1,
     )
-    _write_assertion(
+    _write_observation(
         store, tag="interval", identifier=MANUAL_IMEI_IDENTIFIER,
         identifier_type=V.IdentifierType.IMEI,
         latitude=46.2044, longitude=6.1432, horizontal_accuracy_m=8.5,

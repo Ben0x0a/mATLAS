@@ -20,7 +20,7 @@ input_selector: {format: csv, name: c.csv}
 expected_fields: [Lat, Lon, TS, Loc, "Item ID", Source]
 source_record_uid: 'field("Item ID")'
 common: {entity: const(device), input_record_id: field(Loc), raw_source_path: field(Source)}
-assertions:
+observations:
   - position: {latitude: field(Lat), longitude: field(Lon), spatial_referential: const(epsg:4326)}
     time: {instant: field(TS), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}

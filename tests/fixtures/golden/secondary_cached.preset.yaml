@@ -33,7 +33,7 @@ common:
   input_record_id: field(Location)
   raw_source_path: field(Source)
 
-assertions:
+observations:
   - position:
       latitude:              field(Latitude)
       longitude:             field(Longitude)

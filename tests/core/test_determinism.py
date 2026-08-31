@@ -201,7 +201,7 @@ def test_blob_envelope_carries_digest_and_size_never_bytes() -> None:
 
 def _build_run(store: RunStore, *, input_file_path: str,
                container_chain: tuple[str, ...], fingerprint: str) -> dict[str, str]:
-    """One case/run/preset/source/record/assertion (+ one edit), paths through rule 4.
+    """One case/run/preset/source/record/observation (+ one edit), paths through rule 4.
 
     Digests are computed with core.ids exactly as the assembler will. Returns the
     run-carrying ids (the uuid4 roots and the uuid5s derived FROM run_id) so the
@@ -242,13 +242,13 @@ def _build_run(store: RunStore, *, input_file_path: str,
         entity=ids.EntityProjection("+41791234567", V.IdentifierType.MSISDN,
                                     V.EntityType.DEVICE),
         spatial=None, temporal=None,
-        links=ids.AssertionLinks(entity_role=V.EntityRole.CALLER),
+        links=ids.ObservationLinks(entity_role=V.EntityRole.CALLER),
         deleted=None, multiplicity=None, activity=None)
     content_hash, claim_digest = ids.digests(fingerprint_sha256=fingerprint,
                                              preset_key="cdr_generic", line_no=1,
                                              output_ordinal=0, l1=l1)
-    store.write_assertion(V.Assertion(
-        assertion_id=ids.assertion_id(rr_id, "cdr_generic", 0), raw_record_id=rr_id,
+    store.write_observation(V.Observation(
+        observation_id=ids.observation_id(rr_id, "cdr_generic", 0), raw_record_id=rr_id,
         preset_id=preset_id, output_ordinal=0, entity_id=entity_id,
         content_hash=content_hash, claim_digest=claim_digest,
         entity_role=V.EntityRole.CALLER))
@@ -261,7 +261,7 @@ def _build_run(store: RunStore, *, input_file_path: str,
 
 def test_folder_and_zip_disclosures_share_digests_end_to_end() -> None:
     """Folder==zip parity THROUGH the store: the same bytes disclosed loose and zipped
-    persist byte-equal assertion digests (no path enters a digest), while the two
+    persist byte-equal observation digests (no path enters a digest), while the two
     sources stay two distinct rows. Pure-function parity:
     test_ids.py::test_folder_and_zip_of_same_evidence_share_both_digests.
     """
@@ -271,7 +271,7 @@ def test_folder_and_zip_disclosures_share_digests_end_to_end() -> None:
         _build_run(zip_store, input_file_path="/case/exhibit_A.zip",
                    container_chain=("exhibit_A.zip", "cdr.csv"),
                    fingerprint="fp-same-bytes")
-        digest_sql = "SELECT content_hash, claim_digest FROM assertion"
+        digest_sql = "SELECT content_hash, claim_digest FROM observation"
         assert (folder_store.connection.execute(digest_sql).fetchall()
                 == zip_store.connection.execute(digest_sql).fetchall())
         source_sql = "SELECT source_id FROM source"

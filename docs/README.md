@@ -10,7 +10,7 @@ The settled data model — what the run database records and why.
 
 | Doc | What it covers |
 | --- | --- |
-| [model/conceptual_model.md](model/conceptual_model.md) | What mATLAS records at the conceptual level: the entity–space–time assertion. |
+| [model/conceptual_model.md](model/conceptual_model.md) | What mATLAS records at the conceptual level: the entity–space–time observation. |
 | [model/schema.md](model/schema.md) | The run database schema — the tables, their columns, and the layer discipline. |
 | [model/entity_model.md](model/entity_model.md) | The entity side: identifiers, normalisation, and the deferred analyst layer. |
 | [model/identity_model.md](model/identity_model.md) | What carries an identity in the model, and why. |

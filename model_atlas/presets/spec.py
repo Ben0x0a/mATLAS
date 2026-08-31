@@ -1,7 +1,7 @@
 """Declarative preset schema (v3) for the pluggable pipeline.
 
 Defines:    the typed preset structures (PresetMeta, InputSelector, FieldSpec, TimeSpec,
-            Links, AssertionTemplate, PresetSpec) and preset_spec_from_yaml(), which
+            Links, ObservationTemplate, PresetSpec) and preset_spec_from_yaml(), which
             parses + validates a v3 YAML preset against the canonical model.
 Used by:    the loader, the assembly engine, the matcher, and reporting.
 Depends on: core.vocabularies (the link/tier/state enums), presets.expr (ref + pipe
@@ -27,7 +27,7 @@ v3 layout (readable, examiner-first)::
     patterns: {coords: "(?P<lat>...) - (?P<lon>...)"}
     common:
       entity: const(device)
-    assertions:
+    observations:
       - position: {latitude: field(ZLATITUDE), longitude: field(ZLONGITUDE),
                    spatial_referential: const(epsg:4326)}
         time:     {instant: field(ZTIMESTAMP), epoch: cocoa, zone: UTC}
@@ -159,7 +159,7 @@ DURATION_BOUND_NAME = "duration_sec"
 # must fail at load, where the author can still fix it.
 TOP_LEVEL_KEYS = frozenset({
     "preset", "input_selector", "source_record_uid", "expected_fields",
-    "lookup_tables", "patterns", "common", "assertions",
+    "lookup_tables", "patterns", "common", "observations",
 })
 
 
@@ -326,9 +326,9 @@ class Links:
 
 
 @dataclass(frozen=True)
-class AssertionTemplate:
+class ObservationTemplate:
     fields: tuple[FieldSpec, ...]   # from `position:` + the `links:` constants
-    temporal: tuple[TimeSpec, ...]  # always length 1 in v3 (one time per assertion)
+    temporal: tuple[TimeSpec, ...]  # always length 1 in v3 (one time per observation)
 
 
 @dataclass(frozen=True)
@@ -343,7 +343,7 @@ class PresetSpec:
     # stated choice from an omission and advise on the omission alone.
     source_record_uid_default: bool = False
     common: tuple[FieldSpec, ...] = ()
-    assertions: tuple[AssertionTemplate, ...] = ()
+    observations: tuple[ObservationTemplate, ...] = ()
     lookup_tables: dict[str, dict[Any, Any]] = field(default_factory=dict)
     patterns: dict[str, str] = field(default_factory=dict)
     # The full source-field inventory the examiner declares before mapping. Drives the
@@ -596,18 +596,18 @@ def _parse_time_bound(raw: Any, path: Path, patterns: dict[str, str]) -> tuple[R
     return parse_ref(raw), None
 
 
-def _parse_assertion(raw: Any, path: Path, patterns: dict[str, str]) -> AssertionTemplate:
+def _parse_observation(raw: Any, path: Path, patterns: dict[str, str]) -> ObservationTemplate:
     if not isinstance(raw, dict):
-        raise ValueError(f"{path}: each assertion must be a mapping")
+        raise ValueError(f"{path}: each observation must be a mapping")
     if "time" not in raw:
-        raise ValueError(f"{path}: each assertion must declare 'time'")
+        raise ValueError(f"{path}: each observation must declare 'time'")
     position = raw.get("position") or {}
     if not isinstance(position, dict):
         raise ValueError(f"{path}: 'position' must be a mapping")
     fields = [_parse_field(key, value, path, patterns) for key, value in position.items()]
     fields.extend(_parse_links(raw.get("links"), path).as_field_specs())
     time = _parse_time(raw["time"], path, patterns)
-    return AssertionTemplate(fields=tuple(fields), temporal=(time,))
+    return ObservationTemplate(fields=tuple(fields), temporal=(time,))
 
 
 def _parse_one_selector(raw: Any, path: Path) -> InputSelector:
@@ -676,7 +676,7 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
         raise ValueError(
             f"{path}: unknown top-level key(s) {unknown}; admitted keys are "
             f"{sorted(TOP_LEVEL_KEYS)}. A model field belongs under 'common:' (or an "
-            f"assertion's 'position:'), never at the top level — at the top level its "
+            f"observation's 'position:'), never at the top level — at the top level its "
             f"mapping is not read at all"
         )
 
@@ -718,16 +718,16 @@ def preset_spec_from_yaml(raw_obj: object, path: Path) -> PresetSpec:
         raise ValueError(f"{path}: 'common' must be a mapping")
     common = tuple(_parse_field(key, value, path, patterns) for key, value in common_raw.items())
 
-    assertions_raw = raw.get("assertions")
-    if not isinstance(assertions_raw, list) or not assertions_raw:
-        raise ValueError(f"{path}: 'assertions' must be a non-empty list")
-    assertions = tuple(_parse_assertion(entry, path, patterns) for entry in assertions_raw)
+    observations_raw = raw.get("observations")
+    if not isinstance(observations_raw, list) or not observations_raw:
+        raise ValueError(f"{path}: 'observations' must be a non-empty list")
+    observations = tuple(_parse_observation(entry, path, patterns) for entry in observations_raw)
 
     return PresetSpec(
         meta=meta, input_selectors=input_selectors, path=path,
         source_record_uid=source_record_uid,
         source_record_uid_default=source_record_uid_default,
-        common=common, assertions=assertions,
+        common=common, observations=observations,
         lookup_tables={str(k): dict(v) for k, v in lookup_tables.items()},
         patterns=patterns,
         expected_fields=tuple(expected),

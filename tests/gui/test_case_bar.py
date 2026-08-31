@@ -7,7 +7,7 @@ identity from a name + folder, Close case detaches it and restores the two butto
 file that is not a mATLAS case DB is refused without a crash.
 
 The case name and output folder are no longer form fields — they live on the controller as
-_case_name / _case_output_dir, set by the case bar — so the assertions read that state.
+_case_name / _case_output_dir, set by the case bar — so the observations read that state.
 Used by:    pytest (the shared ``controller`` fixture and the headless offscreen platform both
             come from tests/gui/conftest.py).
 Depends on: gui.app (MainController), model_atlas.app.pipeline, the golden preset fixture.

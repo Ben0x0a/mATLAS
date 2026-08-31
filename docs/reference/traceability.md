@@ -18,9 +18,9 @@ sidecar — it does not abort the run.
 
 The complete, queryable record of a run is the **run database** (see
 [../model/schema.md](../model/schema.md)) — the SQLite store projected to the flat CSV via the
-`assertion_flat` view. Selecting the `sqlite` export persists it to
+`observation_flat` view. Selecting the `sqlite` export persists it to
 `<base>.matlas.sqlite`: every relational table (`run`, `source`, `record`, `entity`,
-`position`, `timespan`, `assertion`) plus the `assertion_flat` view, so an examiner can query
+`position`, `timespan`, `observation`) plus the `observation_flat` view, so an examiner can query
 what the flat CSV cannot answer. Row-level provenance lives there, once per source/record,
 rather than repeated per output row.
 
@@ -63,7 +63,7 @@ Each entry in `sources` records:
 - `parser` — parser name and version from the preset;
 - `source_tier` — evidential tier declared in the preset;
 - `record_count` — rows extracted from the source;
-- `assertion_count` — assertion rows produced after mapping.
+- `observation_count` — observation rows produced after mapping.
 
 The per-source **P/E/M frontier** is *not* duplicated here — it lives in the warnings sidecar
 (the model-shift report), keeping the traceability document to source identity and provenance.

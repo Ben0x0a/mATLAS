@@ -9,7 +9,7 @@ schema](../model/schema.md).
 
 A preset is a YAML file. Presets are loaded recursively from a preset folder, or loaded
 directly when `--presets` points at a single YAML file. A preset selects one source,
-extracts its rows, and maps each source row into one or more canonical **assertion**
+extracts its rows, and maps each source row into one or more canonical **observation**
 rows (the source's words, Layer 1). No unit conversion, timezone resolution, or datum
 adoption happens in a preset — those are method-stamped Layer-2 interpretations. A
 preset states only what the source says and how to decode it.
@@ -52,11 +52,11 @@ lookup_tables:                            # optional; name -> {key: value}
 patterns:                                 # optional; name -> regex (named groups)
   coords: "(?P<lat>-?\\d+\\.\\d+) - (?P<lon>-?\\d+\\.\\d+)"
 
-common:                                   # optional; fields shared by every assertion
+common:                                   # optional; fields shared by every observation
   entity: param(entity)
   entity_type: const(device)
 
-assertions:                               # required; non-empty list
+observations:                               # required; non-empty list
   - position:
       latitude:  field(ZLATITUDE)
       longitude: field(ZLONGITUDE)
@@ -81,8 +81,8 @@ assertions:                               # required; non-empty list
 | `expected_fields` | no | list of strings | The declared source-field inventory; drives the drift/frontier report (see §6). |
 | `lookup_tables` | no | mapping of name → table | Named value maps for the `lookup` pipe (see §10). |
 | `patterns` | no | mapping of name → regex | Named regexes (with named groups) for `extract` and the `regex` pipe (see §10). |
-| `common` | no | mapping | Field mappings shared by every assertion of a record (see §7). |
-| `assertions` | yes | non-empty list | One entry per position/time/links grouping (see §7). |
+| `common` | no | mapping | Field mappings shared by every observation of a record (see §7). |
+| `observations` | yes | non-empty list | One entry per position/time/links grouping (see §7). |
 
 This set is **closed**: any other top-level key is a load-time error. The rejection exists
 because a model field written at the top level instead of under `common:` (a stray
@@ -90,8 +90,8 @@ because a model field written at the top level instead of under `common:` (a str
 the mapping looked present and produced nothing.
 
 Any spatial or entity field may be declared once in `common:` instead of repeating it in
-each assertion; a `common:`-mapped coordinate becomes a spatial component shared by every
-assertion the record fans out into.
+each observation; a `common:`-mapped coordinate becomes a spatial component shared by every
+observation the record fans out into.
 
 ## 3. `preset` header
 
@@ -189,7 +189,7 @@ of the activity's context object). Mapping any other name is a load-time error
 | `entity` | `entity.raw_identifier` | The identifier as written in the source (verbatim). The normalised `identifier` and `concerns_uid` are filled later by the entity normaliser. |
 | `entity_type` | `entity.type` | Defaults to `unknown` when unmapped. |
 | `concerns` | `entity.concerns` | The attributed party (verbatim). |
-| `entity_role` | `assertion.entity_role` | One `EntityRole` member. |
+| `entity_role` | `observation.entity_role` | One `EntityRole` member. |
 | `identifier_type` | `entity.identifier_type` | Names the identifier kind; free text (see `IdentifierType` for the recognised kinds). Defaults to `none`. |
 
 ### 5.2 Temporal (assignable subset)
@@ -231,16 +231,16 @@ source's latitude / longitude words". The datum is stated separately via
 | Field | Target |
 | --- | --- |
 | `activity_kind` | `activity.kind` (`ActivityKind`). Mapping it **in `common:`** creates the record's activity; without it no activity row is written. |
-| `multiplicity` | `assertion.multiplicity` (integer; NULL means 1). |
+| `multiplicity` | `observation.multiplicity` (integer; NULL means 1). |
 | `context.<key>` | One entry of `activity.context_json` (e.g. `context.callee`, `context.caller_imei`). The key after the dot is free text. |
 
 ### 5.5 Bindings (the three links)
 
 | Field | Target |
 | --- | --- |
-| `entity_position_link` | `assertion.entity_position_link` (`EntityPositionLink`). |
-| `entity_time_link` | `assertion.entity_time_link` (`EntityTimeLink`). |
-| `spatial_temporal_link` | `assertion.spatial_temporal_link` (`SpatialTemporalLink`). |
+| `entity_position_link` | `observation.entity_position_link` (`EntityPositionLink`). |
+| `entity_time_link` | `observation.entity_time_link` (`EntityTimeLink`). |
+| `spatial_temporal_link` | `observation.spatial_temporal_link` (`SpatialTemporalLink`). |
 
 The short `links:` block (§9) is the ergonomic way to set these three with bare enum
 tokens. Use the full column names here when a link value must come from a conditional or
@@ -252,10 +252,10 @@ another reference rather than a bare token.
 | --- | --- |
 | `raw_source_path` | Legacy alias of `data_source` — the source-grain `data_source` on the `source` row. Resolved once per source. |
 | `data_source` | Where the trace originally lived (preferred spelling). |
-| `input_record_id` | `assertion.input_record_id` — a human locator back to the source record; defaults to `<table-or-sheet>#<ordinal>` when unmapped. |
-| `source_label` | `assertion.source_label` — one per-claim provenance label. |
+| `input_record_id` | `observation.input_record_id` — a human locator back to the source record; defaults to `<table-or-sheet>#<ordinal>` when unmapped. |
+| `source_label` | `observation.source_label` — one per-claim provenance label. |
 | `source_tier` | Accepted and validated against `SourceTier`; the header `tier` is the usual place to state the tier. |
-| `deleted` | `assertion.deleted` (`RecordState`) — the app's own record-state flag. |
+| `deleted` | `observation.deleted` (`RecordState`) — the app's own record-state flag. |
 
 ### 5.7 Engine-owned fields (never assignable)
 
@@ -286,18 +286,18 @@ expected_fields:
 It is optional but recommended; the linter advises when it is missing and warns when the
 mapping reads a field the inventory does not cover.
 
-## 7. Field mappings: `common` and `assertions`
+## 7. Field mappings: `common` and `observations`
 
-`common:` is a mapping of `<assignable-field>: <value>` shared by every assertion. Each
-`assertions:` entry is a mapping with:
+`common:` is a mapping of `<assignable-field>: <value>` shared by every observation. Each
+`observations:` entry is a mapping with:
 
 - `position:` — a mapping of spatial fields plus any scalar fields (links by full column
   name, roles, `deleted`, `multiplicity`, `context.<key>`, …).
-- `time:` — the temporal block (§11). **Required** on every assertion.
+- `time:` — the temporal block (§11). **Required** on every observation.
 - `links:` — the three edges as bare enum tokens (§9). Optional.
 
-One assertion = one position + one time + the three links. For two times at one place
-(e.g. a dwell interval and a created instant), write two `assertions:` entries; they share
+One observation = one position + one time + the three links. For two times at one place
+(e.g. a dwell interval and a created instant), write two `observations:` entries; they share
 the record's UID automatically.
 
 ### 7.1 Value forms
@@ -415,7 +415,7 @@ source_label: format("{field(FirstName)} {field(LastName)} from {field(City)}")
 
 ## 9. `links`
 
-The assertion's three edges, grouped, as bare enum tokens:
+The observation's three edges, grouped, as bare enum tokens:
 
 ```yaml
 links:
@@ -500,7 +500,7 @@ value-map must be unambiguous.
 
 ## 11. `time`
 
-Parsed by `_parse_time`. **Required** on every assertion.
+Parsed by `_parse_time`. **Required** on every observation.
 
 ```yaml
 time:
@@ -608,10 +608,10 @@ Three columns, three jobs:
 
 - **`source_record_uid`** (optional top-level key, parsed as a non-assignable field-spec):
   reference a genuine source UID (a tool's Item ID, a real UUID column) when one exists; the
-  value is used verbatim, stored on the assertion, and projected into the CSV
+  value is used verbatim, stored on the observation, and projected into the CSV
   `source_record_uid` column in place of the generated id. Because it is preset-resolved it
-  lives at **L1 on the assertion**, beside `input_record_id` — never on the L0 `raw_record`,
-  which is written before any preset is matched. It repeats on every assertion one record
+  lives at **L1 on the observation**, beside `input_record_id` — never on the L0 `raw_record`,
+  which is written before any preset is matched. It repeats on every observation one record
   fans out into: that repetition is the point, since the column's job is to **group** them.
   For a device DB write **`source_record_uid: default`** (or omit the key) so the engine
   generates a deterministic, content-addressed UID independent of the file name/path
@@ -657,7 +657,7 @@ The members (from `core/vocabularies.py`):
 
 The parser rejects, at load, a preset that:
 
-- omits `preset.id` / `preset.name`, or `input_selector`, or a non-empty `assertions`
+- omits `preset.id` / `preset.name`, or `input_selector`, or a non-empty `observations`
   list;
 - gives an `input_selector` neither/both of `path` and `name`, a `format` outside
   `csv|excel|sqlite|xml`, a sqlite selector neither/both of `table`/`sql`, an excel

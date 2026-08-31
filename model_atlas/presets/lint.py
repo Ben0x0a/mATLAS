@@ -20,7 +20,7 @@ what is wrong usually knows what is right, and the fix is what the author needs.
 Three severities:
 - ERROR  : the preset does not parse/validate and will not load.
 - WARNING: the preset loads but is very likely wrong (a half-coordinate, an
-           assertion missing a link).
+           observation missing a link).
 - ADVICE : a best-practice / consistency nudge (naming, tier/tool coherence,
            using a named epoch codec instead of raw arithmetic, etc.).
 
@@ -70,7 +70,7 @@ class LintFinding:
     code: str                # stable short code, e.g. "rowid-as-uid"
     message: str
     preset: str              # source path or preset id
-    location: str | None = None  # e.g. "assertions[0].links"
+    location: str | None = None  # e.g. "observations[0].links"
     # The YAML to write instead — a correction the author can paste, not a restatement of the
     # problem. WHY a separate field and not more prose in ``message``: the message says what is
     # wrong (and is what a caller greps or groups by), the suggestion says what to do, and a
@@ -131,7 +131,7 @@ def lint_spec(spec: PresetSpec, *, preset_label: str | None = None) -> list[Lint
         _check_epoch_arithmetic_smell,
         _check_expected_fields,
         _check_mapped_fields_declared,
-        _check_assertions,
+        _check_observations,
         _check_unfilled_placeholders,
         _check_literal_uuid_in_path,
         _check_multi_role,
@@ -182,7 +182,7 @@ def _plain_fields(spec: PresetSpec) -> set[str]:
         add_spec(spec.source_record_uid)
     for field in spec.common:
         add_spec(field)
-    for tmpl in spec.assertions:
+    for tmpl in spec.observations:
         for field in tmpl.fields:
             add_spec(field)
         for time in tmpl.temporal:
@@ -240,10 +240,10 @@ def _raw_conditional_links(raw: dict, label: str) -> list[LintFinding]:
     """A conditional under ``links:``. The short block takes BARE ENUM TOKENS only; a value
     that must be computed is mapped by its full column name under ``position:``."""
     out: list[LintFinding] = []
-    for index, assertion in enumerate(raw.get("assertions") or []):
-        if not isinstance(assertion, dict):
+    for index, observation in enumerate(raw.get("observations") or []):
+        if not isinstance(observation, dict):
             continue
-        links = assertion.get("links")
+        links = observation.get("links")
         if not isinstance(links, dict):
             continue
         for key, value in links.items():
@@ -253,7 +253,7 @@ def _raw_conditional_links(raw: dict, label: str) -> list[LintFinding]:
             out.append(LintFinding(
                 ERROR, "conditional-in-links",
                 f"links.{key} holds a conditional; the links block takes bare enum tokens "
-                f"only", label, f"assertions[{index}].links.{key}",
+                f"only", label, f"observations[{index}].links.{key}",
                 suggestion=f"move it under position: as the full column name —\n"
                            f"            {column}: {value}"))
     return out
@@ -347,7 +347,7 @@ def _check_record_uid_not_rowid(spec: PresetSpec, label: str) -> list[LintFindin
 def _check_epoch_arithmetic_smell(spec: PresetSpec, label: str) -> list[LintFinding]:
     out: list[LintFinding] = []
     specs = list(spec.common)
-    for tmpl in spec.assertions:
+    for tmpl in spec.observations:
         specs.extend(tmpl.fields)
     for field in specs:
         for call in field.pipe:
@@ -385,10 +385,10 @@ def _check_mapped_fields_declared(spec: PresetSpec, label: str) -> list[LintFind
     return out
 
 
-def _check_assertions(spec: PresetSpec, label: str) -> list[LintFinding]:
+def _check_observations(spec: PresetSpec, label: str) -> list[LintFinding]:
     out: list[LintFinding] = []
-    for index, tmpl in enumerate(spec.assertions):
-        where = f"assertions[{index}]"
+    for index, tmpl in enumerate(spec.observations):
+        where = f"observations[{index}]"
         fields = {f.model_field for f in tmpl.fields}
         # Half a coordinate is almost always a mistake.
         if ("latitude" in fields) != ("longitude" in fields):
@@ -396,7 +396,7 @@ def _check_assertions(spec: PresetSpec, label: str) -> list[LintFinding]:
                 WARNING, "half-coordinate",
                 "only one of latitude/longitude is mapped — a point needs both; map "
                 "the missing one or drop the partial coordinate", label, f"{where}.position"))
-        # An assertion's three links are its semantics; a missing one is incomplete.
+        # An observation's three links are its semantics; a missing one is incomplete.
         _link_example = {
             "entity_position": "at", "entity_time": "observed_at", "spatial_temporal": "instant",
         }
@@ -405,7 +405,7 @@ def _check_assertions(spec: PresetSpec, label: str) -> list[LintFinding]:
                 edge = link.replace("_link", "")
                 out.append(LintFinding(
                     WARNING, "missing-link",
-                    f"assertion declares no {edge} link — that edge's meaning is undefined; add it "
+                    f"observation declares no {edge} link — that edge's meaning is undefined; add it "
                     f"under links (e.g. {edge}: {_link_example[edge]}) so the row is interpretable",
                     label, f"{where}.links"))
         # A naive strptime parsed as UTC is a silent trap for non-UTC exports.
@@ -443,18 +443,18 @@ def _author_values(spec: PresetSpec) -> list[tuple[str, str]]:
         addspec(spec.source_record_uid, "source_record_uid")
     for field in spec.common:
         addspec(field, f"common.{field.model_field}")
-    for index, tmpl in enumerate(spec.assertions):
+    for index, tmpl in enumerate(spec.observations):
         for field in tmpl.fields:
-            addspec(field, f"assertions[{index}].{field.model_field}")
+            addspec(field, f"observations[{index}].{field.model_field}")
         for time in tmpl.temporal:
-            addref(time.lower, f"assertions[{index}].time")
-            addref(time.upper, f"assertions[{index}].time")
+            addref(time.lower, f"observations[{index}].time")
+            addref(time.upper, f"observations[{index}].time")
             if time.format:
-                out.append((time.format, f"assertions[{index}].time.format"))
+                out.append((time.format, f"observations[{index}].time.format"))
             if time.zone is not None:
-                addspec(time.zone, f"assertions[{index}].time.zone")
+                addspec(time.zone, f"observations[{index}].time.zone")
             for override in time.overrides:
-                addspec(override, f"assertions[{index}].{override.model_field}")
+                addspec(override, f"observations[{index}].{override.model_field}")
     return out
 
 
@@ -519,13 +519,13 @@ _FREE_TEXT_VOCABULARIES: dict[str, frozenset[str]] = {
 
 
 def _all_field_specs(spec: PresetSpec) -> list[tuple[FieldSpec, str]]:
-    """Every mapped FieldSpec with a location label — ``common:`` plus each assertion's
+    """Every mapped FieldSpec with a location label — ``common:`` plus each observation's
     ``position:`` and temporal overrides."""
     out: list[tuple[FieldSpec, str]] = [(f, "common") for f in spec.common]
-    for index, tmpl in enumerate(spec.assertions):
-        out.extend((f, f"assertions[{index}].position") for f in tmpl.fields)
+    for index, tmpl in enumerate(spec.observations):
+        out.extend((f, f"observations[{index}].position") for f in tmpl.fields)
         for time in tmpl.temporal:
-            out.extend((f, f"assertions[{index}].time") for f in time.overrides)
+            out.extend((f, f"observations[{index}].time") for f in time.overrides)
     return out
 
 
@@ -556,7 +556,7 @@ def _check_coordinates_have_a_referential(spec: PresetSpec, label: str) -> list[
     are never integrated — the row keeps its raw lat/lon and gains no place."""
     out: list[LintFinding] = []
     common = {f.model_field for f in spec.common}
-    for index, tmpl in enumerate(spec.assertions):
+    for index, tmpl in enumerate(spec.observations):
         mapped = {f.model_field for f in tmpl.fields} | common
         if not ({"latitude", "longitude"} & mapped) or "spatial_referential" in mapped:
             continue
@@ -564,7 +564,7 @@ def _check_coordinates_have_a_referential(spec: PresetSpec, label: str) -> list[
             WARNING, "coords-no-referential",
             "coordinates are mapped but no spatial_referential is declared; the datum is "
             "never inferred, so these coordinates are NOT integrated",
-            label, f"assertions[{index}].position",
+            label, f"observations[{index}].position",
             suggestion="spatial_referential: const(epsg:4326)"))
     return out
 
@@ -589,9 +589,9 @@ def _check_zone_and_duration_shape(spec: PresetSpec, label: str) -> list[LintFin
     """Two advisory nudges on the time block: a fixed offset where a zone name would resolve
     DST properly, and a duration bound with no role on its derived end."""
     out: list[LintFinding] = []
-    for index, tmpl in enumerate(spec.assertions):
+    for index, tmpl in enumerate(spec.observations):
         for time in tmpl.temporal:
-            where = f"assertions[{index}].time"
+            where = f"observations[{index}].time"
             zone = time.zone
             if (zone is not None and zone.ref is not None and zone.ref.kind == "const"
                     and isinstance(zone.ref.arg, str)):

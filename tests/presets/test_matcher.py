@@ -46,7 +46,7 @@ preset: {id: a, name: A, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: loc.csv}
 expected_fields: [lat, lon, ts]
 common: {entity: const(device)}
-assertions:
+observations:
   - position: {latitude: field(lat), longitude: field(lon)}
     time: {instant: field(ts), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
@@ -98,7 +98,7 @@ _GLOB_REQUIRED = """
 preset: {id: g, name: G, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: loc.csv}
 common: {entity: const(device)}
-assertions:
+observations:
   - position: {latitude: 'field("ZLAT*")', longitude: field(ZLONGITUDE)}
     time: {instant: field(ZTIMESTAMP), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
@@ -128,7 +128,7 @@ input_selector:
   - {format: csv, name: export.csv}
   - {format: sqlite, name: export.csv, table: T}
 common: {entity: const(device)}
-assertions:
+observations:
   - position: {latitude: field(lat), longitude: field(lon)}
     time: {instant: field(ts), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
@@ -166,7 +166,7 @@ input_selector:
   - {format: sqlite, name: multi.sqlite, table: ZRTCLLOCATION}
   - {format: sqlite, name: multi.sqlite, table: ZRTLEARNEDLOCATION}
 common: {entity: const(device)}
-assertions:
+observations:
   - position: {latitude: field(lat), longitude: field(lon)}
     time: {instant: field(ts), epoch: unix_s}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}

@@ -31,12 +31,12 @@ def test_read_case_counts_grows_across_create_then_append(tmp_path: Path) -> Non
     process(_write(tmp_path / "a.csv", "46.5", "1001"), preset, out,
             concerns="subject", base_name="op")          # create: run 1
     after_create = read_case_counts(db)
-    assert after_create == CaseCounts(runs=1, sources=1, assertions=1)
+    assert after_create == CaseCounts(runs=1, sources=1, observations=1)
 
     process(_write(tmp_path / "b.csv", "47.1", "1009"), preset, out,
             concerns="subject", base_name="op")          # append: run 2
     after_append = read_case_counts(db)
-    assert after_append == CaseCounts(runs=2, sources=2, assertions=2)
+    assert after_append == CaseCounts(runs=2, sources=2, observations=2)
 
 
 def test_read_case_counts_opens_a_db_under_a_uri_significant_folder(tmp_path: Path) -> None:
@@ -49,9 +49,9 @@ def test_read_case_counts_opens_a_db_under_a_uri_significant_folder(tmp_path: Pa
     process(_write(tmp_path / "a.csv", "46.5", "1001"), preset, out,
             concerns="subject", base_name="op")
     assert db.is_file()
-    assert read_case_counts(db) == CaseCounts(runs=1, sources=1, assertions=1)
+    assert read_case_counts(db) == CaseCounts(runs=1, sources=1, observations=1)
 
 
 def test_format_case_summary() -> None:
-    summary = format_case_summary("op", CaseCounts(runs=2, sources=3, assertions=512))
-    assert summary == "Case 'op': 2 run(s) · 3 source(s) · 512 assertion(s)"
+    summary = format_case_summary("op", CaseCounts(runs=2, sources=3, observations=512))
+    assert summary == "Case 'op': 2 run(s) · 3 source(s) · 512 observation(s)"

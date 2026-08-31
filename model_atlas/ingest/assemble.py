@@ -1,8 +1,8 @@
-"""The L1 writer: records × one matched preset → assertions / expressions / components.
+"""The L1 writer: records × one matched preset → observations / expressions / components.
 
 Defines:    ``assemble_source`` (the fan-out engine: one reader record × one matched
             preset → activity(+link), entity, spatial/temporal expressions with their
-            verbatim component rows, and the assertion tying them together, written into
+            verbatim component rows, and the observation tying them together, written into
             a ``core.store.RunStore``), ``AssembleReport`` (its testable summary, carrying
             the source-grain ``data_source`` for the caller), and the
             EXTENDED preset field vocabulary (``entity_role``, ``identifier_type``,
@@ -20,7 +20,7 @@ Depends on: ``model_atlas.core`` (``ids`` — every id and both digests, ``vocab
 This is the successor to ``transforms/assemble.py`` (the old module was
 deleted at the cut-over to the relational engine). What was ported is the RESOLUTION
 machinery (refs, conditionals, templates, params, extract); what is NEW is the
-EMISSION: instead of one flat 45-column row per assertion, the engine writes the
+EMISSION: instead of one flat 45-column row per observation, the engine writes the
 settled relational L1 shape (docs/run_db_schema.md).
 
 Reused resolvers
@@ -43,18 +43,18 @@ The old→new field mapping (cross-check table of run_db_schema.md)
 - ``entity_type``       → ``entity.type`` (default ``unknown`` — the column is NOT NULL).
 - ``concerns``     → ``entity.concerns`` (+ ``concerns_origin``).
 - ``position_type``     → the components' ``spatial_role`` (its semantics
-  always were the place's role; the old language carries ONE role per assertion, so it
-  is applied to every component of that expression — one value-group per assertion).
+  always were the place's role; the old language carries ONE role per observation, so it
+  is applied to every component of that expression — one value-group per observation).
 - ``position_source``   → ``spatial_expression.spatial_source``.
 - ``temporal_source``   → ``temporal_expression.temporal_source``.
-- ``deleted``           → ``assertion.deleted`` (the app's OWN flag, distinct from
+- ``deleted``           → ``observation.deleted`` (the app's OWN flag, distinct from
   ``raw_record.recovery_state``).
-- ``source_label``      → ``assertion.source_label`` (the one per-claim provenance field).
+- ``source_label``      → ``observation.source_label`` (the one per-claim provenance field).
 - ``raw_source_path``   → the source-grain ``data_source``: assemble never
-  emits it per assertion — it resolves the value once (first record) and RETURNS it on
+  emits it per observation — it resolves the value once (first record) and RETURNS it on
   the report so the L0 owner can set it on the ``source`` row. ``data_source`` is the
   preferred new spelling; ``raw_source_path`` is accepted as its legacy alias.
-- the three ``links``   → the assertion link columns, joined by the new ``entity_role``.
+- the three ``links``   → the observation link columns, joined by the new ``entity_role``.
 - spatial part fields (``raw_position``, ``latitude``, ``longitude``, … ) → one
   ``spatial_component`` row each, VERBATIM ``raw_value`` + the resolved ``source_field``.
 - the time bounds       → ``temporal_component`` rows (parts ``lower``/``upper``, or a
@@ -78,7 +78,7 @@ No conversion at L1 (the run_db_schema.md invariant)
 Component ``raw_value``s and the entity's ``raw_identifier`` are resolved VERBATIM:
 conditionals choose a source value and ``extract`` selects source text (still verbatim
 characters), but the pipe / unit / cast tail is deliberately NOT applied — every
-conversion is Layer-2's job, method-stamped. Scalar assertion columns
+conversion is Layer-2's job, method-stamped. Scalar observation columns
 (links, roles, ``deleted``, activity kind, context values…) resolve through the FULL
 old tail because a lookup pipe there maps tokens, it does not convert measurements.
 
@@ -196,7 +196,7 @@ class AssembleReport:
     resolved but does NOT write itself (``data_source`` belongs on the
     ``source`` row, which the L0 writer owns — assemble only reports it)."""
 
-    assertion_count: int = 0
+    observation_count: int = 0
     activity_count: int = 0
     data_source: str | None = None
     # mutable default — a shared [] across instances would be a latent aliasing bug.
@@ -340,7 +340,7 @@ def assemble_source(
     its ``raw_record`` rows plus the ``preset`` row; this function derives
     ``raw_record_id`` / ``preset_id`` from the same natural keys (``core.ids``) and
     writes only Layer 1, in parent-before-child order (activity+link → entity + expressions +
-    components → the assertion referencing them). ``PRAGMA foreign_keys = ON`` makes a
+    components → the observation referencing them). ``PRAGMA foreign_keys = ON`` makes a
     missing parent raise immediately, so the layering is enforced, not assumed.
 
     ``entity`` / ``concerns`` are the run-level operator params (they OVERRIDE the
@@ -420,7 +420,7 @@ def assemble_source(
             )
 
         # The source record's own uid, resolved VERBATIM (a source key is L1 evidence: no
-        # pipe, no unit, no cast) once per record and shared by every assertion below.
+        # pipe, no unit, no cast) once per record and shared by every observation below.
         source_record_uid: str | None = None
         if preset.source_record_uid is not None:
             uid_value, _ = _resolve_verbatim(
@@ -441,7 +441,7 @@ def assemble_source(
                 seen_record_uids[source_record_uid] = record.line_no
 
         shared: dict[str, Any] = {}
-        # Spatial parts mapped under ``common:`` become COMPONENTS shared by every assertion
+        # Spatial parts mapped under ``common:`` become COMPONENTS shared by every observation
         # of this record (a ``common:`` coordinate is the record's base place) — resolved
         # once here, not per template.
         shared_components: list[tuple[str, str | None, str | None]] = []
@@ -486,7 +486,7 @@ def assemble_source(
         # --- activity (+ its ONE ingest link) -------------------------------
         # Created only when the preset maps activity_kind in common: (a
         # single placement has nothing to group, so no kind mapped means no row) and the
-        # kind resolved to a value. All of the record's fan-out assertions share it.
+        # kind resolved to a value. All of the record's fan-out observations share it.
         activity_id: str | None = None
         activity_projection: ids.ActivityProjection | None = None
         kind_value = _norm(shared.get(ACTIVITY_KIND_NAME))
@@ -518,9 +518,9 @@ def assemble_source(
             # re-canonicalises it, so key order can never move a digest.
             activity_projection = ids.ActivityProjection(str(kind_value), context or None)
 
-        # --- the fan-out: one assertion per template × time spec ------------
+        # --- the fan-out: one observation per template × time spec ------------
         output_ordinal = 0
-        for template in preset.assertions:
+        for template in preset.observations:
             scalar_specs, verbatim_specs = _split_specs(template.fields)
             holder = dict(shared)
             for spec in scalar_specs:
@@ -544,7 +544,7 @@ def assemble_source(
                 for override in time_spec.overrides:
                     flat[override.model_field], _ = _resolve_field(
                         override, row, report.warnings, resolve, file_values, row_env, ctx, preset_values)
-                _emit_assertion(
+                _emit_observation(
                     store, report, flat, components, time_spec,
                     row=row, resolve=resolve, file_values=file_values, env=row_env,
                     ctx=ctx, preset_values=preset_values,
@@ -616,7 +616,7 @@ def _write_temporal_component(
     return ids.TemporalComponentProjection(part, temporal_role, stated_offset, raw_value)
 
 
-def _emit_assertion(
+def _emit_observation(
     store: RunStore,
     report: AssembleReport,
     flat: dict[str, Any],
@@ -641,10 +641,10 @@ def _emit_assertion(
     operator_concerns: bool,
     source_record_uid: str | None,
 ) -> None:
-    """Write one assertion and its owned corners, then the assertion row itself
+    """Write one observation and its owned corners, then the observation row itself
     (parent-before-child order).
 
-    HOW: the corner ids all derive from the assertion natural key
+    HOW: the corner ids all derive from the observation natural key
     ``(raw_record_id ⟂ preset key ⟂ output_ordinal)`` — the preset key is IN the corner
     keys (unlike the worked-example demo, which had one preset per source) so two presets reading
     one record can never collide on a corner PK. Both digests come from ``core.ids``
@@ -674,7 +674,7 @@ def _emit_assertion(
     ))
 
     # --- spatial expression + components ---
-    # No component values → no spatial corner: an assertion without a place yields empty
+    # No component values → no spatial corner: an observation without a place yields empty
     # coordinates by construction, never an invented header row.
     spatial_expression_id: str | None = None
     spatial_projection: ids.SpatialProjection | None = None
@@ -780,8 +780,8 @@ def _emit_assertion(
             ordinal += 1
         temporal_projection = ids.TemporalProjection(kind, referential, tuple(bound_projections))
 
-    # --- the assertion (links + digests via core/ids — never a local recipe) ---
-    links = ids.AssertionLinks(
+    # --- the observation (links + digests via core/ids — never a local recipe) ---
+    links = ids.ObservationLinks(
         entity_role=_norm(flat.get(ENTITY_ROLE_NAME)),
         entity_position_link=_norm(flat.get(_EPL_NAME)),
         entity_time_link=_norm(flat.get(_ETL_NAME)),
@@ -812,8 +812,8 @@ def _emit_assertion(
         l1=l1,
     )
 
-    store.write_assertion(V.Assertion(
-        assertion_id=ids.assertion_id(raw_record_id, preset_key, output_ordinal),
+    store.write_observation(V.Observation(
+        observation_id=ids.observation_id(raw_record_id, preset_key, output_ordinal),
         raw_record_id=raw_record_id,
         preset_id=preset_row_id,
         output_ordinal=output_ordinal,
@@ -832,8 +832,8 @@ def _emit_assertion(
         multiplicity=multiplicity,
         source_label=_text(flat.get(_SOURCE_LABEL_NAME)),
         input_record_id=_text(flat.get(_INPUT_RECORD_ID_NAME)),
-        # Resolved ONCE per source record (not per template) and repeated on every assertion
+        # Resolved ONCE per source record (not per template) and repeated on every observation
         # the record fans out into — that repetition IS its job: it groups those rows.
         source_record_uid=source_record_uid,
     ))
-    report.assertion_count += 1
+    report.observation_count += 1

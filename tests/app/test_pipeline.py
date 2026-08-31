@@ -72,7 +72,7 @@ def test_run_writes_case_db_csv_and_sidecars(tmp_path: Path) -> None:
     assert result.output_traceability is not None and result.output_traceability.is_file()
     assert result.output_warnings is not None and result.output_warnings.is_file()
     assert result.row_counts["matched"] == 1
-    assert result.row_counts["rows"] == 2       # 2 source rows -> 2 assertions
+    assert result.row_counts["rows"] == 2       # 2 source rows -> 2 observations
     assert result.matched and not result.unmatched
 
     rows = _read_rows(result.output_csv)
@@ -135,7 +135,7 @@ def test_append_builds_the_same_case_as_the_union_of_runs(tmp_path: Path) -> Non
     def digests(db: Path) -> set:
         con = sqlite3.connect(db)
         try:
-            return set(con.execute("SELECT content_hash, claim_digest FROM assertion").fetchall())
+            return set(con.execute("SELECT content_hash, claim_digest FROM observation").fetchall())
         finally:
             con.close()
 
@@ -184,7 +184,7 @@ def test_re_appending_the_same_evidence_is_a_recorded_no_op(tmp_path: Path) -> N
     try:
         assert con.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 2       # both runs recorded
         assert con.execute("SELECT COUNT(*) FROM source").fetchone()[0] == 1    # no duplicate source
-        assert con.execute("SELECT COUNT(*) FROM assertion").fetchone()[0] == 1 # unchanged (1 row)
+        assert con.execute("SELECT COUNT(*) FROM observation").fetchone()[0] == 1 # unchanged (1 row)
     finally:
         con.close()
 
@@ -199,7 +199,7 @@ def test_no_match_writes_the_case_db_but_no_csv(tmp_path: Path) -> None:
     assert result.output_case_db == out / "merged.matlas.sqlite"
     assert result.row_counts["rows"] == 0
     # The case database always records the run (a documented no-match result); the CSV and
-    # other projections are written only when there are assertions.
+    # other projections are written only when there are observations.
     assert (out / "merged.matlas.sqlite").is_file()
     assert not (out / "merged.csv").exists()
 
@@ -213,7 +213,7 @@ def test_two_independent_runs_produce_identical_digests(tmp_path: Path) -> None:
     def digests(db: Path) -> set:
         con = sqlite3.connect(db)
         try:
-            return set(con.execute("SELECT content_hash, claim_digest FROM assertion").fetchall())
+            return set(con.execute("SELECT content_hash, claim_digest FROM observation").fetchall())
         finally:
             con.close()
 

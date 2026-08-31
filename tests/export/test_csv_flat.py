@@ -65,7 +65,7 @@ def _path_derived_placeholders(store: RunStore) -> dict[str, str]:
 
     WHY this exists at all: ``ids.source_id`` is uuid5(input_file_path ⟂ …) — by design
     (§2c: from PATHS, never the fingerprint) — and the whole id chain hangs off it:
-    ``raw_record_id`` = uuid5(source_id ⟂ line_no), ``assertion_id`` =
+    ``raw_record_id`` = uuid5(source_id ⟂ line_no), ``observation_id`` =
     uuid5(raw_record_id ⟂ preset key ⟂ output_ordinal), ``activity_id`` =
     uuid5(raw_record_id ⟂ ordinal). So running the SAME fixture from a git worktree, a
     second clone or a CI layout yields DIFFERENT uuids in ``source_record_uid`` /
@@ -76,7 +76,7 @@ def _path_derived_placeholders(store: RunStore) -> dict[str, str]:
     HOW: each id is looked up with its own NATURAL KEY — the location-free half of what
     it was derived from (format, line_no, preset key, output_ordinal) — and mapped to a
     placeholder spelling that key out. So the golden still pins the identity relation
-    (this row IS line 2's assertion for preset X), and still distinguishes every row; it
+    (this row IS line 2's observation for preset X), and still distinguishes every row; it
     just stops pinning the one machine-dependent rendering of it. Only these ids are
     replaced — never a blanket uuid-shaped regex, which would also blank the
     content_uid/claim_digest the golden legitimately freezes (those are content-derived
@@ -97,14 +97,14 @@ def _path_derived_placeholders(store: RunStore) -> dict[str, str]:
             f"<record_uid:{row['format']}/{row['line_no']}>")
     for row in _rows(
         store,
-        "SELECT a.assertion_id, a.output_ordinal, p.key, r.line_no, s.format "
-        "FROM assertion a "
+        "SELECT a.observation_id, a.output_ordinal, p.key, r.line_no, s.format "
+        "FROM observation a "
         "JOIN raw_record r ON r.raw_record_id = a.raw_record_id "
         "JOIN source s ON s.source_id = r.source_id "
         "JOIN preset p ON p.preset_id = a.preset_id "
         "ORDER BY s.format, r.line_no, p.key, a.output_ordinal",
     ):
-        placeholders[row["assertion_id"]] = (
+        placeholders[row["observation_id"]] = (
             f"<row_uid:{row['format']}/{row['line_no']}/{row['key']}"
             f"/{row['output_ordinal']}>")
     # activity is a bonus grouping table (no ordinal column of its own), so an activity is
@@ -221,7 +221,7 @@ def test_multiple_presets_land_in_one_file(tmp_path: Path) -> None:
         for case in _CASES
     ]
     with RunStore() as store:
-        # One evidence file, BOTH presets applied (decision 27): two assertion sets sharing
+        # One evidence file, BOTH presets applied (decision 27): two observation sets sharing
         # the raw_records. One file per format now — both sets go in the single CSV.
         run_relational_pipeline(
             store, _GOLDEN_SRC / "cached.csv", specs, concerns=_CONCERNS)
@@ -230,7 +230,7 @@ def test_multiple_presets_land_in_one_file(tmp_path: Path) -> None:
 
     assert written == [tmp_path / "case.csv"]
     body = written[0].read_bytes().decode("utf-8-sig").splitlines()[1:]
-    # Both presets' rows (2 records -> 2 assertions each) share the one file...
+    # Both presets' rows (2 records -> 2 observations each) share the one file...
     assert len(body) == 4
     # ...and the preset_id column separates them, so a caller can still split by preset.
     for preset_key in ("golden.secondary.cached", "golden.primary.cached"):
@@ -244,7 +244,7 @@ def _digest_pairs(input_path: Path, spec: PresetSpec) -> set[tuple[str, str]]:
         run_relational_pipeline(store, input_path, [spec], concerns=_CONCERNS)
         return {
             (row["content_hash"], row["claim_digest"])
-            for row in _rows(store, "SELECT content_hash, claim_digest FROM assertion")
+            for row in _rows(store, "SELECT content_hash, claim_digest FROM observation")
         }
 
 
@@ -265,6 +265,6 @@ def test_folder_run_equals_zip_run_on_digests(tmp_path: Path) -> None:
     folder_digests = _digest_pairs(folder, spec)
     zip_digests = _digest_pairs(zip_path, spec)
     # Two disclosures (a folder and a zip), but no path reaches a digest — so both the
-    # content_uid and the claim_digest of every assertion agree (R5 same-evidence finding).
+    # content_uid and the claim_digest of every observation agree (R5 same-evidence finding).
     assert len(folder_digests) == 2
     assert folder_digests == zip_digests

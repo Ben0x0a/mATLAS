@@ -1,11 +1,11 @@
 # Flat CSV column contract
 
 The flat CSV is a **projection query** over the run database (see
-[../model/schema.md](../model/schema.md)) — one row per assertion — not a hand-built frame.
+[../model/schema.md](../model/schema.md)) — one row per observation — not a hand-built frame.
 This document is the exporter's column contract: the exact set of columns, their order, and
 what each one carries.
 
-Projection = join up the grain chain (`assertion → raw_record → source → run → case`,
+Projection = join up the grain chain (`observation → raw_record → source → run → case`,
 plus the two owned corners and their preferred integrations, plus `analysis` for the
 current ranking method). The `orig_<col>` verbatim passthrough is re-emitted from
 `raw_record.raw_json` exactly as today (a hard forensic constraint).
@@ -49,19 +49,19 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | heading_accuracy_deg | = | spatial_integration.heading_accuracy_deg | |
 | beam_azimuth_deg | = | spatial_integration.beam_azimuth_deg | |
 | beam_width_deg | = | spatial_integration.beam_width_deg | |
-| entity_position_link | = | assertion.entity_position_link | |
-| entity_time_link | = | assertion.entity_time_link | |
-| spatial_temporal_link | = | assertion.spatial_temporal_link | |
+| entity_position_link | = | observation.entity_position_link | |
+| entity_time_link | = | observation.entity_time_link | |
+| spatial_temporal_link | = | observation.spatial_temporal_link | |
 | raw_source_path | → | source.data_source (fallback: source.input_file_path!inner_path) | the input-source vs data-source split |
 | input_file_path | = | source.input_file_path | |
 | input_record_id | = | raw_record.input_record_id | |
 | source_record_uid | → | raw_record.raw_record_id | our surrogate; the artefact's own key is raw_record.native_record_uid |
-| row_uid | → | assertion.assertion_id | **values change** — now genuinely unique |
-| preset_id | → | preset.key (via assertion.preset_id) | preset is now per-assertion |
-| preset_name | → | preset.name (via assertion.preset_id) | |
-| source_label | = | assertion.source_label | the one per-claim provenance field |
+| row_uid | → | observation.observation_id | **values change** — now genuinely unique |
+| preset_id | → | preset.key (via observation.preset_id) | preset is now per-observation |
+| preset_name | → | preset.name (via observation.preset_id) | |
+| source_label | = | observation.source_label | the one per-claim provenance field |
 | source_tier | → | source.source_tier | source grain |
-| deleted | = | assertion.deleted | the source's own deletion claim (L1) |
+| deleted | = | observation.deleted | the source's own deletion claim (L1) |
 | record_type | → | analysis(current method).record_type | analysis layer |
 | record_rank | → | analysis(current method).record_rank | |
 
@@ -70,11 +70,11 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | new column | source | why |
 | --- | --- | --- |
 | case_number | case_metadata.case_number | the investigation root |
-| content_uid | assertion.content_hash | portable, preset+file-scoped digest |
-| claim_digest | assertion.claim_digest | file-independent digest — possible-same-evidence finding |
+| content_uid | observation.content_hash | portable, preset+file-scoped digest |
+| claim_digest | observation.claim_digest | file-independent digest — possible-same-evidence finding |
 | raw_identifier | entity.raw_identifier | the identifier as written |
 | identifier_type | entity.identifier_type | which normalization applied |
-| entity_role | assertion.entity_role | the entity's part in the activity |
+| entity_role | observation.entity_role | the entity's part in the activity |
 | concerns_origin | entity.concerns_origin | who attributed `concerns` (operator vs preset) |
 | spatial_referential | spatial_expression.referential | encoding/CRS: epsg:4326 / geohash / address / cell_ref / … (mandatory) |
 | locates | derived from entity_position_link | self / infrastructure / referenced (mandatory; derived) |
@@ -86,7 +86,7 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | recovery_state | raw_record.recovery_state | the coarse state — live vs recovered; distinct from `deleted` |
 | recovery_source | raw_record.recovery_source | the fine origin — live/wal/journal/freelist/freespace; ordered by descending reliability, so it doubles as the confidence signal |
 | data_source | source.data_source | where the data originally lived |
-| activity_id | assertion.activity_id | **kept** — regroups the lines referencing the same activity (the legs of one record) |
+| activity_id | observation.activity_id | **kept** — regroups the lines referencing the same activity (the legs of one record) |
 | activity_kind | activity.kind | call / message / trip / … — **bonus, optional** |
 | counterpart, facets, context | activity.context_json (json_extract) | the record's other parties — **bonus, optional**: no mandatory column sources from the activity table |
 | s2_cell_id | spatial_index.s2_cell_id | optional — the S2 leaf cell |

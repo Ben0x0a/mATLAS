@@ -15,7 +15,7 @@ one-directionally.
 ## The model in one paragraph
 
 A **Raw Record** (verbatim, inside a **Source**, inside a **Run**) yields
-**Assertions**. An assertion is one entity, in one role, within one **Activity**, at
+**Observations**. An observation is one entity, in one role, within one **Activity**, at
 one place expression, at one time expression — qualified by the link vocabularies.
 The two corners follow one pattern: an **expression** stores the source's own words
 (header + component rows); an **integration** stores the derived canonical form
@@ -43,8 +43,8 @@ flowchart TB
     archiveT["<b>archive</b><br/>one container path<br/>(dedup by cd_sha256)"]
     presetT["<b>preset</b><br/>a preset definition applied<br/>(key ⟂ version)"]
   end
-  subgraph L1["Layer 1 — assertion (the source's own words)"]
-    assertT["<b>assertion</b><br/>one entity, in one role, at one<br/>place, one time, one activity"]
+  subgraph L1["Layer 1 — observation (the source's own words)"]
+    assertT["<b>observation</b><br/>one entity, in one role, at one<br/>place, one time, one activity"]
     entityT["<b>entity</b><br/>who / what: identifier,<br/>type, concerns"]
     activityT["<b>activity</b><br/>one real-world happening<br/>(+ context_json)"]
     sexprT["<b>spatial_expression</b><br/>place header:<br/>referential + source"]
@@ -83,20 +83,20 @@ method-stamped. The flat CSV is a projection over this spine.
 
 | table | columns | keys / notes |
 | --- | --- | --- |
-| case_metadata | case_id, case_number, title, description, created_at | **The root** — uuid4 PK; exactly ONE row per run-DB file (one case per database). `case_number` is the user-facing identifier. Hierarchy: case → run → source → raw_record → assertion. Physical name `case_metadata` (owner ruling 2026-07-14: `CASE` is an SQL keyword; columns keep the `case_` prefix) |
+| case_metadata | case_id, case_number, title, description, created_at | **The root** — uuid4 PK; exactly ONE row per run-DB file (one case per database). `case_number` is the user-facing identifier. Hierarchy: case → run → source → raw_record → observation. Physical name `case_metadata` (owner ruling 2026-07-14: `CASE` is an SQL keyword; columns keep the `case_` prefix) |
 | run | run_id, case_id FK NOT NULL, input_path, started_at, finished_at, tool_version, settings_json, examiner | PK run_id (**uuid4** — the only non-deterministic id; feeds no child id); `case_id` FK; input_path = the operator's `--input` root; **settings_json is normatively COMPLETE**: every operator argument and option, canonical JSON — the run is reproducible from its row; selected presets via `run_preset`; examiner optional |
 | matlas_meta | schema_version, families_version (one row) + `PRAGMA user_version` + SQLite `application_id` | versioning and the self-ingestion stamp: discovery refuses/flags stamped artefacts |
 | archive | archive_id, path, cd_sha256 | **One row per container path** — id from the **path only**, UNIQUE(path), `cd_sha256` a plain INDEXED column. "Same archive bytes twice" (two identical-bytes exhibits, or across runs) is a **query/finding** (`GROUP BY cd_sha256`). `cd_sha256` **reuses `model_atlas/sqlite/integrity.py` (`fingerprint_zip` / `zip_resume_key`)** — no new hashing |
 | run_archive | run_archive_id, run_id FK, archive_id FK, parsed_at, skipped | **The run↔archive link**: one run opens many archives, one archive may appear in many runs — UNIQUE(run_id, archive_id). EVERY encounter is recorded, including an **opt-in skip** (`skipped=1`, never traceless): re-walking may be skipped only when the operator opted in (recorded in settings_json) AND a previous run parsed the same `cd_sha256` with the same preset set (key + version + definition_digest) |
-| run_preset | run_preset_id, run_id FK, preset_id FK | **The run↔preset link**: every preset SELECTED for the run (reusing the preset table), recorded even when a preset yields no assertion. UNIQUE(run_id, preset_id) |
-| source | source_id, run_id FK, input_file_path, inner_path, data_source, format, subunit, fingerprint_sha256, sibling_fingerprints_json, exhibit_ref, source_tier, record_count | UNIQUE(run_id, input_file_path, inner_path, subunit); INDEX fingerprint_sha256 — the id derives from **paths, never the fingerprint**. **Preset-free**: a source is *what was opened* (folder→file, zip→inner file); one file matching several presets is ONE source row and ONE set of raw_records — the reading lives on the assertion. `inner_path` = chain-inclusive container path; `data_source` = where the data originally lived (UFDR/tool manifest device path), NULL for primary acquisitions. Fingerprint = main file bytes; siblings in sibling_fingerprints_json; exhibit_ref |
+| run_preset | run_preset_id, run_id FK, preset_id FK | **The run↔preset link**: every preset SELECTED for the run (reusing the preset table), recorded even when a preset yields no observation. UNIQUE(run_id, preset_id) |
+| source | source_id, run_id FK, input_file_path, inner_path, data_source, format, subunit, fingerprint_sha256, sibling_fingerprints_json, exhibit_ref, source_tier, record_count | UNIQUE(run_id, input_file_path, inner_path, subunit); INDEX fingerprint_sha256 — the id derives from **paths, never the fingerprint**. **Preset-free**: a source is *what was opened* (folder→file, zip→inner file); one file matching several presets is ONE source row and ONE set of raw_records — the reading lives on the observation. `inner_path` = chain-inclusive container path; `data_source` = where the data originally lived (UFDR/tool manifest device path), NULL for primary acquisitions. Fingerprint = main file bytes; siblings in sibling_fingerprints_json; exhibit_ref |
 | preset | preset_id, key, name, version, definition_digest | the companion table: one row per preset applied in this run — uuid5(key ⟂ version), a config row whose definition IS its identity (same argument as the old method registry). UNIQUE(key, version). **definition_digest**: sha256 of the canonical preset definition — catches edits the author forgot to version-bump (same key+version, different digest across runs = a surfaced finding; skip eligibility compares digests, never just versions) |
-| raw_record | raw_record_id, source_id FK, line_no, native_record_uid, recovery_state, recovery_source, raw_json | UNIQUE(source_id, line_no); raw_json is the COMPLETE source row. `recovery_source` is the fine origin (live/wal/journal/freelist/freespace) behind the coarse `recovery_state`, ordered by descending reliability so it doubles as the confidence signal; digest-excluded provenance, surfaced per claim via the raw_record→assertion join |
+| raw_record | raw_record_id, source_id FK, line_no, native_record_uid, recovery_state, recovery_source, raw_json | UNIQUE(source_id, line_no); raw_json is the COMPLETE source row. `recovery_source` is the fine origin (live/wal/journal/freelist/freespace) behind the coarse `recovery_state`, ordered by descending reliability so it doubles as the confidence signal; digest-excluded provenance, surfaced per claim via the raw_record→observation join |
 
 #### The source hierarchy (reinstated; grain fixed by the owner)
 
 The provenance columns all survive — **each at its natural grain, duplicated
-nowhere** (owner's ruling: the fields must exist, not be repeated per assertion):
+nowhere** (owner's ruling: the fields must exist, not be repeated per observation):
 
 | original CSV column | grain | home | projected from |
 | --- | --- | --- | --- |
@@ -104,35 +104,35 @@ nowhere** (owner's ruling: the fields must exist, not be repeated per assertion)
 | input_file_path | source | source.input_file_path (outermost artefact opened) + inner_path, format, subunit | source |
 | raw_source_path | source | source.data_source — where the data originally lived (UFDR/tool manifest device path); NULL for primary acquisitions | data_source, falling back to input_file_path!inner_path |
 | source_tier | source | source.source_tier: primary (acquisition parsed) vs secondary (tool export parsed, interpretation inherited) | source |
-| preset_id, preset_name | **assertion** (via the preset companion table) | assertion.preset_id → preset | preset |
-| input_record_id | record | assertion.input_record_id — the preset-mapped human locator | assertion |
-| source_record_uid | record | COALESCE(assertion.source_record_uid, raw_record_id) — the preset-mapped source key, falling back to the generated surrogate | assertion, raw_record |
-| row_uid | assertion | assertion_id | assertion |
-| source_label | **assertion** | assertion.source_label — the one provenance field the owner keeps per claim | assertion |
+| preset_id, preset_name | **observation** (via the preset companion table) | observation.preset_id → preset | preset |
+| input_record_id | record | observation.input_record_id — the preset-mapped human locator | observation |
+| source_record_uid | record | COALESCE(observation.source_record_uid, raw_record_id) — the preset-mapped source key, falling back to the generated surrogate | observation, raw_record |
+| row_uid | observation | observation_id | observation |
+| source_label | **observation** | observation.source_label — the one provenance field the owner keeps per claim | observation |
 
 When a tool export names a *per-record* original path, that value stays verbatim in
 raw_json and reaches the CSV via the orig_ passthrough — the lean choice; the
 structured `data_source` is source-grain only.
 
-### Layer 1 — assertion (the source's words)
+### Layer 1 — observation (the source's words)
 
 | table | columns | keys / notes |
 | --- | --- | --- |
 | activity | activity_id, kind, context_json | one real-world happening. **context_json**: preset-mapped, semi-structured activity context — the callee, the caller's IMEI, the recipients list — canonical JSON, inside the L1 digest projection, projected to the flat counterpart/facets columns. **Bonus table**: it only groups the legs of one record; everything exploitable reads from entity/links/roles, and no mandatory CSV column sources from it |
 | activity_record | activity_record_id, activity_id FK NOT NULL, raw_record_id FK NOT NULL | UNIQUE(activity_id, raw_record_id). **The activity↔record binding is a link table, not a column.** The activity↔record binding is a link table, not a column — ingest writes exactly one row per activity (its own record; the mis-attachment guard becomes an ingest invariant + lint); an *analysis* act may later attach further records to the same activity ("both operators' records describe this call"), which replaces the deferred activity_link table with something simpler |
-| assertion | assertion_id, raw_record_id FK NOT NULL, **preset_id FK NOT NULL**, entity_id FK NOT NULL, entity_origin, activity_id FK NULL, spatial_expression_id FK NULL, temporal_expression_id FK NULL, entity_role, entity_position_link, entity_time_link, spatial_temporal_link, deleted, multiplicity (NULL = 1), source_label, input_record_id, source_record_uid, content_hash, claim_digest | `input_record_id` **locates** one source record and `source_record_uid` **groups** the rows it fanned out into — both preset-resolved, so both live here and not on the preset-free L0 `raw_record`; neither feeds a digest. **UNIQUE(raw_record_id, preset_id, output_ordinal)** — two presets reading the same record produce distinct assertions; UNIQUE on each corner FK (owned corners) and on entity_id; both digests indexed, repeat legally, never keys. linked_entity dropped — entity.concerns; data_source/source_tier at source grain; source_label = the one per-claim provenance field |
+| observation | observation_id, raw_record_id FK NOT NULL, **preset_id FK NOT NULL**, entity_id FK NOT NULL, entity_origin, activity_id FK NULL, spatial_expression_id FK NULL, temporal_expression_id FK NULL, entity_role, entity_position_link, entity_time_link, spatial_temporal_link, deleted, multiplicity (NULL = 1), source_label, input_record_id, source_record_uid, content_hash, claim_digest | `input_record_id` **locates** one source record and `source_record_uid` **groups** the rows it fanned out into — both preset-resolved, so both live here and not on the preset-free L0 `raw_record`; neither feeds a digest. **UNIQUE(raw_record_id, preset_id, output_ordinal)** — two presets reading the same record produce distinct observations; UNIQUE on each corner FK (owned corners) and on entity_id; both digests indexed, repeat legally, never keys. linked_entity dropped — entity.concerns; data_source/source_tier at source grain; source_label = the one per-claim provenance field |
 | entity | entity_id, identifier, raw_identifier, identifier_type, type, concerns, concerns_origin, concerns_uid | **One lean row**: `identifier` = **normalized at ingest** (E.164, lowercase email, …; NULL for a purely typed mention); `raw_identifier` = **as written in the source, verbatim**; `identifier_type` names which normalization applied (msisdn \| imei \| email \| plate \| account \| other \| none); `type` = what the thing is (device \| person \| vehicle \| camera \| …); `concerns` = the attributed party fixed at parsing (absorbs linked_entity), `concerns_origin` (operator_param \| preset_mapped), `concerns_uid` = digest of the case-folded/stemmed concerns. Occurrence row, no FK, no dedup; convergence = GROUP BY (identifier_type, identifier); attribution grouping = GROUP BY concerns_uid. Normalization + stemming rule-set versions recorded once per run in matlas_meta |
 | spatial_expression | spatial_expression_id, referential, spatial_source | HEADER only: referential = encoding/CRS (epsg:4326 \| geohash \| address \| place_name \| cell_ref \| asset_ref \| region); spatial_source = the mechanism (GNSS \| WiFi \| cell \| …, the position source, symmetric with temporal_source). The values live in component rows; **spatial_role moved to the component**. **referential is the SOLE datum carrier**: the `latitude`/`longitude` parts are datum-agnostic (the source's words), and only an `epsg:4326` referential licenses L2 to adopt them as the canonical `latitude_wgs84`/`longitude_wgs84` columns — the CRS adoption is the L2 interpretation, never baked into the L1 part name |
 | spatial_component | spatial_component_id, spatial_expression_id FK, ordinal, part, spatial_role, source_field, raw_value | UNIQUE(spatial_expression_id, ordinal). One row per source field, verbatim. **`part` uses the PRESET target-field names**: raw_position (composite) \| latitude \| longitude \| altitude_m \| horizontal_accuracy_m \| vertical_accuracy_m \| horizontal_speed_kmh \| vertical_speed_kmh \| horizontal_speed_accuracy_kmh \| vertical_speed_accuracy_kmh \| heading_deg \| heading_accuracy_deg \| beam_azimuth_deg \| beam_width_deg (+ zone/easting/northing for gridded CRS). Any part value is accepted; only standard names are export-projected. **spatial_role per component**: vicinity \| entry \| exit \| origin \| destination \| waypoint — a value-group can carry its own role. A 1-field geohash is 1 row; lat+lon columns are 2; DMS is 6 |
 | temporal_expression | temporal_expression_id, kind, referential, temporal_source | HEADER only; referential: unix_epoch_s \| apple_cfabsolute \| iso8601 \| excel_serial \| local_string \| …; temporal_source = clock mechanism. **temporal_role and the stated offsets moved to the component; granularity dropped |
 | temporal_component | temporal_component_id, temporal_expression_id FK, ordinal, part, temporal_role, stated_offset, source_field, raw_value | UNIQUE(temporal_expression_id, ordinal). **`part` uses the PRESET field names**: lower \| upper \| duration (+ lower_date/lower_time-style splits when a bound spans columns). **Per-component**: `temporal_role` (start \| end \| booking \| check_in \| check_out \| last_seen — each bound carries its own role: a visit's lower is check_in, its upper check_out) and `stated_offset` (the offset the source stated for THIS bound, verbatim TEXT; the dual offsets are now per-bound columns, not parts). A date column + time column stay two verbatim rows; the integration combines them (datetime_combine) |
 
-**The four link vocabularies** live on the assertion and absorb epistemic status
+**The four link vocabularies** live on the observation and absorb epistemic status
 (`REPORTED_FOR`, `CLAIMED_AT`, `NEVER_DURING_INTERVAL` are already members):
 `entity_role` (caller, callee, sender, recipient, reporter, subject…) — the entity's
 part in the activity; the three triangle links as today. `spatial_role` / `temporal_role`
 (origin, destination, vicinity, entry… / start, end, booking, check_in…) sit on the
-expressions — owned 1:1, so equivalent to assertion columns, and each corner stays
+expressions — owned 1:1, so equivalent to observation columns, and each corner stays
 self-describing.
 
 ### Layer 2 — integration (derived, private, method-stamped)
@@ -141,7 +141,7 @@ The integration tables are **the modelled space+time layer**: every derived
 spatial/temporal measurement column the flat CSV exposes lives here, so the CSV's space and
 time block is a pure projection and integration re-runs (new geocoder / tz-db / S2 level)
 without touching L1. The CSV's *other* columns are **not** duplicated here — links / roles /
-deleted / multiplicity stay on `assertion`, identifier / type / concerns on `entity`,
+deleted / multiplicity stay on `observation`, identifier / type / concerns on `entity`,
 paths / tier / preset / data_source on `source`, input_record_id on `raw_record`.
 
 | table | columns | keys / notes |
@@ -171,8 +171,8 @@ where it stands. L3 carries no measurements at all.
 
 | table | columns | keys / notes |
 | --- | --- | --- |
-| analysis | analysis_id, assertion_id FK, method, record_type, record_rank | UNIQUE(assertion_id, method): the generic, method-attributed verdict table. Re-running a changed ranker ADDS rows, never mutates; the CSV projects the current method's verdict |
-| edit_log | edit_id, ordinal, table_name, row_id, column, old_value, new_value, edit_kind, edited_by, edited_at | **Manual-edit audit**, for the edit panel. `edit_kind` ∈ update \| new_row \| empty_row. **Evidence protection**: L0/L1 rows (case/run/source/raw_record/assertion/entity/expressions/components) are NEVER updated in place — only `new_row` (mint a new occurrence, keep the original) or `empty_row`; integration/analysis rows may `update` in place. Every action logs one row here; the edit API in `model_atlas` enforces the protection, not the UI. **Full rewind**: `ordinal` is a monotonic UNIQUE journal position; `update` logs per-column old→new, `new_row`/`empty_row` log the FULL row snapshot (canonical JSON in new_value) — applying inverses in reverse ordinal order restores any earlier state; a rewind appends inverse entries, never erases the journal |
+| analysis | analysis_id, observation_id FK, method, record_type, record_rank | UNIQUE(observation_id, method): the generic, method-attributed verdict table. Re-running a changed ranker ADDS rows, never mutates; the CSV projects the current method's verdict |
+| edit_log | edit_id, ordinal, table_name, row_id, column, old_value, new_value, edit_kind, edited_by, edited_at | **Manual-edit audit**, for the edit panel. `edit_kind` ∈ update \| new_row \| empty_row. **Evidence protection**: L0/L1 rows (case/run/source/raw_record/observation/entity/expressions/components) are NEVER updated in place — only `new_row` (mint a new occurrence, keep the original) or `empty_row`; integration/analysis rows may `update` in place. Every action logs one row here; the edit API in `model_atlas` enforces the protection, not the UI. **Full rewind**: `ordinal` is a monotonic UNIQUE journal position; `update` logs per-column old→new, `new_row`/`empty_row` log the FULL row snapshot (canonical JSON in new_value) — applying inverses in reverse ordinal order restores any earlier state; a rewind appends inverse entries, never erases the journal |
 
 **Deferred out of v1**: `resolved_entity`, `entity_relation`,
 `mention_resolution`, `activity_link` — the entire analyst graph (person chains with
@@ -201,14 +201,14 @@ keys by `(run_id, *_id)`).
 | source | occurrence | input_file_path ⟂ inner_path ⟂ subunit (preset removed) |
 | preset | **content** (config) | key ⟂ version — a preset's definition is its identity |
 | raw_record | occurrence | source_id ⟂ line_no |
-| assertion | occurrence | raw_record_id ⟂ preset key ⟂ output_ordinal |
+| observation | occurrence | raw_record_id ⟂ preset key ⟂ output_ordinal |
 | activity | occurrence | raw_record_id ⟂ activity_ordinal (per-record at ingest) |
 | activity_record | occurrence | activity_id ⟂ raw_record_id; UNIQUE(activity_id, raw_record_id) — ingest writes exactly one per activity |
-| entity / spatial_expression / temporal_expression | occurrence | assertion natural key ⟂ corner tag |
+| entity / spatial_expression / temporal_expression | occurrence | observation natural key ⟂ corner tag |
 | spatial/temporal_component | occurrence | expression_id ⟂ ordinal; UNIQUE(expression_id, ordinal) |
 | the two integrations | occurrence | expression_id ⟂ method (⟂ candidate_ordinal when plural arrives) |
 | spatial_index | occurrence | spatial_integration_id (1:1) |
-| analysis | occurrence | assertion_id ⟂ method |
+| analysis | occurrence | observation_id ⟂ method |
 | edit_log | occurrence | uuid4 (an audit event) |
 
 The only content-keyed table is `preset` (config: key⟂version). Every other table is an
@@ -246,13 +246,13 @@ re-disclosure with different formatting must converge), component `source_field`
 (likewise for renamed columns), all input paths, all `*_id`s and run_id, all
 integrations (register/tzdb upgrades must not move the digest), all analysis rows.
 
-**`assertion.content_hash` (CSV `content_uid`)** = fingerprint_sha256 ⟂ preset key ⟂
+**`observation.content_hash` (CSV `content_uid`)** = fingerprint_sha256 ⟂ preset key ⟂
 line_no ⟂ output_ordinal ⟂ the L1 projection — the digest **scoped to the preset's
 reading of this file**, now literally;
 folder==zip parity holds: no paths. `claim_digest` stays preset-free: two presets
 extracting the same claim from one record legitimately converge there.
 
-**`assertion.claim_digest`** = the L1 projection **alone** (no fingerprint, no
+**`observation.claim_digest`** = the L1 projection **alone** (no fingerprint, no
 line_no, no output_ordinal). Two overlapping disclosures — different CDR files
 sharing 3 000 records — converge here and surface as a *possible same-evidence*
 finding instead of being presented as corroboration. Both digests indexed; both
@@ -283,26 +283,26 @@ only if enumeration is pinned. Normative rules, each with a test:
 
 ## The flat view
 
-One CSV line per assertion — an assertion exists only per
+One CSV line per observation — an observation exists only per
 *placement*, so the line count is the placement count (a one-legged CDR is 1 line,
-never 3; a 20-recipient message is 1 line). `row_uid` = assertion_id; `content_uid` =
+never 3; a 20-recipient message is 1 line). `row_uid` = observation_id; `content_uid` =
 content_hash; `entity` = entity.identifier (+ identifier_type, type columns);
 `concerns` = entity.concerns (origin projected); `counterpart` / `facets` /
 further context = projected from **activity.context_json** and, for
 detector/infrastructure records, already visible in the spatial expression itself
 (the camera id IS the cell_ref/asset_ref component) — **bonus columns**:
-of the activity, only `assertion.activity_id` is a useful projection (it regroups the
+of the activity, only `observation.activity_id` is a useful projection (it regroups the
 lines referencing the same activity); no mandatory CSV column sources from the
 activity table; everything else the record
 carried reaches the CSV via the orig_ passthrough. Coordinates/UTC come from the
 (single, v1) integrations, with referential, locates (derived) and the methods as
-mandatory columns. No invented positions: an assertion without a spatial
+mandatory columns. No invented positions: an observation without a spatial
 expression yields empty coordinates by construction.
 
 ## Ingestion write order
 
 run → source → raw_record → activity (with its context_json) + activity_record link
-→ **entity + expressions + components first, then the assertion that references them** (FKs
+→ **entity + expressions + components first, then the observation that references them** (FKs
 check immediately) → integrations → *(after ingest)* analysis rows (untangle etc.).
 **No `INSERT OR IGNORE` anywhere**; no content-keyed table exists in the run schema —
 a UNIQUE violation anywhere is a derivation bug and raises.
@@ -312,14 +312,14 @@ a UNIQUE violation anywhere is a derivation bug and raises.
 | failure mode | guard |
 | --- | --- |
 | two exhibits collapse into one source | source_id from paths, not fingerprint; natural UNIQUE; no OR IGNORE |
-| duplicate evidence drops an assertion | assertion keyed by record+ordinal; content_hash never a key |
-| two assertions share a corner or an entity row | UNIQUE on each corner FK and on entity_id |
+| duplicate evidence drops an observation | observation keyed by record+ordinal; content_hash never a key |
+| two observations share a corner or an entity row | UNIQUE on each corner FK and on entity_id |
 | two phones become one entity | entity rows are occurrences; nothing dedups at ingest; 'device' is a TYPE, identifier NULL — nothing exists to merge |
 | register/tzdb upgrade rewrites evidence | integrations keyed by expression+method; digest excludes integrations |
 | operator input mutates the digest | concerns + both origin columns excluded from both digests, normatively |
 | a context party silently vanishes | it is in raw_json verbatim always; activity.context_json is inside the L1 projection, so dropping it moves both digests |
 | an activity attaches to the wrong record | activity_record link: UNIQUE(activity_id, raw_record_id) + the ingest invariant "one link row per activity, its own record" (an ingest invariant + lint; analysis-time additions are separately attributed) |
-| a positionless claim vanishes from CSV | flat rule: one line per assertion, corners nullable |
+| a positionless claim vanishes from CSV | flat rule: one line per observation, corners nullable |
 | merging two run DBs collides ids | run_id excluded from child ids + DB-file-is-run-scope rule |
 | `\|` in a path forges equal uuid5 inputs | `\x1f` join; PK collision raises as backstop |
 | an opt-in archive skip hides evidence untraceably | the skip is recorded (run_archive.skipped=1) and eligible only when a previous run parsed the same cd_sha256 with an identical preset set — key, version AND definition_digest) |

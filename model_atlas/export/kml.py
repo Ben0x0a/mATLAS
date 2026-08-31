@@ -17,7 +17,7 @@ shape (name = concerns, TimeStamp/when = the lower-bound local ISO instant,
 Point/coordinates = "lon,lat"). The old single ``utc_offset_hours`` column split into
 ``utc_offset_hours_lower`` / ``_upper`` in the relational model; the
 placemark's one timestamp uses the LOWER bound + ITS OWN offset — for an instant
-assertion (the common case) lower == upper, so this is exactly what the old single-
+observation (the common case) lower == upper, so this is exactly what the old single-
 offset model always meant.
 
 Encoding

@@ -7,7 +7,7 @@ Defines:    ``normalise_identifier`` (one raw identifier -> its canonical form o
             attribution digest: "A. Moreau" / "moreau a." / "A.MOREAU" share one uid),
             ``normalise_entities`` (the store-level driver: one narrow UPDATE per entity
             row setting ONLY identifier / identifier_type / concerns_uid, plus the
-            assertion-digest recomputation described below and the rule-set stamps in
+            observation-digest recomputation described below and the rule-set stamps in
             ``matlas_meta``), and ``EntityNormaliseReport`` (its testable summary).
 Used by:    the app-layer pipeline (wires L2 after ingest) and
             tests/integrate/test_entity.py.
@@ -25,12 +25,12 @@ merge, and this brick writes per-row derived values only (no dedup, no row shari
 
 Refusal deliberately does NOT rewrite ``identifier_type``: the stored kind is the
 preset's CLAIM ("this string was declared an msisdn"), it sits INSIDE the hashed L1
-projection, and both assertion digests already committed to it at assembly.
+projection, and both observation digests already committed to it at assembly.
 Erasing it to ``none`` would either move the evidence digests for a value that was
 merely *declined* (a refusal is a non-derivation, not new evidence) or leave the stored
 digests stale against a fresh recomputation — both unacceptable. Only ``identifier``
 legitimately moves the digests (``concerns_uid`` is normatively excluded),
-so a refused row's assertion digests are byte-identical before and after this brick;
+so a refused row's observation digests are byte-identical before and after this brick;
 the NULL identifier alone guarantees nothing converges. This is a deliberate deviation
 from the original design note's shorthand "identifier_type=none on refusal", resolved in
 favour of digest integrity.
@@ -42,8 +42,8 @@ The digest recomputation (CRITICAL — run_db_schema.md, the normative L1 projec
 pre-normalisation row), so after a normalisation SUCCEEDS this brick re-reads every L1
 row the projection covers (entity, spatial/temporal expressions + components in ordinal
 order, activity context), rebuilds the projection via ``ids.l1_projection`` and both
-digests via ``ids.digests`` — never a local recipe — and UPDATEs the two assertion
-columns. Cost shape: O(1) small SELECTs per normalised entity (the assertion is 1:1
+digests via ``ids.digests`` — never a local recipe — and UPDATEs the two observation
+columns. Cost shape: O(1) small SELECTs per normalised entity (the observation is 1:1
 with its entity by the schema's UNIQUE), so the whole pass is linear in the number of
 successfully normalised rows.
 
@@ -342,7 +342,7 @@ class EntityNormaliseReport:
     normalised_count: int = 0          # rows whose identifier was filled
     refused_count: int = 0             # rows a rule examined and declined
     concerns_count: int = 0            # rows given a concerns_uid
-    digests_recomputed_count: int = 0  # assertions whose two digests were rewritten
+    digests_recomputed_count: int = 0  # observations whose two digests were rewritten
 
 
 def normalise_entities(store: RunStore, *, default_region: str | None = None) -> EntityNormaliseReport:
@@ -353,7 +353,7 @@ def normalise_entities(store: RunStore, *, default_region: str | None = None) ->
     the module header for why the claimed ``identifier_type`` is preserved either
     way), derive ``concerns_uid`` from ``concerns``, write ONE narrow UPDATE per row
     touching only the three derived columns, and — whenever the identifier was filled
-    — recompute both digests of the (unique) assertion referencing the row. Finally
+    — recompute both digests of the (unique) observation referencing the row. Finally
     stamp the applied rule-set versions into ``matlas_meta``.
     Convergence stays a QUERY (GROUP BY identifier_type, identifier): this function
     never merges, dedups or deletes a row.
@@ -388,7 +388,7 @@ def normalise_entities(store: RunStore, *, default_region: str | None = None) ->
             "WHERE entity_id = ?",
             (identifier, identifier_type, uid, entity_id))
         if identifier is not None:
-            report.digests_recomputed_count += _recompute_assertion_digests(
+            report.digests_recomputed_count += _recompute_observation_digests(
                 connection, entity_id, identifier, identifier_type, entity_type)
     # Record the rule-set versions actually applied: the schema wrote
     # placeholders at creation; the derivation is only documented once these are real.
@@ -399,43 +399,43 @@ def normalise_entities(store: RunStore, *, default_region: str | None = None) ->
         f"entity normalisation ({NORMALISATION_RULESET}, {STEMMING_RULESET}): "
         f"{report.normalised_count} normalised, {report.refused_count} refused, "
         f"{report.concerns_count} concerns uids, "
-        f"{report.digests_recomputed_count} assertion digest pairs recomputed")
+        f"{report.digests_recomputed_count} observation digest pairs recomputed")
     return report
 
 
 # --- the digest recomputation (never a local recipe) --------------------------
 
-def _recompute_assertion_digests(
+def _recompute_observation_digests(
     connection: sqlite3.Connection,
     entity_id: str,
     identifier: str,
     identifier_type: str,
     entity_type: str,
 ) -> int:
-    """Recompute + UPDATE both digests of the assertion referencing ``entity_id``.
+    """Recompute + UPDATE both digests of the observation referencing ``entity_id``.
 
-    HOW: read the assertion (1:1 with its entity — UNIQUE(entity_id) in the schema),
+    HOW: read the observation (1:1 with its entity — UNIQUE(entity_id) in the schema),
     re-read every L1 row the normative projection covers, rebuild the projection with
     the NEW identifier through ``ids.l1_projection`` and both digests through
     ``ids.digests`` — the same normative recipes the assembler used, so the stored
     digests always equal a fresh recomputation from the rows. Returns the number of
-    assertions updated (0 when the entity has none — legal on a partial store).
+    observations updated (0 when the entity has none — legal on a partial store).
     WHY faithful re-reading matters: a locally re-derived projection that dropped one
     corner or reordered one component would silently forge or split evidence; every
-    piece below mirrors ``ingest.assemble._emit_assertion`` exactly.
+    piece below mirrors ``ingest.assemble._emit_observation`` exactly.
     """
-    assertion = connection.execute(
-        "SELECT assertion_id, raw_record_id, preset_id, output_ordinal, activity_id, "
+    observation = connection.execute(
+        "SELECT observation_id, raw_record_id, preset_id, output_ordinal, activity_id, "
         "spatial_expression_id, temporal_expression_id, entity_role, "
         "entity_position_link, entity_time_link, spatial_temporal_link, "
-        "deleted, multiplicity FROM assertion WHERE entity_id = ?",
+        "deleted, multiplicity FROM observation WHERE entity_id = ?",
         (entity_id,)).fetchone()
-    if assertion is None:
+    if observation is None:
         return 0
-    (assertion_id, raw_record_id, preset_id, output_ordinal, activity_id,
+    (observation_id, raw_record_id, preset_id, output_ordinal, activity_id,
      spatial_expression_id, temporal_expression_id, entity_role,
      entity_position_link, entity_time_link, spatial_temporal_link,
-     deleted, multiplicity) = assertion
+     deleted, multiplicity) = observation
 
     # The content_hash prefix inputs: fingerprint ⟂ preset KEY ⟂ line_no.
     line_no, fingerprint_sha256 = connection.execute(
@@ -450,7 +450,7 @@ def _recompute_assertion_digests(
         entity=ids.EntityProjection(identifier, identifier_type, entity_type),
         spatial=_load_spatial_projection(connection, spatial_expression_id),
         temporal=_load_temporal_projection(connection, temporal_expression_id),
-        links=ids.AssertionLinks(
+        links=ids.ObservationLinks(
             entity_role=entity_role,
             entity_position_link=entity_position_link,
             entity_time_link=entity_time_link,
@@ -467,8 +467,8 @@ def _recompute_assertion_digests(
         l1=l1,
     )
     connection.execute(
-        "UPDATE assertion SET content_hash = ?, claim_digest = ? WHERE assertion_id = ?",
-        (content_hash, claim_digest, assertion_id))
+        "UPDATE observation SET content_hash = ?, claim_digest = ? WHERE observation_id = ?",
+        (content_hash, claim_digest, observation_id))
     return 1
 
 
@@ -477,7 +477,7 @@ def _load_spatial_projection(
 ) -> ids.SpatialProjection | None:
     """The stored spatial corner as its digest projection (components in ordinal
     order — the tuple order IS the ordinal order the digest hashes), or None when the
-    assertion carries no spatial corner (the projection's two-empty-slot shape)."""
+    observation carries no spatial corner (the projection's two-empty-slot shape)."""
     if spatial_expression_id is None:
         return None
     referential, spatial_source = connection.execute(
@@ -514,7 +514,7 @@ def _load_temporal_projection(
 def _load_activity_projection(
     connection: sqlite3.Connection, activity_id: str | None,
 ) -> ids.ActivityProjection | None:
-    """The stored activity as its digest projection, or None when the assertion has no
+    """The stored activity as its digest projection, or None when the observation has no
     activity. The context is DECODED back to the object the assembler hashed:
     ``l1_projection`` re-canonicalises it, so the stored JSON's key order is irrelevant
     and the round-trip through SQLite cannot move the digest."""

@@ -4,7 +4,7 @@ Model Atlas (mATLAS) is a clone-and-run app for turning heterogeneous forensic d
 into one spatio-temporal evidence model, backed by a **case database**.
 
 It is CLI-first and source-agnostic. It reads CSV files, Excel workbooks, SQLite databases and
-XML reports, matches them to YAML presets, and records each mapped claim as an *assertion* in a
+XML reports, matches them to YAML presets, and records each mapped claim as an *observation* in a
 relational run database (`*.matlas.sqlite`). Every other output — the flat CSV, KML, GeoJSON,
 Excel — is a projection of that database. A PySide6 GUI is available as an optional front-end.
 
@@ -49,7 +49,7 @@ python matlas.py process \
 `<name>.matlas.sqlite` (default name `merged`); any other export is one file per format
 beside it. The case database is always written — it is the run itself.
 
-`--concerns` is required: it names the case subject every assertion is attributed to.
+`--concerns` is required: it names the case subject every observation is attributed to.
 `--entity` is optional. When supplied, these arguments **override** any `entity`/`concerns`
 a preset maps; the preset value is the default used only when the argument is absent.
 
@@ -88,7 +88,7 @@ which is handy for testing a new preset against one file.
 ### Outputs (written inside `--output`, stem from `--name`)
 
 - `<name>.matlas.sqlite` — the case database (always written)
-- `<name>.csv` — the flat assertion CSV (unless the csv export is deselected)
+- `<name>.csv` — the flat observation CSV (unless the csv export is deselected)
 - `<name>.matlas.traceability.json` and `<name>.matlas.warnings.json` — the sidecars
 - one file per additional `--export`
 
@@ -123,7 +123,7 @@ under "Installation" above. A preset has:
 
 - a `preset` header (id, name, os/tool, version, os_version, tier);
 - an `input_selector` identifying the source (CSV, Excel, SQLite or XML, direct or inside a ZIP);
-- `common` row-level fields plus `assertions` (each a `position` + `time` + `links`);
+- `common` row-level fields plus `observations` (each a `position` + `time` + `links`);
 - explicit value references (`field()`, `header()`, `filename()`, `param()`, `const()`), named
   timestamp codecs (`epoch:`), declarative `unit:` conversion, and `pipe` chains for procedural
   cases.

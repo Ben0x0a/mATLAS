@@ -24,7 +24,7 @@ def _xml_preset(model: str, *, id_suffix: str = "", longitude=None) -> object:
         "preset": {"id": f"cellebrite.{model.lower()}{id_suffix}", "name": f"Cellebrite {model}{id_suffix}",
                    "tier": "secondary", "version": 1},
         "input_selector": {"format": "xml", "name": "report.xml", "namespace": _NS, "model": model},
-        "assertions": [{
+        "observations": [{
             "position": position,
             "time": {"instant": "field(TimeStamp)"},
             "links": {"entity_position": "at", "entity_time": "observed_at",
@@ -66,7 +66,7 @@ def test_namespace_mismatch_excludes_preset(tmp_path: Path) -> None:
         "preset": {"id": "axiom.location", "name": "AXIOM Loc", "tier": "secondary", "version": 1},
         "input_selector": {"format": "xml", "name": "report.xml",
                            "namespace": "urn:axiom", "model": "Location"},
-        "assertions": location.assertions and [{
+        "observations": location.observations and [{
             "position": {"latitude": "field(Position.Latitude)"},
             "time": {"instant": "field(TimeStamp)"},
             "links": {"entity_position": "at", "entity_time": "observed_at",

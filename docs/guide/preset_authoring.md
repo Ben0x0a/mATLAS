@@ -13,7 +13,7 @@ A preset is a **declaration**, not a script. It states three things:
 
 1. **which source** it targets (`input_selector`),
 2. **what fields the source has** (`expected_fields`), and
-3. **how each source value maps** to the canonical model (`common` + `assertions`).
+3. **how each source value maps** to the canonical model (`common` + `observations`).
 
 The golden rule is **the source's words, verbatim, at Layer 1**. A preset never converts:
 it selects a value, optionally selects a substring of it, and declares how to decode a
@@ -22,9 +22,9 @@ resolution and datum adoption are method-stamped Layer-2 interpretations the eng
 performs afterwards — never the preset. This is why a coordinate is mapped to the
 datum-agnostic `latitude` / `longitude` parts and the datum is stated *separately*.
 
-An assertion is the unit of output: **one entity, in one role, at one place expression,
+An observation is the unit of output: **one entity, in one role, at one place expression,
 over one time expression, bound by three links**. One source record can fan out into
-several assertions (a trip → a start and an end), and several presets can read one record.
+several observations (a trip → a start and an end), and several presets can read one record.
 
 ### How one value resolves
 
@@ -47,7 +47,7 @@ flowchart TD
     G -->|no — scalar| H["pipe: cast · scale · arithmetic ·<br/>lookup · regex · split"]
     H --> I["unit: source unit → canonical<br/>(× unit_factor)"]
     I --> J["cast: explicit type<br/>or inferred model cast"]
-    J --> K["store on the assertion"]
+    J --> K["store on the observation"]
     V --> L2["Layer 2 (method-stamped):<br/>WGS84 adoption, UTC µs, unit-canonical block"]
 ```
 
@@ -111,8 +111,8 @@ expected_fields:
 
 ### 2.4 Share fields with `common`
 
-Fields every assertion needs go in `common:` once. A `common:` coordinate becomes the
-record's base place, shared by each assertion.
+Fields every observation needs go in `common:` once. A `common:` coordinate becomes the
+record's base place, shared by each observation.
 
 ```yaml
 common:
@@ -123,10 +123,10 @@ common:
   raw_source_path: preset(path)         # the device path this preset targets
 ```
 
-### 2.5 Map an assertion
+### 2.5 Map an observation
 
 ```yaml
-assertions:
+observations:
   - position:
       latitude:  field(ZLATITUDE)             # datum-agnostic L1 part; numeric cast inferred
       longitude: field(ZLONGITUDE)
@@ -143,7 +143,7 @@ assertions:
       spatial_temporal: instant
 ```
 
-For two times at one place (a visit interval and a created instant), write two assertion
+For two times at one place (a visit interval and a created instant), write two observation
 entries; they share the record's UID automatically.
 
 ## 3. Worked example — iOS SQLite (primary source)
@@ -188,7 +188,7 @@ common:
   position_source: const(GNSS)
   raw_source_path: preset(path)   # device db path; input_record_id defaults to <table>#<ordinal>
 
-assertions:
+observations:
   - position:
       latitude:                       field(ZLATITUDE)
       longitude:                      field(ZLONGITUDE)
@@ -264,7 +264,7 @@ common:
   raw_source_path: field(Source)
   deleted: { from: 'field("Recovery method")', pipe: "lookup(recovery, on_unknown=null)" }
 
-assertions:
+observations:
   - position:
       latitude:              field(Latitude)
       longitude:             field(Longitude)
@@ -298,7 +298,7 @@ A dwell window uses `interval:` with a `lower` and `upper` bound and the
 `zone` declaration.
 
 ```yaml
-assertions:
+observations:
   - position:
       latitude:              field(ZLOCATIONLATITUDE)
       longitude:             field(ZLOCATIONLONGITUDE)
@@ -334,7 +334,7 @@ common:
   activity_kind:   const(observation)   # REQUIRED for the context entry below to exist
   context.antenna: format("{field(GlobalCellID)}")
 
-assertions:
+observations:
   - position:
       latitude:            field(Latitude)
       longitude:           field(Longitude)

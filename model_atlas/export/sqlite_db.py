@@ -13,7 +13,7 @@ Depends on: model_atlas.core.store.RunStore (``.persist`` — VACUUM INTO),
 Why this replaces, rather than ports, the old ``sqlite`` exporter
 ---------------------------------------------------------------------
 The old exporter backed up the store's live connection wholesale too, but the OLD
-store held a single denormalised ``assertions`` table plus an ``assertion_flat`` VIEW
+store held a single denormalised ``observations`` table plus an ``observation_flat`` VIEW
 — a flat-table dump. The relational store already IS a full 21-table +
 ``matlas_meta`` schema with versioning pragmas stamped at creation
 (``core.schema.create_schema``); there is no separate flat-table shape left to build,

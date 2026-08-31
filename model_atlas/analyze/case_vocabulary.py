@@ -22,12 +22,12 @@ from pathlib import Path
 from model_atlas.analyze.concomitance import _FROM_JOINS
 from model_atlas.analyze.concomitance_request import CriterionKind
 
-# "A queryable placement" = an assertion with BOTH an integrated point and an integrated
+# "A queryable placement" = an observation with BOTH an integrated point and an integrated
 # time bound (task wording). Deliberately narrower than the engine's full presence
 # predicate (concomitance._PRESENCE_WHERE), which ALSO excludes non-presence links
 # ('references' pins, 'never_during_interval'): the vocabulary answers "what CAN be
 # selected", not "what would survive the presence filter" — a value kept out of a result
-# only by its assertion's link is still a legitimate, selectable token here.
+# only by its observation's link is still a legitimate, selectable token here.
 _PLACEMENT_WHERE = (
     " WHERE ti.lower_unix_utc_us IS NOT NULL AND ti.upper_unix_utc_us IS NOT NULL"
     " AND si.latitude_wgs84 IS NOT NULL AND si.longitude_wgs84 IS NOT NULL"
@@ -37,7 +37,7 @@ _PLACEMENT_WHERE = (
 @dataclass(frozen=True)
 class VocabularyEntry:
     """One selectable value: its qualifier (an identifier's identifier_type; else None)
-    and how many queryable placements (assertions with both a position and a time) carry
+    and how many queryable placements (observations with both a position and a time) carry
     it — never the raw entity count, which would count entities with no integrated point
     and mislead the operator with a promising number that can never appear in a result.
     """

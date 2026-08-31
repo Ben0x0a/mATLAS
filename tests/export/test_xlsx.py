@@ -32,7 +32,7 @@ def test_xlsx_round_trips_small_store(tmp_path: Path) -> None:
             store, ExportContext(output_dir=tmp_path, base_name="merged"))
         flat = build_flat_view(store.connection, include_source_columns=False)
 
-    assert written == [tmp_path / "merged.assertions.xlsx"]
+    assert written == [tmp_path / "merged.observations.xlsx"]
     reopened = pd.read_excel(written[0])
 
     # Row-count spot-check against the flat CSV of the same store.
@@ -58,5 +58,5 @@ def test_xlsx_writes_one_file_for_all_presets(tmp_path: Path) -> None:
         written = XlsxExporter().export(
             store, ExportContext(output_dir=tmp_path, base_name="case"))
 
-    assert [path.name for path in written] == ["case.assertions.xlsx"]
+    assert [path.name for path in written] == ["case.observations.xlsx"]
     assert len(pd.read_excel(written[0])) == 4    # both presets' rows (2 each) in the one file

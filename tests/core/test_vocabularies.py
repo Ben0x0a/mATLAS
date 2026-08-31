@@ -50,12 +50,12 @@ _DEMO_DB = (
 _ENUM_COLUMNS: dict[tuple[str, str], type[Enum]] = {
     ("entity", "type"): EntityType,
     ("entity", "concerns_origin"): Origin,
-    ("assertion", "entity_origin"): Origin,
-    ("assertion", "entity_role"): EntityRole,
-    ("assertion", "entity_position_link"): EntityPositionLink,
-    ("assertion", "entity_time_link"): EntityTimeLink,
-    ("assertion", "spatial_temporal_link"): SpatialTemporalLink,
-    ("assertion", "deleted"): RecordState,
+    ("observation", "entity_origin"): Origin,
+    ("observation", "entity_role"): EntityRole,
+    ("observation", "entity_position_link"): EntityPositionLink,
+    ("observation", "entity_time_link"): EntityTimeLink,
+    ("observation", "spatial_temporal_link"): SpatialTemporalLink,
+    ("observation", "deleted"): RecordState,
     ("spatial_expression", "referential"): SpatialReferential,
     ("spatial_component", "spatial_role"): SpatialRole,
     ("temporal_expression", "kind"): TemporalKind,
@@ -70,7 +70,7 @@ _ENUM_COLUMNS: dict[tuple[str, str], type[Enum]] = {
 
 def _distinct_values(conn: sqlite3.Connection, table: str, column: str) -> list[str]:
     # HOW: read the distinct non-NULL values actually present, so the fixture drives
-    # the assertion rather than a hardcoded list that could drift from the DB.
+    # the observation rather than a hardcoded list that could drift from the DB.
     rows = conn.execute(
         f"SELECT DISTINCT {column} FROM {table} WHERE {column} IS NOT NULL"
     ).fetchall()

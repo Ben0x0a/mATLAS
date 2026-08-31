@@ -61,7 +61,7 @@ class Locates(str, Enum):
     UNKNOWN = "unknown"
 
 
-# --- The four link / role vocabularies (live on the assertion) -------------
+# --- The four link / role vocabularies (live on the observation) -------------
 # Each phrased member declares a British-English ``phrase`` fragment beside its
 # value: the verbalizer assembles one deterministic sentence from
 # these fragments, so a member's wording is declared here once and derived nowhere
@@ -74,7 +74,7 @@ class EntityTimeLink(str, Enum):
     Carries a ``phrase`` fragment and derives ``genesis`` (never stored).
     ``NEVER_DURING_INTERVAL`` is the negation/alibi member on this edge (open item 1
     of run_db_schema.md — negation beyond the S-T link — and the shape the
-    worked-example demo stores on ``assertion.entity_time_link``).
+    worked-example demo stores on ``observation.entity_time_link``).
     """
 
     OBSERVED_AT = "observed_at", "was observed at"        # a sensor registered the entity
@@ -378,7 +378,7 @@ class RecoverySource(str, Enum):
     than a ``live`` row still in the b-tree. Provenance only — it is deliberately EXCLUDED
     from the L1 digest (like paths / data_source), so it never moves an identity: a claim
     carved from freespace is the SAME claim as a live one, only less certain to have been
-    truly recorded. It reaches each assertion through the raw_record→assertion join, never
+    truly recorded. It reaches each observation through the raw_record→observation join, never
     a copied column.
     """
 
@@ -418,7 +418,7 @@ class EditKind(str, Enum):
 class Origin(str, Enum):
     """Who specified a value: a preset mapping, or an operator argument.
 
-    Used by ``entity.concerns_origin`` and ``assertion.entity_origin``. Excluded from
+    Used by ``entity.concerns_origin`` and ``observation.entity_origin``. Excluded from
     both evidence digests — operator input never moves a digest.
     """
 
@@ -427,7 +427,7 @@ class Origin(str, Enum):
 
 
 # RelationType / RelationOrigin: DEFERRED with the analyst graph (entity_model.md).
-# MentionRole: removed with assertion_mention.
+# MentionRole: removed with observation_mention.
 
 
 # --- Derivation tables for the two derived views --------------------------
@@ -514,7 +514,7 @@ def is_standard_part(part: str) -> bool:
 
 # --- Family dataclasses (one per table) -----------------------------------
 # One frozen dataclass per run-DB table, matching the demo DB's column shapes. The
-# assembly engine builds these; the store writes them. Frozen because an assertion,
+# assembly engine builds these; the store writes them. Frozen because an observation,
 # once assembled, is an immutable fact; edits mint new rows (edit_log), never mutate.
 
 @dataclass(frozen=True)
@@ -652,7 +652,7 @@ class Entity:
     derived, never a key.
     """
 
-    entity_id: str        # uuid5(assertion natural key ⟂ corner tag)
+    entity_id: str        # uuid5(observation natural key ⟂ corner tag)
     identifier: str | None            # normalised; None = purely typed mention
     raw_identifier: str | None        # the source's own text, verbatim
     # FREE text, not a closed vocabulary: a preset may name any identifier kind (bssid,
@@ -695,7 +695,7 @@ class SpatialExpression:
     the interpretation, never pre-stated by the part name.
     """
 
-    spatial_expression_id: str      # uuid5(assertion natural key ⟂ corner tag)
+    spatial_expression_id: str      # uuid5(observation natural key ⟂ corner tag)
     referential: SpatialReferential
     spatial_source: str | None = None
 
@@ -727,22 +727,22 @@ class TemporalExpression:
     dropped (fuzziness lives in the raw value + integration method).
     """
 
-    temporal_expression_id: str     # uuid5(assertion natural key ⟂ corner tag)
+    temporal_expression_id: str     # uuid5(observation natural key ⟂ corner tag)
     kind: TemporalKind
     referential: TemporalReferential | None = None
     temporal_source: str | None = None   # clock mechanism: NTP, internal_clock…
 
 
 @dataclass(frozen=True)
-class Assertion:
-    """table: assertion — one entity, in one role, at one place/time expression.
+class Observation:
+    """table: observation — one entity, in one role, at one place/time expression.
 
     ``UNIQUE(raw_record_id, preset_id, output_ordinal)`` — two presets reading one
-    record produce distinct assertions. Both digests are indexed, repeat legally, and
+    record produce distinct observations. Both digests are indexed, repeat legally, and
     are never keys. The four link/role vocabularies live here.
     """
 
-    assertion_id: str          # uuid5(raw_record_id ⟂ preset key ⟂ output_ordinal)
+    observation_id: str          # uuid5(raw_record_id ⟂ preset key ⟂ output_ordinal)
     raw_record_id: str         # FK -> raw_record
     preset_id: str             # FK -> preset
     output_ordinal: int
@@ -762,14 +762,14 @@ class Assertion:
     source_label: str | None = None             # the one per-claim provenance field
     # A human locator for the ORIGINAL source record (the source's own id column, e.g. a
     # table PK), preset-mapped — so a row traces back to where it came from. On the
-    # assertion (L1), not the raw_record (L0): the value is preset-resolved, and L0 is
+    # observation (L1), not the raw_record (L0): the value is preset-resolved, and L0 is
     # preset-free. NULL when the preset maps none (line_no + raw_json still locate it).
     input_record_id: str | None = None
     # The source record's OWN uid (a tool's Item ID, a real UUID column), preset-mapped and
-    # verbatim — the sibling of ``input_record_id`` above, and on the assertion for the SAME
+    # verbatim — the sibling of ``input_record_id`` above, and on the observation for the SAME
     # reason: the value is preset-resolved and L0 is preset-free. Different job, though:
     # ``input_record_id`` LOCATES one source record, this one GROUPS the output rows a single
-    # source record fanned out into, so every assertion of one record repeats it. NULL when the
+    # source record fanned out into, so every observation of one record repeats it. NULL when the
     # preset maps none (or writes ``source_record_uid: default``) — the export then falls back
     # to the engine-generated ``raw_record_id``. Feeds NO digest: identity comes from the L1
     # projection, and a source's own key is provenance, not claim content.
@@ -860,8 +860,8 @@ class Analysis:
     anpr_read), so it is plain text here, not ``RecordType``.
     """
 
-    analysis_id: str      # uuid5(assertion_id ⟂ method)
-    assertion_id: str     # FK -> assertion
+    analysis_id: str      # uuid5(observation_id ⟂ method)
+    observation_id: str     # FK -> observation
     method: str
     record_type: str | None = None
     record_rank: int | None = None
@@ -918,7 +918,7 @@ _FLOAT_COLUMNS: frozenset[str] = frozenset({
     "horizontal_speed_accuracy_kmh", "vertical_speed_accuracy_kmh",
     "heading_deg", "heading_accuracy_deg", "beam_azimuth_deg", "beam_width_deg",
 })
-# The integer-typed assignable fields a preset may map: multiplicity (on the assertion) and
+# The integer-typed assignable fields a preset may map: multiplicity (on the observation) and
 # the two per-bound source-stated timing uncertainties. Keyed on the assignable NAME (see the
 # block comment above), so e.g. a source value 2.0 for ``multiplicity`` coerces to int 2.
 _INT_COLUMNS: frozenset[str] = frozenset({

@@ -72,20 +72,20 @@ def _add_point(store: RunStore, line_no: int, source_id: str, preset_id: str,
             lower_us / 1_000_000, tz=dt.timezone.utc).isoformat(),
         upper_datetime_iso=dt.datetime.fromtimestamp(
             upper_us / 1_000_000, tz=dt.timezone.utc).isoformat()))
-    assertion_id = ids.assertion_id(record_id, preset_key, 0)
-    store.write_assertion(V.Assertion(
-        assertion_id=assertion_id, raw_record_id=record_id, preset_id=preset_id,
+    observation_id = ids.observation_id(record_id, preset_key, 0)
+    store.write_observation(V.Observation(
+        observation_id=observation_id, raw_record_id=record_id, preset_id=preset_id,
         output_ordinal=0, entity_id=entity_id,
         content_hash=f"ch-{line_no}", claim_digest=f"cd-{line_no}",
         spatial_expression_id=sx_id, temporal_expression_id=tx_id,
         entity_role="subject", entity_position_link="at",
         entity_time_link="observed_at", spatial_temporal_link="instant",
         source_label=f"src-{line_no}"))
-    return assertion_id
+    return observation_id
 
 
 def _build_case(path: Path) -> tuple[str, str]:
-    """Persist a case with two presence assertions 10 m apart, overlapping in time."""
+    """Persist a case with two presence observations 10 m apart, overlapping in time."""
     with RunStore() as store:
         case_id = ids.case_metadata_id()
         store.write_case_metadata(V.CaseMetadata(case_id=case_id, case_number="T101a"))
@@ -126,7 +126,7 @@ def _request(tmp_path: Path, db_path: Path, **overrides: object) -> Concomitance
 
 # --- the four shapes T101a had to refuse, now running for real ---------------------------
 # Each of these was refused by a capability guard before the T102 engine landed. The
-# guards are gone, so the assertion is now that the run COMPLETES and writes a file.
+# guards are gone, so the observation is now that the run COMPLETES and writes a file.
 
 def test_two_cases_now_run(tmp_path: Path) -> None:
     """A second case is compared for real — and the same-identity exclusion is LIFTED
@@ -146,7 +146,7 @@ def test_two_cases_now_run(tmp_path: Path) -> None:
 
 def test_the_same_case_named_twice_is_still_one_case(tmp_path: Path) -> None:
     """case_2 pointing at case_1's file is ONE case, so the same-identity exclusion
-    must still apply — otherwise every assertion would pair with itself."""
+    must still apply — otherwise every observation would pair with itself."""
     db_path = tmp_path / "case.matlas.sqlite"
     _build_case(db_path)
     both = run_concomitance(_request(tmp_path, db_path, case_2=db_path))

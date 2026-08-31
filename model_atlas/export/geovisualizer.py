@@ -18,7 +18,7 @@ The data access is ONE query — ``core.flat_view.build_flat_view`` — which al
 BOTH temporal bounds per row (``time_lower_unix_utc_us`` / ``time_upper_unix_utc_us``,
 sourced from ``timespan_integration.lower_unix_utc_us`` / ``upper_unix_utc_us``): the
 "natural SELECT over timespan_integration" the relational model gives for free. The
-expansion itself — one projected assertion becomes ONE GeoVisualizer row for an
+expansion itself — one projected observation becomes ONE GeoVisualizer row for an
 instant (lower == upper, or only one bound present) or TWO for a genuine interval
 (lower != upper, one row per bound) — is Python shaping, ported verbatim from the old
 ``_time_emissions``/``_geovis_description`` pair.
@@ -237,7 +237,7 @@ class GeovisualizerExporter:
     def _write(self, frame: pd.DataFrame, path: Path) -> Path:
         rows: list[dict] = []
         for row in frame.to_dict(orient="records"):
-            # An interval assertion (lower != upper) expands into two rows, one per
+            # An interval observation (lower != upper) expands into two rows, one per
             # time bound; an instant into one. All non-temporal columns (position,
             # IMEI, ...) are shared by both.
             for timestamp_us, timestamp_field, offset_hours, bound in _time_emissions(row):
@@ -255,7 +255,7 @@ class GeovisualizerExporter:
                     "Source": _geovis_source(row),
                     "orig. Time": "",
                     "Type": clean(row.get("preset_name")) or "",   # preset name (should always be present)
-                    "Confidence": "",                    # reserved for the assertion link (later)
+                    "Confidence": "",                    # reserved for the observation link (later)
                     "Precision": _num_or_blank(row.get("horizontal_accuracy_m")),
                 })
         out_frame = pd.DataFrame(rows, columns=list(_GEOVIS_COLUMNS))

@@ -55,7 +55,7 @@ _FLOAT64_SAFE_INT = 2**53
 
 
 class XlsxExporter:
-    """Assertion rows as an Excel worksheet (``format = "xlsx"``)."""
+    """Observation rows as an Excel worksheet (``format = "xlsx"``)."""
 
     format = "xlsx"
 
@@ -63,7 +63,7 @@ class XlsxExporter:
         frame = build_flat_view(
             store.connection, ranking_method=ctx.ranking_method, include_source_columns=False)
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
-        path = ctx.output_dir / f"{ctx.base_name}.assertions.xlsx"
+        path = ctx.output_dir / f"{ctx.base_name}.observations.xlsx"
         return [self._write(frame, path)]
 
     def _write(self, frame: pd.DataFrame, path: Path) -> Path:
@@ -96,7 +96,7 @@ class XlsxExporter:
     def _set_cell(cell: Any, value: Any, is_integer_column: bool) -> None:
         """Write one value into ``cell`` with the correct, lossless, inert type."""
         if is_blank(value):
-            return   # leave the cell empty (a corner-less assertion's missing Int64/text)
+            return   # leave the cell empty (a corner-less observation's missing Int64/text)
         if is_integer_column:
             number = int(value)
             # An int within float64's exact range writes as a clean number; a larger one
@@ -114,5 +114,5 @@ class XlsxExporter:
 
 register_exporter(
     "xlsx", "Excel (.xlsx)", XlsxExporter(),
-    "Assertion rows as an Excel worksheet.",
+    "Observation rows as an Excel worksheet.",
 )

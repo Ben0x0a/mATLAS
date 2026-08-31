@@ -134,7 +134,7 @@ frame = project(store.connection,
                 ranking_method=ctx.ranking_method)
 ```
 
-`project` returns the authoritative flat frame — one row per assertion, the canonical column order,
+`project` returns the authoritative flat frame — one row per observation, the canonical column order,
 restored numeric dtypes, and the per-run `orig_<col>` tail. Every exporter reads the same
 projection, so a value can never differ between two output formats. Your exporter's only job is to
 **serialise** that frame into its format.

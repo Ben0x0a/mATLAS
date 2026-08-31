@@ -23,12 +23,12 @@ run. A static VIEW cannot carry a per-run column set, so the flat view is assemb
 as a SQL string once per run: the canonical SELECT list is constant, the ``orig_``
 tail is computed from the records actually present.
 
-One row PER ASSERTION
+One row PER OBSERVATION
 ----------------------
-An assertion exists only per placement, so the line count IS the placement count (a
+An observation exists only per placement, so the line count IS the placement count (a
 one-legged CDR is one line, a 20-recipient message is one). The owned corners
 (entity is mandatory; the spatial/temporal expressions are optional) are LEFT JOINed,
-so a corner-less assertion yields EMPTY coordinate/time cells — never dropped, never
+so a corner-less observation yields EMPTY coordinate/time cells — never dropped, never
 invented (the §2 "positionless claim vanishes" guard).
 
 Column-contract decisions (recorded where csv_migration.md is a mapping, not a literal
@@ -41,7 +41,7 @@ column list)
   (cross-check row 42: the settled model's names; the old headers are
   retired).
 - ``utc_offset_hours`` -> ``utc_offset_hours_lower`` / ``_upper``.
-- ``deleted`` sources from ``assertion.deleted`` (the app's own flag, migration row 65);
+- ``deleted`` sources from ``observation.deleted`` (the app's own flag, migration row 65);
   the separate ``recovery_state`` new column sources from
   ``raw_record.recovery_state``.
 - ``locates`` is SELECTed as a ``NULL`` placeholder and filled in Python from
@@ -70,7 +70,7 @@ PASSTHROUGH_PREFIX = "orig_"
 # --- the canonical flat-CSV column contract (docs/csv_migration.md) ----------
 # Each entry is (output column name, SQL expression). The order IS the contract; the
 # expression names the source table.column (or a component subquery / json_extract).
-# Table aliases: a=assertion, r=raw_record, s=source, rn=run, c=case_metadata,
+# Table aliases: a=observation, r=raw_record, s=source, rn=run, c=case_metadata,
 # e=entity, p=preset, sx/si/six=spatial expression/integration/index,
 # tx/ti=temporal expression/timespan integration, act=activity, an=analysis.
 
@@ -171,7 +171,7 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     # genuine key (a tool's Item ID) the examiner must see THAT, not a derived uuid. NULL when
     # unmapped (or `source_record_uid: default`), so the generated id remains the fallback.
     ("source_record_uid", "COALESCE(a.source_record_uid, r.raw_record_id)"),
-    ("row_uid", "a.assertion_id"),
+    ("row_uid", "a.observation_id"),
     ("preset_id", "p.key"),                             # the preset KEY (migration row 61)
     ("preset_name", "p.name"),
     ("source_label", "a.source_label"),
@@ -224,7 +224,7 @@ _NUMERIC_TEXT_COLUMNS: tuple[str, ...] = (
     "utc_offset_hours_lower", "utc_offset_hours_upper",
 )
 
-# INTEGER-typed flat-view columns that may carry NULLs (a corner-less assertion). Read
+# INTEGER-typed flat-view columns that may carry NULLs (a corner-less observation). Read
 # as pandas nullable ``Int64`` rather than the float64 pandas would otherwise infer:
 # ``s2_cell_id`` is a signed int64 S2 leaf cell whose value EXCEEDS float64's 53-bit
 # integer range — a float round-trip would silently corrupt the cell id (a §2-class
@@ -236,12 +236,12 @@ _INTEGER_COLUMNS: tuple[str, ...] = (
     "record_rank", "s2_cell_id",
 )
 
-# The join chain up the grain (assertion -> raw_record -> source -> run -> case) plus the
+# The join chain up the grain (observation -> raw_record -> source -> run -> case) plus the
 # owned corners, their integrations, the S2 index and the current analysis method. The
 # ``?`` binds the resolved ranking method (see build_flat_view_sql). ORDER BY a.rowid
 # reproduces ingest order, so the flat frame is deterministic.
 _FROM_JOINS = """
-FROM assertion a
+FROM observation a
 JOIN raw_record r ON r.raw_record_id = a.raw_record_id
 JOIN source s ON s.source_id = r.source_id
 JOIN run rn ON rn.run_id = s.run_id
@@ -254,7 +254,7 @@ LEFT JOIN spatial_index six ON six.spatial_integration_id = si.spatial_integrati
 LEFT JOIN temporal_expression tx ON tx.temporal_expression_id = a.temporal_expression_id
 LEFT JOIN timespan_integration ti ON ti.temporal_expression_id = a.temporal_expression_id
 LEFT JOIN activity act ON act.activity_id = a.activity_id
-LEFT JOIN analysis an ON an.assertion_id = a.assertion_id AND an.method = ?
+LEFT JOIN analysis an ON an.observation_id = a.observation_id AND an.method = ?
 ORDER BY a.rowid
 """.strip()
 # NOTE (future-proofing): when plural integration candidates arrive, add
@@ -374,7 +374,7 @@ def build_flat_view_sql(
         names = _passthrough_names(fields, source_column_prefix)
         for field in fields:
             alias = names[field]
-            # The verbatim value of THIS assertion's own record. The JSON path quotes the
+            # The verbatim value of THIS observation's own record. The JSON path quotes the
             # key (``$."<field>"``) so a field named e.g. ``a.party`` cannot break the
             # extract; _json_path_literal handles both escaping layers (JSON-path backslash
             # escaping + SQL-literal single-quote doubling) so an exotic key never yields a
@@ -394,13 +394,13 @@ def build_flat_view(
     source_column_prefix: str = PASSTHROUGH_PREFIX,
     ranking_method: str | None = None,
 ) -> pd.DataFrame:
-    """Build the flat CSV frame from the run database — one row per assertion.
+    """Build the flat CSV frame from the run database — one row per observation.
 
     HOW: resolve the current ranking method, build the generated SELECT, read it into a
     frame, restore the numeric-union TEXT columns to a numeric dtype (so they render
     unquoted), and fill the derived ``locates`` from ``EntityPositionLink`` — never from a
     SQL mapping (the vocabulary is the single source of truth). Corner-less
-    assertions keep their row with empty coordinate/time cells (LEFT JOINs), never dropped.
+    observations keep their row with empty coordinate/time cells (LEFT JOINs), never dropped.
     """
     method = _resolve_ranking_method(connection, ranking_method)
     sql, _orig_columns = build_flat_view_sql(

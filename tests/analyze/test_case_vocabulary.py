@@ -43,7 +43,7 @@ class _Fixture:
 
     def add_point(self, *, identifier: str | None, identifier_type: str = "msisdn",
                  entity_type: str = "device", placed: bool = True) -> str:
-        """One assertion; ``placed=False`` omits the spatial/temporal integration so it
+        """One observation; ``placed=False`` omits the spatial/temporal integration so it
         is NOT a queryable placement (the entity-with-no-integrated-point case)."""
         self.line_no += 1
         record_id = ids.raw_record_id(self.source_id, self.line_no)
@@ -72,16 +72,16 @@ class _Fixture:
                 timespan_integration_id=ids.timespan_integration_id(tx_id, "fixture/1.0"),
                 temporal_expression_id=tx_id, method="fixture/1.0",
                 lower_unix_utc_us=BASE_US, upper_unix_utc_us=BASE_US + 60_000_000))
-        assertion_id = ids.assertion_id(record_id, self.preset_key, 0)
-        self.store.write_assertion(V.Assertion(
-            assertion_id=assertion_id, raw_record_id=record_id,
+        observation_id = ids.observation_id(record_id, self.preset_key, 0)
+        self.store.write_observation(V.Observation(
+            observation_id=observation_id, raw_record_id=record_id,
             preset_id=self.preset_id, output_ordinal=0, entity_id=entity_id,
             content_hash=f"ch-{self.line_no}", claim_digest=f"cd-{self.line_no}",
             spatial_expression_id=sx_id,
             temporal_expression_id=tx_id if placed else None,
             entity_role="subject", entity_position_link="at",
             entity_time_link="observed_at", spatial_temporal_link="instant"))
-        return assertion_id
+        return observation_id
 
 
 def _by_value(entries: tuple, value: str):

@@ -70,10 +70,10 @@ def _north_of(metres: float) -> tuple[float, float]:
 
 
 class _CaseFixture:
-    """L0 scaffolding + an ``add_point`` writer for one candidate assertion.
+    """L0 scaffolding + an ``add_point`` writer for one candidate observation.
 
     Writes the full FK chain (case -> run -> source/preset -> raw_record ->
-    entity/expressions -> assertion) through the layer-typed store writers; the caller
+    entity/expressions -> observation) through the layer-typed store writers; the caller
     runs ``integrate_spatial`` once afterwards so the spatial_integration and
     spatial_index rows — including ``horizontal_accuracy_m`` — come from the REAL build
     path.
@@ -107,7 +107,7 @@ class _CaseFixture:
                   position_link: str = "at",
                   time_link: str = "observed_at",
                   st_link: str = "instant") -> str:
-        """One placed-and-timed assertion; returns its assertion_id."""
+        """One placed-and-timed observation; returns its observation_id."""
         self.line_no += 1
         record_id = ids.raw_record_id(self.source_id, self.line_no)
         self.store.write_raw_record(V.RawRecord(
@@ -145,16 +145,16 @@ class _CaseFixture:
                 lower_us / 1_000_000, tz=dt.timezone.utc).isoformat(),
             upper_datetime_iso=dt.datetime.fromtimestamp(
                 upper_us / 1_000_000, tz=dt.timezone.utc).isoformat()))
-        assertion_id = ids.assertion_id(record_id, self.preset_key, 0)
-        self.store.write_assertion(V.Assertion(
-            assertion_id=assertion_id, raw_record_id=record_id,
+        observation_id = ids.observation_id(record_id, self.preset_key, 0)
+        self.store.write_observation(V.Observation(
+            observation_id=observation_id, raw_record_id=record_id,
             preset_id=self.preset_id, output_ordinal=0, entity_id=entity_id,
             content_hash=f"ch-{self.line_no}", claim_digest=f"cd-{self.line_no}",
             spatial_expression_id=sx_id, temporal_expression_id=tx_id,
             entity_role="subject", entity_position_link=position_link,
             entity_time_link=time_link, spatial_temporal_link=st_link,
             source_label=f"src-{self.line_no}"))
-        return assertion_id
+        return observation_id
 
 
 class _CollectingSink:
@@ -197,8 +197,8 @@ def _run(store_1, store_2=None, *, group_1=None, group_2=None,
 
 
 def _pair_keys(rows: list[MatchRow]) -> set[frozenset[str]]:
-    """The UNORDERED assertion pairs a result carries ("a match is a match")."""
-    return {frozenset((r.g1_assertion_id, r.g2_assertion_id)) for r in rows}
+    """The UNORDERED observation pairs a result carries ("a match is a match")."""
+    return {frozenset((r.g1_observation_id, r.g2_observation_id)) for r in rows}
 
 
 # --- the brute-force oracle -------------------------------------------------------
@@ -209,11 +209,11 @@ def _pair_keys(rows: list[MatchRow]) -> set[frozenset[str]]:
 # formula, so sharing the formula keeps the comparison exact.
 
 _BRUTE_CANDIDATE_SQL = """
-SELECT a.assertion_id, e.identifier, e.identifier_type, e.type,
+SELECT a.observation_id, e.identifier, e.identifier_type, e.type,
        si.latitude_wgs84, si.longitude_wgs84, si.horizontal_accuracy_m,
        ti.lower_unix_utc_us, ti.upper_unix_utc_us,
        ti.lower_accuracy_us, ti.upper_accuracy_us
-FROM assertion a
+FROM observation a
 JOIN entity e ON e.entity_id = a.entity_id
 JOIN spatial_integration si ON si.spatial_expression_id = a.spatial_expression_id
 JOIN spatial_index six ON six.spatial_integration_id = si.spatial_integration_id
@@ -232,7 +232,7 @@ class _Row:
     """One brute-force candidate, with the accuracies already NULL-collapsed to 0."""
 
     def __init__(self, raw) -> None:
-        (self.assertion_id, self.identifier, self.identifier_type, self.entity_type,
+        (self.observation_id, self.identifier, self.identifier_type, self.entity_type,
          self.latitude, self.longitude, accuracy_m,
          self.lower_us, self.upper_us, lower_acc, upper_acc) = raw
         self.accuracy_m = accuracy_m or 0.0
@@ -278,7 +278,7 @@ def _brute_force_pairs(store_1, store_2=None, *,
                        time_before: dt.timedelta = dt.timedelta(minutes=10),
                        time_after: dt.timedelta = dt.timedelta(minutes=10),
                        use_accuracy: bool = False) -> set[frozenset[str]]:
-    """Every true match as an UNORDERED assertion pair — the definition, O(n²).
+    """Every true match as an UNORDERED observation pair — the definition, O(n²).
 
     One store applies the same-identity exclusion; two stores lift it (the deliberate
     inversion). A pair counts once however many orientations satisfy the window.
@@ -294,7 +294,7 @@ def _brute_force_pairs(store_1, store_2=None, *,
     for a in rows_1:
         for b in rows_2:
             if one_store:
-                if a.assertion_id == b.assertion_id:
+                if a.observation_id == b.observation_id:
                     continue
                 if (a.identifier is not None and a.identifier == b.identifier
                         and a.identifier_type == b.identifier_type):
@@ -306,7 +306,7 @@ def _brute_force_pairs(store_1, store_2=None, *,
                 continue
             if not _brute_window_ok(a, b, before_us, after_us, use_accuracy):
                 continue
-            pairs.add(frozenset((a.assertion_id, b.assertion_id)))
+            pairs.add(frozenset((a.observation_id, b.observation_id)))
     return pairs
 
 
@@ -549,7 +549,7 @@ def test_one_identifier_against_everything_finds_its_partners() -> None:
 
 
 def test_a_lower_sorting_partner_is_not_dropped() -> None:
-    """The regression an unconditional ``assertion_id > anchor`` filter would cause.
+    """The regression an unconditional ``observation_id > anchor`` filter would cause.
 
     With DISJOINT groups only one visit exists, so suppressing it by id order loses the
     match outright. Asserted in BOTH id directions so the test cannot pass by luck.
@@ -591,7 +591,7 @@ def test_asymmetric_window_direction_and_signed_delta() -> None:
                        time_after=dt.timedelta(minutes=30),
                        time_before=dt.timedelta(minutes=10))
         assert len(wide) == 1
-        assert wide[0].g1_assertion_id == anchor
+        assert wide[0].g1_observation_id == anchor
         assert wide[0].time_delta_s == pytest.approx(20 * 60.0)   # POSITIVE = later
         assert wide[0].time_overlap is False
 
@@ -675,7 +675,7 @@ def test_two_sided_accuracy_is_reported_exactly_once() -> None:
         assert summary.match_count == 1
         # The FUZZIER point is the responsible anchor — that is what makes the single
         # visit the one that can actually reach.
-        assert rows[0].g1_assertion_id == b
+        assert rows[0].g1_observation_id == b
         assert rows[0].g1_accuracy_m == 10_000.0
 
 
@@ -780,8 +780,8 @@ def test_both_strategies_agree_on_the_random_fixture() -> None:
                       use_accuracy=True)
         _, block_rows = _run(store, strategy=SpatialStrategy.CELL_NEIGHBOURS, **kwargs)
         _, cap_rows = _run(store, strategy=SpatialStrategy.CAP_COVERING, **kwargs)
-        assert [r.g1_assertion_id for r in block_rows] == [
-            r.g1_assertion_id for r in cap_rows]
+        assert [r.g1_observation_id for r in block_rows] == [
+            r.g1_observation_id for r in cap_rows]
         assert _pair_keys(block_rows) == _pair_keys(cap_rows)
         assert block_rows == cap_rows          # byte-identical rows, not just pairs
 
@@ -807,7 +807,7 @@ def test_strategy_benchmark_is_reported(capsys) -> None:
             for name, (examined, matches, elapsed) in report.items():
                 print(f"    {name:16s} candidates_examined={examined:7d} "
                       f"matches={matches:5d} wall={elapsed * 1000:8.1f} ms")
-        # The only assertion: they agree on the answer (cost is reported, not judged).
+        # The only observation: they agree on the answer (cost is reported, not judged).
         assert {v[1] for v in report.values()} == {report["cell_neighbours"][1]}
 
 
@@ -832,7 +832,7 @@ def test_two_stores_report_the_same_identity_that_one_store_excludes() -> None:
                               time_before=dt.timedelta(minutes=10),
                               time_after=dt.timedelta(minutes=10))
         assert _pair_keys(rows) == {frozenset((a, b))}
-        assert rows[0].g1_assertion_id == a and rows[0].g2_assertion_id == b
+        assert rows[0].g1_observation_id == a and rows[0].g2_observation_id == b
 
         # The SAME pair within one case: excluded.
         with RunStore() as single:
@@ -864,7 +864,7 @@ def test_two_stores_never_apply_the_id_order_filter() -> None:
         summary, rows = _run(store_1, store_2, space_threshold_m=1000.0)
         assert summary.candidate_count_1 == 6 and summary.candidate_count_2 == 6
         assert len(rows) == 36              # every cross pair, none dropped
-        assert expected <= {(r.g1_assertion_id, r.g2_assertion_id) for r in rows}
+        assert expected <= {(r.g1_observation_id, r.g2_observation_id) for r in rows}
 
 
 # --- 8 · presence, identity, validation ------------------------------------------------
@@ -974,9 +974,9 @@ def test_output_is_deterministic_across_runs() -> None:
         assert first == second
 
 
-def test_symmetric_window_output_keeps_the_old_assertion_pair_order() -> None:
+def test_symmetric_window_output_keeps_the_old_observation_pair_order() -> None:
     """With a SYMMETRIC window the emitted stream is sorted by
-    ``(assertion_a, assertion_b)`` with the smaller id first — the old engine's
+    ``(observation_a, observation_b)`` with the smaller id first — the old engine's
     documented order, now produced WITHOUT buffering the results.
 
     WHY only symmetric: when before != after the two orientations of a pair are no
@@ -991,7 +991,7 @@ def test_symmetric_window_output_keeps_the_old_assertion_pair_order() -> None:
                        time_before=dt.timedelta(minutes=15),
                        time_after=dt.timedelta(minutes=15))
         assert rows
-        keys = [(r.g1_assertion_id, r.g2_assertion_id) for r in rows]
+        keys = [(r.g1_observation_id, r.g2_observation_id) for r in rows]
         assert all(a < b for a, b in keys)
         assert keys == sorted(keys)
 

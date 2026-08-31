@@ -278,7 +278,7 @@ CREATE TABLE temporal_component (temporal_component_id TEXT PRIMARY KEY,
     ordinal INTEGER NOT NULL, part TEXT NOT NULL, temporal_role TEXT,
     stated_offset TEXT, source_field TEXT, raw_value TEXT,
     UNIQUE (temporal_expression_id, ordinal));
-CREATE TABLE assertion (assertion_id TEXT PRIMARY KEY,
+CREATE TABLE observation (observation_id TEXT PRIMARY KEY,
     raw_record_id TEXT NOT NULL REFERENCES raw_record(raw_record_id),
     preset_id TEXT NOT NULL REFERENCES preset(preset_id),
     output_ordinal INTEGER NOT NULL,
@@ -294,9 +294,9 @@ CREATE TABLE assertion (assertion_id TEXT PRIMARY KEY,
     source_label TEXT, input_record_id TEXT, source_record_uid TEXT,
     content_hash TEXT NOT NULL, claim_digest TEXT NOT NULL,
     UNIQUE (raw_record_id, preset_id, output_ordinal));
-CREATE INDEX ix_assertion_ch ON assertion(content_hash);
-CREATE INDEX ix_assertion_cd ON assertion(claim_digest);
-CREATE INDEX ix_assertion_act ON assertion(activity_id);
+CREATE INDEX ix_observation_ch ON observation(content_hash);
+CREATE INDEX ix_observation_cd ON observation(claim_digest);
+CREATE INDEX ix_observation_act ON observation(activity_id);
 
 -- Layer 2 ------------------------------------------------------------------
 CREATE TABLE spatial_integration (spatial_integration_id TEXT PRIMARY KEY,
@@ -326,9 +326,9 @@ CREATE TABLE timespan_integration (timespan_integration_id TEXT PRIMARY KEY,
 
 -- Layer 3 ------------------------------------------------------------------
 CREATE TABLE analysis (analysis_id TEXT PRIMARY KEY,
-    assertion_id TEXT NOT NULL REFERENCES assertion(assertion_id),
+    observation_id TEXT NOT NULL REFERENCES observation(observation_id),
     method TEXT NOT NULL, record_type TEXT, record_rank INTEGER,
-    UNIQUE (assertion_id, method));
+    UNIQUE (observation_id, method));
 CREATE TABLE edit_log (edit_id TEXT PRIMARY KEY,
     ordinal INTEGER NOT NULL UNIQUE,
     table_name TEXT, row_id TEXT, column TEXT, old_value TEXT, new_value TEXT,
@@ -342,7 +342,7 @@ CREATE VIEW duplicate_sources AS
 CREATE VIEW possible_same_evidence AS
     SELECT a.claim_digest, COUNT(*) AS copies,
            GROUP_CONCAT(s.input_file_path, ' | ') AS files
-    FROM assertion a
+    FROM observation a
     JOIN raw_record r ON r.raw_record_id = a.raw_record_id
     JOIN source s ON s.source_id = r.source_id
     GROUP BY a.claim_digest HAVING COUNT(*) > 1;
@@ -365,7 +365,7 @@ class Builder:
 
     Each method returns the surrogate id of the row it wrote, honouring the schema's
     ingest write order: run -> source -> raw_record -> activity(+link) -> entity +
-    expressions + components -> assertion -> integrations -> analysis. No
+    expressions + components -> observation -> integrations -> analysis. No
     ``INSERT OR IGNORE`` anywhere: a UNIQUE violation here would be a derivation bug and
     must raise (the ingestion write order).
     """
@@ -500,7 +500,7 @@ class Builder:
              lower_accuracy_us, upper_accuracy_us))
         return tx, {"kind": kind, "referential": referential, "components": comp_dicts}
 
-    def assertion(self, rrid, preset_id, preset_key, ordinal, entity_pair,
+    def observation(self, rrid, preset_id, preset_key, ordinal, entity_pair,
                   spatial_pair, temporal_pair, activity_pair, role, epl, etl, stl,
                   deleted=None, multiplicity=None, label=None, input_record_id=None,
                   source_record_uid=None, entity_origin="preset_mapped"):
@@ -527,8 +527,10 @@ class Builder:
         # folder==zip parity holds.
         content_hash = sha256_hex(SEP.join(
             [_txt(fp), preset_key, str(line_no), str(ordinal), l1]))
+        # "assertion" is the FROZEN id-derivation tag (see ids.OBSERVATION_NAME): an opaque
+        # uuid5 input, not the table name. It must not follow the table rename.
         aid = u5("assertion", rrid, preset_key, ordinal)
-        self.cx.execute("INSERT INTO assertion VALUES "
+        self.cx.execute("INSERT INTO observation VALUES "
                         "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (aid, rrid, preset_id, ordinal, eid, entity_origin, act_id, sx, tx,
              role, epl, etl, stl, deleted, multiplicity, label, input_record_id,
@@ -622,7 +624,7 @@ def build() -> sqlite3.Connection:
                 [("lower", "last_seen", None, "ZTIMESTAMP", cf)],
                 "epoch_cfabsolute/1.0", us_from_iso(iso), us_from_iso(iso),
                 off_lower="N/A", off_upper="N/A")
-            a = b.assertion(rr, p_cache, "ios_cache", 0, ent, sx, tx, None,
+            a = b.observation(rr, p_cache, "ios_cache", 0, ent, sx, tx, None,
                 "subject", "at", "observed_at", "instant", label="iOS cache")
             b.analysis(a, "untangle/2.0", "gps_fix", 1)
 
@@ -644,7 +646,7 @@ def build() -> sqlite3.Connection:
          ("upper", "check_out", None, "ZEXITDATE", "763702200")],
         "epoch_cfabsolute/1.0", us_from_iso("2026-03-13 20:00:00+01"),
         us_from_iso("2026-03-13 23:30:00+01"), off_lower="N/A", off_upper="N/A")
-    b.assertion(rr, p_visit, "ios_visits", 0, ent, sx, tx, None,
+    b.observation(rr, p_visit, "ios_visits", 0, ent, sx, tx, None,
         "subject", "at", "observed_at", "continuous_during_interval", label="iOS visits")
 
     # ---- CDRs: operator A file (3 records; #2 is THE call near the scene) -
@@ -653,7 +655,7 @@ def build() -> sqlite3.Connection:
         rr = b.record(sid, line, {"a_party": a_msisdn, "b_party": b_msisdn,
             "imei": imei, "start": start_iso[:-3], "duration": str(dur), "cell": cell})
         # the callee + the caller's own IMEI are activity context, NOT parties —
-        # they live in context_json (inside the L1 projection), no assertion_mention.
+        # they live in context_json (inside the L1 projection), no observation_mention.
         act = b.activity(rr, "call",
             {"callee": b_msisdn.replace(" ", ""), "caller_imei": imei})
         ent = b.entity(rr, 0, a_msisdn.replace(" ", ""), a_msisdn, "msisdn", "device")
@@ -667,7 +669,7 @@ def build() -> sqlite3.Connection:
              ("duration", "end", "+01:00", "duration", str(dur))],
             "tz_localize/tzdb2026a+start_plus_duration/1.0",
             lo, lo + dur * 1_000_000, off_lower=1.0, off_upper=1.0)
-        a = b.assertion(rr, preset_id, preset_key, 0, ent, sx, tx, act,
+        a = b.observation(rr, preset_id, preset_key, 0, ent, sx, tx, act,
             "caller", "within_range_of", "event_at", "continuous_during_interval",
             label="CDR op-A")
         b.analysis(a, "untangle/2.0", "cdr_leg", 1)
@@ -701,7 +703,7 @@ def build() -> sqlite3.Connection:
          ("duration", "end", "+01:00", "duration", "187")],
         "tz_localize/tzdb2026a+start_plus_duration/1.0",
         lo, lo + 187_000_000, off_lower=1.0, off_upper=1.0)
-    b.assertion(rr, p_cdr, "cdr_generic", 0, ent, sx, tx, act,
+    b.observation(rr, p_cdr, "cdr_generic", 0, ent, sx, tx, act,
         "callee", "within_range_of", "event_at", "continuous_during_interval",
         label="CDR op-B")
 
@@ -732,7 +734,7 @@ def build() -> sqlite3.Connection:
             [("lower", "last_seen", "+01:00", "ts", ts[:-3])],
             "tz_stated_offset/1.0", us_from_iso(ts), us_from_iso(ts),
             off_lower=1.0, off_upper=1.0)
-        a = b.assertion(rr, p_anpr, "anpr_ch", 0, ent, sx, tx, None,
+        a = b.observation(rr, p_anpr, "anpr_ch", 0, ent, sx, tx, None,
             "subject", "at_fixed_detector", "observed_at", "instant", label="ANPR")
         b.analysis(a, "untangle/2.0", "anpr_read", 1)
 
@@ -750,7 +752,7 @@ def build() -> sqlite3.Connection:
          ("upper", "end", None, "end", "2026-03-14 02:50:00")],
         "tz_localize/tzdb2026a", us_from_iso("2026-03-14 02:25:00+01"),
         us_from_iso("2026-03-14 02:50:00+01"), off_lower=1.0, off_upper=1.0)
-    b.assertion(rr, p_dvr, "dvr_generic", 0, ent, sx, tx, None,
+    b.observation(rr, p_dvr, "dvr_generic", 0, ent, sx, tx, None,
         "subject", "at", "recorded_at", "continuous_during_interval", label="CCTV")
 
     # ---- robbery in the police register ----------------------------------
@@ -772,7 +774,7 @@ def build() -> sqlite3.Connection:
          ("upper", "end", None, "to", "2026-03-14 02:45")],
         "tz_localize/tzdb2026a", us_from_iso("2026-03-14 02:30:00+01"),
         us_from_iso("2026-03-14 02:45:00+01"), off_lower=1.0, off_upper=1.0)
-    b.assertion(rr, p_police, "police_reg", 0, ent, sx, tx, None,
+    b.observation(rr, p_police, "police_reg", 0, ent, sx, tx, None,
         "subject", "claimed_at", "reported_for", "continuous_during_interval",
         label="police register")
 
@@ -795,7 +797,7 @@ def build() -> sqlite3.Connection:
         # the fuzzy_time reader assigns ±1 h to EACH bound of "vers midi" — a METHOD-level
         # accuracy claim (no L1 component), so it lands per bound only at L2.
         lower_accuracy_us=3600_000_000, upper_accuracy_us=3600_000_000)
-    b.assertion(rr, p_audit, "audition", 0, ent, sx, tx, None,
+    b.observation(rr, p_audit, "audition", 0, ent, sx, tx, None,
         "reporter", "claimed_at", "reported_for", "continuous_during_interval",
         label="audition")
 
@@ -816,7 +818,7 @@ def build() -> sqlite3.Connection:
         "epoch_unix_s/1.0", 1773450680_000_000, 1773450680_000_000,
         off_lower="N/A", off_upper="N/A")
     # deleted = the APP's own flag — a different fact from raw_record.recovery_state.
-    b.assertion(rr, p_im, "im_generic", 0, ent, sx, tx, act,
+    b.observation(rr, p_im, "im_generic", 0, ent, sx, tx, act,
         "sender", "references", "event_at", "instant",
         deleted="deleted", label="chat pin")
 
@@ -838,7 +840,7 @@ def build() -> sqlite3.Connection:
             [("lower", "start", "+00:00", "query_ts", "2026-03-13T21:04:09Z")],
             "passthrough_utc/1.0", us_from_iso("2026-03-13 21:04:09+00"),
             us_from_iso("2026-03-13 21:04:09+00"), off_lower=0.0, off_upper=0.0)
-        b.assertion(rr, p_nav, "nav_generic", ordinal, ent, sx, tx, act,
+        b.observation(rr, p_nav, "nav_generic", ordinal, ent, sx, tx, act,
             "subject", "references", "event_at", "instant", label="nav search")
 
     # ---- an explicit alibi: NEVER_DURING_INTERVAL (negated presence) -----
@@ -858,7 +860,7 @@ def build() -> sqlite3.Connection:
          ("upper", "end", "+01:00", "to", "2026-03-14 02:45")],
         "tz_localize/tzdb2026a", us_from_iso("2026-03-14 02:30:00+01"),
         us_from_iso("2026-03-14 02:45:00+01"), off_lower=1.0, off_upper=1.0)
-    b.assertion(rr, p_audit, "audition", 0, ent, sx, tx, None,
+    b.observation(rr, p_audit, "audition", 0, ent, sx, tx, None,
         "subject", "claimed_at", "never_during_interval", "continuous_during_interval",
         label="alibi")
 
@@ -878,11 +880,11 @@ def build() -> sqlite3.Connection:
 # Demonstration queries — the Q1..Q10 story, new projection columns           #
 # --------------------------------------------------------------------------- #
 
-# The flat projection (the flat CSV column contract): one line per assertion. locates is
+# The flat projection (the flat CSV column contract): one line per observation. locates is
 # DERIVED from entity_position_link, never stored. Context columns come from
 # activity.context_json. datetime_iso columns are local offset-tagged strings.
 FLAT = """
-SELECT substr(a.assertion_id,1,8) AS row_uid,
+SELECT substr(a.observation_id,1,8) AS row_uid,
   e.identifier AS entity, e.raw_identifier, e.identifier_type, e.type AS entity_type,
   a.entity_role AS role,
   json_extract(act.context_json,'$.counterpart') AS counterpart,
@@ -897,7 +899,7 @@ SELECT substr(a.assertion_id,1,8) AS row_uid,
   si.latitude_wgs84 AS lat, si.longitude_wgs84 AS lon, six.s2_cell_id,
   ti.lower_datetime_iso AS t_lower, ti.upper_datetime_iso AS t_upper,
   a.source_label
-FROM assertion a
+FROM observation a
 JOIN entity e ON e.entity_id=a.entity_id
 LEFT JOIN activity act ON act.activity_id=a.activity_id
 LEFT JOIN spatial_expression sx ON sx.spatial_expression_id=a.spatial_expression_id
@@ -944,7 +946,7 @@ ORDER BY row_uid"""),
   "VERBATIM raw_identifier surfaced (same working id, different source text)",
   """SELECT e.identifier, e.raw_identifier, e.identifier_type, e.type,
      a.entity_role, a.source_label
-FROM assertion a JOIN entity e ON e.entity_id=a.entity_id
+FROM observation a JOIN entity e ON e.entity_id=a.entity_id
 WHERE e.identifier_type='msisdn' AND e.identifier='+41791234567'
 ORDER BY a.source_label, e.raw_identifier"""),
 
@@ -954,7 +956,7 @@ ORDER BY a.source_label, e.raw_identifier"""),
      ti.lower_datetime_iso AS at_local, a.source_label, s.input_file_path
 FROM spatial_component sc
 JOIN spatial_expression sx ON sx.spatial_expression_id=sc.spatial_expression_id
-JOIN assertion a ON a.spatial_expression_id=sx.spatial_expression_id
+JOIN observation a ON a.spatial_expression_id=sx.spatial_expression_id
 JOIN entity e ON e.entity_id=a.entity_id
 JOIN timespan_integration ti ON ti.temporal_expression_id=a.temporal_expression_id
 JOIN raw_record r ON r.raw_record_id=a.raw_record_id
@@ -971,7 +973,7 @@ FROM spatial_integration si
 JOIN spatial_expression sx ON sx.spatial_expression_id=si.spatial_expression_id
 JOIN spatial_component sc ON sc.spatial_expression_id=sx.spatial_expression_id
 JOIN spatial_index six ON six.spatial_integration_id=si.spatial_integration_id
-JOIN assertion a ON a.spatial_expression_id=sx.spatial_expression_id
+JOIN observation a ON a.spatial_expression_id=sx.spatial_expression_id
 JOIN raw_record r ON r.raw_record_id=a.raw_record_id
 JOIN source s ON s.source_id=r.source_id
 WHERE sc.raw_value='228-01-2042-77341'
@@ -982,7 +984,7 @@ WHERE sc.raw_value='228-01-2042-77341'
   """SELECT a.source_label, tc.part, tc.temporal_role, tc.stated_offset,
      ti.utc_offset_hours_lower AS applied_lower, ti.utc_offset_hours_upper AS applied_upper,
      ti.lower_datetime_iso, ti.upper_datetime_iso
-FROM assertion a
+FROM observation a
 JOIN temporal_expression tx ON tx.temporal_expression_id=a.temporal_expression_id
 JOIN temporal_component tc ON tc.temporal_expression_id=tx.temporal_expression_id
 JOIN timespan_integration ti ON ti.temporal_expression_id=tx.temporal_expression_id
@@ -990,12 +992,12 @@ WHERE a.source_label IN ('iOS cache','CDR op-A','chat pin')
 ORDER BY a.source_label, tc.ordinal
 LIMIT 12"""),
 
- ("Q10 - The analysis layer: the current ranker's verdict per assertion (re-running a "
+ ("Q10 - The analysis layer: the current ranker's verdict per observation (re-running a "
   "changed ranker ADDS rows, never mutates; the CSV projects the current method)",
   """SELECT an.method, an.record_type, an.record_rank, e.type AS entity_type,
      a.source_label, COUNT(*) AS n
 FROM analysis an
-JOIN assertion a ON a.assertion_id=an.assertion_id
+JOIN observation a ON a.observation_id=an.observation_id
 JOIN entity e ON e.entity_id=a.entity_id
 GROUP BY an.method, an.record_type, an.record_rank, e.type, a.source_label
 ORDER BY an.method, a.source_label"""),

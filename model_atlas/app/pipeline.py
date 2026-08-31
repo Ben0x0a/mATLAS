@@ -130,7 +130,7 @@ class ProcessResult:
 
     ``output_case_db`` is the durable case database — always written (created or appended
     to), so it is the one output that is never None. ``output_csv`` and the other
-    projections are written only when the run produced assertions; each is a SINGLE file
+    projections are written only when the run produced observations; each is a SINGLE file
     (one file per format — the merge/split modes were removed with the case model)."""
 
     output_case_db: Path                                    # the case DB — always written
@@ -185,7 +185,7 @@ def _source_units(specs: list[PresetSpec]) -> dict[str, str]:
         for field_spec in spec.common:
             if field_spec.unit:
                 units[field_spec.model_field] = field_spec.unit
-        for template in spec.assertions:
+        for template in spec.observations:
             for field_spec in template.fields:
                 if field_spec.unit:
                     units[field_spec.model_field] = field_spec.unit
@@ -195,7 +195,7 @@ def _source_units(specs: list[PresetSpec]) -> dict[str, str]:
 def _datetime_format(spec: PresetSpec) -> str | None:
     """The strptime format the spec's (single) time declares — the local_string decode
     instruction L2's TzLocalise needs; None for an epoch/ISO spec."""
-    for template in spec.assertions:
+    for template in spec.observations:
         for time_spec in template.temporal:
             return time_spec.format
     return None
@@ -206,7 +206,7 @@ def _duration_unit(spec: PresetSpec) -> str | None:
     start_plus_duration method needs to turn the verbatim span into an end bound. None when
     the spec states an ordinary ``upper:`` clock. Sibling of ``_datetime_format`` above: both
     read a decode instruction that lives in the preset, never in the store."""
-    for template in spec.assertions:
+    for template in spec.observations:
         for time_spec in template.temporal:
             if time_spec.duration_unit is not None:
                 return time_spec.duration_unit
@@ -240,7 +240,7 @@ def _preset_target_fn(specs: list[PresetSpec], root_prefix_depth: int) -> Target
     know up front which table such a selector will touch.
 
     WHY the pre-filter is exactly the matcher's own first two steps: any file this declines
-    would also have been declined at match time, so nothing that could produce an assertion is
+    would also have been declined at match time, so nothing that could produce an observation is
     passed over. Step 3 (the required-column gate) is the only stage needing records, and it
     only ever sees files this stage kept — its store-backed peek therefore never asks about a
     file ingest skipped.
@@ -323,7 +323,7 @@ def _store_subtables_fn(store: RunStore) -> Callable[[SourceFile, InputSelector]
 def _integrate_temporal_for_preset(store: RunStore, spec: PresetSpec, local_zone: str | None) -> None:
     """Integrate the not-yet-integrated temporal expressions this spec produced.
 
-    HOW: re-read each temporal_expression reachable from this preset's assertions plus
+    HOW: re-read each temporal_expression reachable from this preset's observations plus
     its verbatim component rows, wrap them as a method bundle, and run the standard
     method set configured with the spec's own datetime format and the operator's
     configured local zone. WHY per preset (not one whole-store pass): the parsing
@@ -336,7 +336,7 @@ def _integrate_temporal_for_preset(store: RunStore, spec: PresetSpec, local_zone
         store,
         "SELECT DISTINCT te.temporal_expression_id, te.kind, te.referential, "
         "te.temporal_source FROM temporal_expression te "
-        "JOIN assertion a ON a.temporal_expression_id = te.temporal_expression_id "
+        "JOIN observation a ON a.temporal_expression_id = te.temporal_expression_id "
         "WHERE a.preset_id = ? AND te.temporal_expression_id NOT IN "
         "(SELECT temporal_expression_id FROM timespan_integration)",
         preset_id,
@@ -384,7 +384,7 @@ def process(
                               <output>/<base_name>.matlas.sqlite (created, or appended to
                               if it already exists); every other export is one file per
                               format beside it (<output>/<base_name>.<ext>).
-        concerns:        Required. The entity linked to every assertion (e.g. the
+        concerns:        Required. The entity linked to every observation (e.g. the
                               case subject); OVERRIDES any preset-mapped concerns. A
                               plain literal applies to every row; a call-form reference
                               such as ``field(Evidence number)`` resolves per source row.
@@ -548,13 +548,13 @@ def process(
         # time group — the analysis is derived, so regenerating it is not an evidence edit.
         analyse(store, clear_existing=is_append)
 
-        assertion_count = _rows(store, "SELECT COUNT(*) AS n FROM assertion")[0]["n"]
+        observation_count = _rows(store, "SELECT COUNT(*) AS n FROM observation")[0]["n"]
         ranked_count = _rows(
             store, "SELECT COUNT(*) AS n FROM analysis WHERE record_rank IS NOT NULL")[0]["n"]
         row_counts = {
             "sources": len(matched) + len(unmatched),
             "matched": len(matched),
-            "rows": assertion_count,
+            "rows": observation_count,
             "ranked": ranked_count,
         }
 
@@ -572,7 +572,7 @@ def process(
         output_extras: list[Path] = []
         output_traceability: Path | None = None
         output_warnings_path: Path | None = None
-        if assertion_count:
+        if observation_count:
             # sqlite is intrinsic (the case DB above), so it is never a selectable export
             # re-persisting to the same path.
             requested = list(exports) if exports is not None else [PRIMARY_CSV_EXPORT_NAME]
@@ -596,7 +596,7 @@ def process(
                     traceability_format=traceability_format,
                 )
         else:
-            log.info("No assertions produced; the case database records the run.")
+            log.info("No observations produced; the case database records the run.")
     finally:
         store.close()
 
@@ -660,7 +660,7 @@ def _assemble_match(
 
     source = source_rows[0]
     # APPEND idempotency: this source is already in the case from an EARLIER run (ingest
-    # skipped re-writing it, so the row still carries the prior run_id). Its assertions already
+    # skipped re-writing it, so the row still carries the prior run_id). Its observations already
     # exist — re-assembling would collide — so skip it. Not an error and not a new match: the
     # skip was already recorded at ingest, so nothing is added to matched/unmatched here.
     if source["run_id"] != run_id:
@@ -703,7 +703,7 @@ def _assemble_match(
         "UPDATE source SET source_tier = ? WHERE source_id = ?",
         (preset.source_tier, source_id),
     )
-    log.info(f"{label}: {len(records)} source row(s) -> {report.assertion_count} assertion(s)")
+    log.info(f"{label}: {len(records)} source row(s) -> {report.observation_count} observation(s)")
 
     source_fields = list(records[0].fields.keys()) if records else []
     sources_meta.append({
@@ -721,7 +721,7 @@ def _assemble_match(
         "parser": f"{preset.parser.name} {preset.parser.version}",
         "source_tier": preset.source_tier,
         "record_count": source["record_count"],
-        "assertion_count": report.assertion_count,
+        "observation_count": report.observation_count,
         "frontier": reporting.frontier_report(preset, source_fields),
     })
     return True

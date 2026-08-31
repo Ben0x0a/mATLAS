@@ -76,19 +76,19 @@ def _add_point(store: RunStore, line_no: int, source_id: str, preset_id: str,
             lower_us / 1_000_000, tz=dt.timezone.utc).isoformat(),
         upper_datetime_iso=dt.datetime.fromtimestamp(
             upper_us / 1_000_000, tz=dt.timezone.utc).isoformat()))
-    assertion_id = ids.assertion_id(record_id, preset_key, 0)
-    store.write_assertion(V.Assertion(
-        assertion_id=assertion_id, raw_record_id=record_id, preset_id=preset_id,
+    observation_id = ids.observation_id(record_id, preset_key, 0)
+    store.write_observation(V.Observation(
+        observation_id=observation_id, raw_record_id=record_id, preset_id=preset_id,
         output_ordinal=0, entity_id=entity_id,
         content_hash=f"ch-{line_no}", claim_digest=f"cd-{line_no}",
         spatial_expression_id=sx_id, temporal_expression_id=tx_id,
         entity_role="subject", entity_position_link="at",
         entity_time_link="observed_at", spatial_temporal_link="instant"))
-    return assertion_id
+    return observation_id
 
 
 def _build_persisted_db(path: Path) -> tuple[str, str]:
-    """Persist a small run DB: two presence device assertions 10 m apart, overlapping."""
+    """Persist a small run DB: two presence device observations 10 m apart, overlapping."""
     with RunStore() as store:
         case_id = ids.case_metadata_id()
         store.write_case_metadata(V.CaseMetadata(case_id=case_id, case_number="T101a"))

@@ -3,7 +3,7 @@
 Defines:    ``RunStore`` — owns a TEMP ON-DISK SQLite database (a real file in a tempdir,
             ``journal_mode=OFF`` / ``synchronous=OFF``), applies the schema on open,
             and exposes ONE write method per run-DB table, grouped by layer
-            (L0 acquisition / L1 assertion / L2 integration / L3 analysis). Persists with
+            (L0 acquisition / L1 observation / L2 integration / L3 analysis). Persists with
             ``VACUUM INTO`` (``persist``), exposes the live ``connection`` (read-only
             consumers/exporters) and cleans up the temp file on ``close`` / context-manager
             exit. Also exposes the introspectable ``WRITER_TABLE`` / ``TABLE_LAYER`` surface.
@@ -44,7 +44,7 @@ convenience is ``write_preset`` (a preset's definition IS its identity):
 SELECT-then-INSERT, returning the existing id for an identical row but RAISING when the
 same ``key``+``version`` carries a different ``definition_digest`` (the un-bumped-edit
 finding). The parent-before-child ingest write order (case → run → source → raw_record →
-activity(+record) → entity + expressions + components BEFORE the assertion referencing
+activity(+record) → entity + expressions + components BEFORE the observation referencing
 them → integrations → analysis) is NOT enforced by the store: ``PRAGMA foreign_keys = ON``
 (set by ``create_schema``) makes every FK check immediately, so writing a child before its
 parent raises on its own.
@@ -75,7 +75,7 @@ L0_TABLES: tuple[str, ...] = (
 )
 L1_TABLES: tuple[str, ...] = (
     "activity", "activity_record", "entity", "spatial_expression",
-    "spatial_component", "temporal_expression", "temporal_component", "assertion",
+    "spatial_component", "temporal_expression", "temporal_component", "observation",
 )
 L2_TABLES: tuple[str, ...] = (
     "spatial_integration", "timespan_integration", "spatial_index",
@@ -163,7 +163,7 @@ class RunStore:
         "write_run_preset": "run_preset",
         "write_source": "source",
         "write_raw_record": "raw_record",
-        # L1 — assertion
+        # L1 — observation
         "write_activity": "activity",
         "write_activity_record": "activity_record",
         "write_entity": "entity",
@@ -171,7 +171,7 @@ class RunStore:
         "write_spatial_component": "spatial_component",
         "write_temporal_expression": "temporal_expression",
         "write_temporal_component": "temporal_component",
-        "write_assertion": "assertion",
+        "write_observation": "observation",
         # L2 — integration
         "write_spatial_integration": "spatial_integration",
         "write_timespan_integration": "timespan_integration",
@@ -304,7 +304,7 @@ class RunStore:
     def write_raw_record(self, row: V.RawRecord) -> None:
         self._insert("raw_record", row)
 
-    # --- Layer 1: assertion -----------------------------------------------
+    # --- Layer 1: observation -----------------------------------------------
 
     def write_activity(self, row: V.Activity) -> None:
         self._insert("activity", row)
@@ -327,8 +327,8 @@ class RunStore:
     def write_temporal_component(self, row: V.TemporalComponent) -> None:
         self._insert("temporal_component", row)
 
-    def write_assertion(self, row: V.Assertion) -> None:
-        self._insert("assertion", row)
+    def write_observation(self, row: V.Observation) -> None:
+        self._insert("observation", row)
 
     # --- Layer 2: integration ---------------------------------------------
 

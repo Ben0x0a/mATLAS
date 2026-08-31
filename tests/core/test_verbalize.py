@@ -1,4 +1,4 @@
-"""Tests for the assertion verbaliser (``model_atlas.core.verbalize``).
+"""Tests for the observation verbaliser (``model_atlas.core.verbalize``).
 
 Defines:    the golden-sentence tests against the worked-example demo store (the
             worked examples render to sensible sentences, byte-for-byte), the semantic
@@ -6,7 +6,7 @@ Defines:    the golden-sentence tests against the worked-example demo store (the
             reads as presence, instant renders "at" vs interval "from ... to
             ..."), the per-vocabulary distinct-rendering test (no two members of
             a phrased vocabulary produce identical sentences on the same row
-            skeleton), and the no-invented-facts tests (a positionless assertion
+            skeleton), and the no-invented-facts tests (a positionless observation
             says the absence, ``concerns`` omitted when NULL, a typed mention
             falls back to the entity type).
 Used by:    the verification gate (pytest tests/core/test_verbalize.py).
@@ -14,7 +14,7 @@ Depends on: ``model_atlas.core.verbalize`` (under test),
             ``model_atlas.core.flat_view`` (the flat rows the verbaliser
             consumes), ``model_atlas.core.vocabularies`` (the phrase fragments),
             pandas, and the worked-example demo DB
-            ``docs/examples/matlas_example.sqlite`` (28 assertions).
+            ``docs/examples/matlas_example.sqlite`` (28 observations).
 
 Note on ``TemporalKind``: its shape is not a projection column, so the verbaliser
 derives instant vs interval from the bounds themselves; the INSTANT/INTERVAL
@@ -38,7 +38,7 @@ from model_atlas.core import vocabularies as V
 
 _DEMO_DB = Path(__file__).resolve().parents[2] / "docs" / "examples" / "matlas_example.sqlite"
 
-# A full assertion-row skeleton (every corner populated, interval timespan): the
+# A full observation-row skeleton (every corner populated, interval timespan): the
 # distinct-rendering tests vary ONE vocabulary column at a time on this base.
 _SKELETON: dict[str, Any] = {
     "entity": "+41790000000",
@@ -141,7 +141,7 @@ def test_golden_alibi_negation(frame: pd.DataFrame) -> None:
 
 
 def test_all_demo_rows_render_deterministically(frame: pd.DataFrame) -> None:
-    # Every one of the 28 assertions yields one non-empty full-stop sentence, and
+    # Every one of the 28 observations yields one non-empty full-stop sentence, and
     # a second call over the same row is byte-for-byte identical; a plain-dict
     # copy of the row must render the same sentence as the Series (both accepted).
     assert len(frame) == 28
@@ -228,7 +228,7 @@ def test_unknown_members_degrade_gracefully() -> None:
 
 # --- no invented facts -----------------------------------------------------------
 
-def test_positionless_assertion_says_the_absence() -> None:
+def test_positionless_observation_says_the_absence() -> None:
     row = dict(_SKELETON, latitude_wgs84=None, longitude_wgs84=None,
                raw_position=None)
     assert verbalize.verbalize(row) == (
@@ -238,7 +238,7 @@ def test_positionless_assertion_says_the_absence() -> None:
     )
 
 
-def test_timeless_assertion_says_the_absence() -> None:
+def test_timeless_observation_says_the_absence() -> None:
     row = dict(_SKELETON, time_lower_datetime_iso=None,
                time_upper_datetime_iso=None)
     assert verbalize.verbalize(row) == (

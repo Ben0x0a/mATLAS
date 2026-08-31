@@ -15,13 +15,13 @@ next to the scene at 02:20 — operator B disclosed the same call (B-leg). ANPR 
 suspect's plate near the scene at 02:05 and 02:52. CCTV at the scene recorded
 02:25-02:50. The robbery (police register) ran 02:30-02:45. A witness saw "l'homme" near
 the station around noon, and an alibi statement claims the suspect's phone was **not**
-at home during the robbery window (a `never_during_interval` assertion). The
+at home during the robbery window (a `never_during_interval` observation). The
 cache.sqlite was ingested twice (folder + zip) and one CDR record appears in two
 disclosures — both duplications are *findings*, never merges. The projection follows the
 [../reference/csv_contract.md](../reference/csv_contract.md) column contract: `entity` is the
 **normalised** identifier, `raw_identifier` the verbatim source text; `locates` is derived from
 `entity_position_link`; the context columns (`counterpart`/`callee`/`imei`) are projected from
-`activity.context_json` (only `assertion.activity_id`, which regroups the legs of one record, is
+`activity.context_json` (only `observation.activity_id`, which regroups the legs of one record, is
 a useful projection of the activity); `t_lower`/`t_upper` are the offset-tagged local
 `datetime_iso` (` N/A` = value, zone unknown, kept distinct from empty = no instant);
 `s2_cell_id` is the signed-int64 S2 leaf cell.
@@ -180,7 +180,7 @@ Notable in the results:
 
 (12 rows)
 
-### Q10 - The analysis layer: the current ranker's verdict per assertion (re-running a changed ranker ADDS rows, never mutates; the CSV projects the current method)
+### Q10 - The analysis layer: the current ranker's verdict per observation (re-running a changed ranker ADDS rows, never mutates; the CSV projects the current method)
 
 | method | record_type | record_rank | entity_type | source_label | n |
 |---|---|---|---|---|---|

@@ -17,7 +17,7 @@ def _preset(longitude_ref: str) -> object:
     raw = {
         "preset": {"id": "t.x", "name": "T", "tier": "secondary", "version": 1},
         "input_selector": {"format": "csv", "name": "x.csv"},
-        "assertions": [{
+        "observations": [{
             "position": {"latitude": "field(Lat)", "longitude": longitude_ref},
             "time": {"instant": "field(Ts)"},
             "links": {"entity_position": "at", "entity_time": "observed_at",

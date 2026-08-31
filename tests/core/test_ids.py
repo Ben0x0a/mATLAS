@@ -3,7 +3,7 @@
 Defines:    the folder==zip parity, overlapping-disclosure, "|"-forgery, integration-
             invariance, mention-sensitivity, context-recipient, and normative-
             exclusion tests for ``model_atlas/core/ids.py``, plus a DEMO CROSS-CHECK
-            that rebuilds three assertions of docs/examples/matlas_example.sqlite from
+            that rebuilds three observations of docs/examples/matlas_example.sqlite from
             their stored rows and asserts byte-equal content_hash / claim_digest.
 Used by:    the verification gate (pytest).
 Depends on: ``model_atlas.core.ids`` and the read-only demo SQLite fixture.
@@ -47,7 +47,7 @@ def _temporal():
 
 
 def _links():
-    return ids.AssertionLinks("caller", "within_range_of", "event_at",
+    return ids.ObservationLinks("caller", "within_range_of", "event_at",
                               "continuous_during_interval")
 
 
@@ -207,7 +207,7 @@ def test_component_source_field_is_excluded():
 
 def test_missing_corner_is_framed_and_distinct_from_a_present_corner():
     # A positionless / timeless claim still projects (the flat rule: one line per
-    # assertion, corners nullable). An absent corner emits its presence flag alone.
+    # observation, corners nullable). An absent corner emits its presence flag alone.
     l1_no_spatial = _l1(spatial=None)
     assert isinstance(l1_no_spatial, str)
     # It differs from the same claim WITH a spatial corner.
@@ -268,13 +268,13 @@ def test_canonical_json_rejects_nan_and_infinity():
 
 # --- DEMO CROSS-CHECK -------------------------------------------------------
 
-def _rebuild_from_db(cx: sqlite3.Connection, assertion_row: sqlite3.Row):
+def _rebuild_from_db(cx: sqlite3.Connection, observation_row: sqlite3.Row):
     """Rebuild the L1 projection input + digest prefix parts from stored demo rows.
 
     This reads back EXACTLY the columns the normative projection lists — proving the
     round-trip (assemble -> store -> re-project) is stable and doc-faithful.
     """
-    a = dict(assertion_row)
+    a = dict(observation_row)
     ent = cx.execute("SELECT * FROM entity WHERE entity_id=?", (a["entity_id"],)).fetchone()
     entity = ids.EntityProjection(ent["identifier"], ent["identifier_type"], ent["type"])
 
@@ -309,7 +309,7 @@ def _rebuild_from_db(cx: sqlite3.Connection, assertion_row: sqlite3.Row):
         ctx = json.loads(act["context_json"]) if act["context_json"] is not None else None
         activity = ids.ActivityProjection(act["kind"], ctx)
 
-    links = ids.AssertionLinks(a["entity_role"], a["entity_position_link"],
+    links = ids.ObservationLinks(a["entity_role"], a["entity_position_link"],
                                a["entity_time_link"], a["spatial_temporal_link"])
     l1 = ids.l1_projection(entity=entity, spatial=spatial, temporal=temporal, links=links,
                            deleted=a["deleted"], multiplicity=a["multiplicity"],
@@ -324,7 +324,7 @@ def _rebuild_from_db(cx: sqlite3.Connection, assertion_row: sqlite3.Row):
     return l1, fp, line_no, preset_key
 
 
-# Three assertions spanning the interesting shapes: an instant with activity+context
+# Three observations spanning the interesting shapes: an instant with activity+context
 # (CDR op-A), an interval with two temporal bounds and NO activity (CCTV), and the
 # REFERENCED chat pin with a deleted flag + activity context (chat pin).
 @pytest.mark.parametrize("source_label", ["CDR op-A", "CCTV", "chat pin"])
@@ -334,9 +334,9 @@ def test_demo_cross_check_digests_match_stored(source_label):
     cx = sqlite3.connect(f"file:{_DEMO_DB}?mode=ro", uri=True)
     cx.row_factory = sqlite3.Row
     try:
-        row = cx.execute("SELECT * FROM assertion WHERE source_label=? LIMIT 1",
+        row = cx.execute("SELECT * FROM observation WHERE source_label=? LIMIT 1",
                          (source_label,)).fetchone()
-        assert row is not None, f"no assertion labelled {source_label!r} in the demo"
+        assert row is not None, f"no observation labelled {source_label!r} in the demo"
         l1, fp, line_no, preset_key = _rebuild_from_db(cx, row)
         ch, cd = ids.digests(fingerprint_sha256=fp, preset_key=preset_key, line_no=line_no,
                              output_ordinal=row["output_ordinal"], l1=l1)

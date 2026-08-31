@@ -5,7 +5,7 @@ Defines:    one uuid5 namespace per run-DB table, the generic ``id_for(table, *p
             table of run_db_schema.md); the ``canonical_json`` determinism helper
             (rule 5); the plain typed projection-input dataclasses
             (``EntityProjection`` / ``SpatialProjection`` / ``TemporalProjection`` /
-            ``ActivityProjection`` / ``AssertionLinks`` + their ``Component`` parts);
+            ``ActivityProjection`` / ``ObservationLinks`` + their ``Component`` parts);
             the normative ``l1_projection`` both digests hash; and the two digests
             ``content_hash`` and ``claim_digest``.
 Used by:    the assembly brick (it builds the projection inputs and calls
@@ -21,7 +21,7 @@ state is expressed here once, in code, with the doc's field order preserved verb
 
 Cross-check: docs/examples/build_example_db.py transcribed the SAME normative recipes
 by hand into docs/examples/matlas_example.sqlite; tests/core/test_ids.py rebuilds three
-of its assertions and asserts byte-equal digests, so any drift between this module and
+of its observations and asserts byte-equal digests, so any drift between this module and
 the doc surfaces as a red test rather than a silent divergence.
 """
 from __future__ import annotations
@@ -84,7 +84,11 @@ RUN_PRESET_NAME = "run_preset"
 RAW_RECORD_NAME = "record"            # demo tag: "record" (not "raw_record")
 ACTIVITY_NAME = "activity"
 ACTIVITY_RECORD_NAME = "actrec"       # demo tag: "actrec"
-ASSERTION_NAME = "assertion"
+# DELIBERATELY FROZEN at its historical value: this is an opaque constant feeding uuid5,
+# NOT the table name. Changing it would change every observation_id (and every analysis_id
+# derived from one) and break cross-run diffability against every DB already built - the
+# same argument made for _NAMESPACE above.
+OBSERVATION_NAME = "assertion"
 ENTITY_NAME = "entity"
 SPATIAL_EXPRESSION_NAME = "sx"        # demo tag: "sx"
 TEMPORAL_EXPRESSION_NAME = "tx"       # demo tag: "tx"
@@ -200,32 +204,32 @@ def activity_record_id(activity_id_: str, raw_record_id_: str) -> str:
     return id_for(ACTIVITY_RECORD_NAME, activity_id_, raw_record_id_)
 
 
-def assertion_id(raw_record_id_: str, preset_key: str, output_ordinal: int) -> str:
-    """assertion: uuid5(raw_record_id ⟂ preset KEY ⟂ output_ordinal) — the preset KEY
+def observation_id(raw_record_id_: str, preset_key: str, output_ordinal: int) -> str:
+    """observation: uuid5(raw_record_id ⟂ preset KEY ⟂ output_ordinal) — the preset KEY
     (not preset_id) so the natural key is stable across a version bump;
     UNIQUE(raw_record_id, preset_id, output_ordinal)."""
-    return id_for(ASSERTION_NAME, raw_record_id_, preset_key, output_ordinal)
+    return id_for(OBSERVATION_NAME, raw_record_id_, preset_key, output_ordinal)
 
 
-def entity_id(assertion_natural_key: tuple[object, ...]) -> str:
-    """entity: uuid5(assertion natural key ⟂ corner tag).
+def entity_id(observation_natural_key: tuple[object, ...]) -> str:
+    """entity: uuid5(observation natural key ⟂ corner tag).
 
     The corner tag is the ``entity`` namespace itself (id_for prepends it), so the id is
-    ``uuid5(entity ⟂ <assertion natural key parts>)``. The assertion natural key is
+    ``uuid5(entity ⟂ <observation natural key parts>)``. The observation natural key is
     passed as a tuple of its parts (raw_record_id, output_ordinal, and any further
     per-corner discriminator the assembler uses) — the assembler owns that shape; this
     helper only fixes the corner tag."""
-    return id_for(ENTITY_NAME, *assertion_natural_key)
+    return id_for(ENTITY_NAME, *observation_natural_key)
 
 
-def spatial_expression_id(assertion_natural_key: tuple[object, ...]) -> str:
-    """spatial_expression: uuid5(assertion natural key ⟂ corner tag 'sx')."""
-    return id_for(SPATIAL_EXPRESSION_NAME, *assertion_natural_key)
+def spatial_expression_id(observation_natural_key: tuple[object, ...]) -> str:
+    """spatial_expression: uuid5(observation natural key ⟂ corner tag 'sx')."""
+    return id_for(SPATIAL_EXPRESSION_NAME, *observation_natural_key)
 
 
-def temporal_expression_id(assertion_natural_key: tuple[object, ...]) -> str:
-    """temporal_expression: uuid5(assertion natural key ⟂ corner tag 'tx')."""
-    return id_for(TEMPORAL_EXPRESSION_NAME, *assertion_natural_key)
+def temporal_expression_id(observation_natural_key: tuple[object, ...]) -> str:
+    """temporal_expression: uuid5(observation natural key ⟂ corner tag 'tx')."""
+    return id_for(TEMPORAL_EXPRESSION_NAME, *observation_natural_key)
 
 
 def spatial_component_id(spatial_expression_id_: str, ordinal: int) -> str:
@@ -253,9 +257,9 @@ def spatial_index_id(spatial_integration_id_: str) -> str:
     return id_for(SPATIAL_INDEX_NAME, spatial_integration_id_)
 
 
-def analysis_id(assertion_id_: str, method: str) -> str:
-    """analysis: uuid5(assertion_id ⟂ method); UNIQUE(assertion_id, method)."""
-    return id_for(ANALYSIS_NAME, assertion_id_, method)
+def analysis_id(observation_id_: str, method: str) -> str:
+    """analysis: uuid5(observation_id ⟂ method); UNIQUE(observation_id, method)."""
+    return id_for(ANALYSIS_NAME, observation_id_, method)
 
 
 def edit_log_id() -> str:
@@ -339,8 +343,8 @@ class TemporalComponentProjection:
 class EntityProjection:
     """The entity corner AS IT ENTERS THE DIGEST: identifier ⟂ identifier_type ⟂ type.
 
-    (``entity_role`` is carried on ``AssertionLinks`` — the doc lists it inside the
-    entity block, but it is an assertion column; the projection order is preserved by
+    (``entity_role`` is carried on ``ObservationLinks`` — the doc lists it inside the
+    entity block, but it is an observation column; the projection order is preserved by
     ``l1_projection`` regardless of which dataclass holds it.) ``concerns`` /
     ``concerns_uid`` / ``raw_identifier`` are deliberately ABSENT (normative exclusions).
     """
@@ -372,8 +376,8 @@ class TemporalProjection:
 
 
 @dataclass(frozen=True)
-class AssertionLinks:
-    """The four-way triptych columns on the assertion, AS THEY ENTER THE DIGEST.
+class ObservationLinks:
+    """The four-way triptych columns on the observation, AS THEY ENTER THE DIGEST.
 
     The doc's projection order is: entity_role (with the entity block), then the three
     remaining links after the temporal block. ``l1_projection`` places each correctly.
@@ -407,7 +411,7 @@ def l1_projection(
     entity: EntityProjection,
     spatial: SpatialProjection | None,
     temporal: TemporalProjection | None,
-    links: AssertionLinks,
+    links: ObservationLinks,
     deleted: object | None,
     multiplicity: int | None,
     activity: ActivityProjection | None,
@@ -523,7 +527,7 @@ def _sha256_hex(text: str) -> str:
 
 
 def claim_digest(l1: str) -> str:
-    """``assertion.claim_digest`` = sha256 of the L1 projection ALONE.
+    """``observation.claim_digest`` = sha256 of the L1 projection ALONE.
 
     No fingerprint, no line_no, no output_ordinal, no preset — so two overlapping
     disclosures (different files sharing the same record content) CONVERGE here and
@@ -541,7 +545,7 @@ def content_hash(
     output_ordinal: int,
     l1: str,
 ) -> str:
-    """``assertion.content_hash`` (CSV ``content_uid``) =
+    """``observation.content_hash`` (CSV ``content_uid``) =
     sha256(fingerprint_sha256 ⟂ preset_key ⟂ line_no ⟂ output_ordinal ⟂ L1 projection).
 
     The digest SCOPED to this preset's reading of this file (the preset key is in the
@@ -563,9 +567,9 @@ def digests(
     output_ordinal: int,
     l1: str,
 ) -> tuple[str, str]:
-    """Convenience: (content_hash, claim_digest) for one assertion from its L1 projection.
+    """Convenience: (content_hash, claim_digest) for one observation from its L1 projection.
 
-    WHY paired: the assembler always needs both for one assertion row and they share the
+    WHY paired: the assembler always needs both for one observation row and they share the
     L1 string, so computing them together avoids re-projecting.
     """
     return (

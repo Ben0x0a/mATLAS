@@ -103,5 +103,5 @@ def load_builtin_exporters() -> None:
 # the GUI's default selection and the CLI's --export vocabulary carry over unchanged.
 register_exporter(
     "csv", "CSV", CsvFlatExporter(),
-    "The flat assertion CSV (one file; the preset_id column separates presets).",
+    "The flat observation CSV (one file; the preset_id column separates presets).",
 )

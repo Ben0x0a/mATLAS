@@ -1,4 +1,4 @@
-"""Every assertion as ONE deterministic British-English sentence.
+"""Every observation as ONE deterministic British-English sentence.
 
 Defines:    ``verbalize(row) -> str`` — renders one flat-view row (the flat-view
             column contract) as a single sentence assembled from the ``phrase``
@@ -189,7 +189,7 @@ def _link_phrase(row: Mapping[str, Any] | pd.Series, column: str,
 
 
 def verbalize(row: Mapping[str, Any] | pd.Series) -> str:
-    """Render one assertion (a flat-view row) as one deterministic sentence.
+    """Render one observation (a flat-view row) as one deterministic sentence.
 
     ``row`` is a flat-view row: a pandas Series (one row of
     ``flat_view.build_flat_view``'s frame) or any dict-like mapping of column name to

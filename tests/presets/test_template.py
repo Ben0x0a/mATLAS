@@ -137,7 +137,7 @@ common:
   entity: const(device)
   raw_source_path: const(/x)
   source_label: format("{field(First)} {field(Last)}")
-assertions:
+observations:
   - position:
       latitude: field(Lat)
       longitude: field(Lon)

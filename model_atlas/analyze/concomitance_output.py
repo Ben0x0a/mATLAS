@@ -33,7 +33,7 @@ class MatchRow:
     g1_accuracy_m: float | None
     g1_time_start: str
     g1_time_end: str
-    g1_assertion_id: str
+    g1_observation_id: str
     g1_source: str | None
 
     g2_identifier: str | None
@@ -44,7 +44,7 @@ class MatchRow:
     g2_accuracy_m: float | None
     g2_time_start: str
     g2_time_end: str
-    g2_assertion_id: str
+    g2_observation_id: str
     g2_source: str | None
 
     distance_m: float
@@ -59,11 +59,11 @@ CSV_HEADER: tuple[str, ...] = (
     "g1_identifier", "g1_identifier_type", "g1_entity_type",
     "g1_latitude", "g1_longitude", "g1_accuracy_m",
     "g1_time_start", "g1_time_end",
-    "g1_assertion_id", "g1_source",
+    "g1_observation_id", "g1_source",
     "g2_identifier", "g2_identifier_type", "g2_entity_type",
     "g2_latitude", "g2_longitude", "g2_accuracy_m",
     "g2_time_start", "g2_time_end",
-    "g2_assertion_id", "g2_source",
+    "g2_observation_id", "g2_source",
     "distance_m", "distance_within_accuracy", "time_delta_s", "time_overlap",
 )
 

@@ -1,10 +1,10 @@
 """Untangle (L3): the old rank.py grouping/ranking, re-homed onto the run database.
 
-Defines:    ``analyse`` — reads every assertion joined to its entity and its L2
+Defines:    ``analyse`` — reads every observation joined to its entity and its L2
             integrations, applies the UNCHANGED untangle grouping/ranking semantics
             (``record_type`` main/additional + ``record_rank`` within same-second time
             groups, ranked by horizontal accuracy then completeness) and writes one
-            method-stamped ``analysis`` row per assertion — plus ``METHOD_NAME`` /
+            method-stamped ``analysis`` row per observation — plus ``METHOD_NAME`` /
             ``UNTANGLE_VERSION`` / ``DEFAULT_RESOLUTION_US``.
 Used by:    the app-layer pipeline and tests/analyze/test_untangle.py.
 Depends on: ``model_atlas.core`` (``ids`` — the analysis id derivation,
@@ -17,13 +17,13 @@ Depends on: ``model_atlas.core`` (``ids`` — the analysis id derivation,
 
 The L3 contract (docs/run_db_schema.md)
 ----------------------------------------
-Analysis is ABOUT assertions, never inside them: this brick runs after ingest and
+Analysis is ABOUT observations, never inside them: this brick runs after ingest and
 integration and only ever writes the generic ``analysis`` table. Its ``method``
 string is ``untangle/<version>``; re-running with a bumped version ADDS one row per
-assertion (``UNIQUE(assertion_id, method)`` keeps the verdicts side by side and the
+observation (``UNIQUE(observation_id, method)`` keeps the verdicts side by side and the
 projection reads the current method's), while re-running the SAME version raises —
 an in-place mutation of a recorded verdict would be silent loss, never allowed.
-One row is written for EVERY assertion, ranked or not: a NULL verdict records
+One row is written for EVERY observation, ranked or not: a NULL verdict records
 "examined, not part of a duplicate time group", which is evidence in itself and
 distinct from "this method never ran".
 
@@ -34,7 +34,7 @@ verbatim (only the ``RecordType`` import moved to ``core.vocabularies`` — same
 member values). The golden diff must be attributable ONLY to the schema move,
 so nothing about the grouping key, the sort, or the tie-breaks may change here.
 What DID move is the input: the old flat 45-column frame is reassembled from the
-relational store by ``_ASSERTION_FRAME_SELECT``, each old flat column read from its
+relational store by ``_OBSERVATION_FRAME_SELECT``, each old flat column read from its
 settled home (the csv_migration.md mapping):
 
 - ``entity``                    -> ``entity.identifier`` (the flat contract's entity column);
@@ -50,7 +50,7 @@ settled home (the csv_migration.md mapping):
 - ``position_source``           -> ``spatial_expression.spatial_source`` (renamed
   from the old flat CSV column of the same name);
 - the coordinate/accuracy/speed/heading/beam metrics -> ``spatial_integration``;
-- the three links               -> the ``assertion`` columns.
+- the three links               -> the ``observation`` columns.
 
 ``ORDER BY a.rowid`` reproduces ingest order, so the old engine's insertion-order
 tie-break (``_order``) is preserved bit-for-bit.
@@ -107,10 +107,10 @@ _COMPLETENESS_COLUMNS: tuple[str, ...] = (
 # --- the store read: reassemble the old flat columns from their settled homes
 # One (old flat column name, SQL expression) pair per column the ranking reads —
 # the grouping key, the accuracy, and every completeness column. Aliases:
-# a=assertion, e=entity, sx/si=spatial expression/integration, tx/ti=temporal
+# a=observation, e=entity, sx/si=spatial expression/integration, tx/ti=temporal
 # expression/timespan integration (the projection's own alias vocabulary).
-_ASSERTION_FRAME_SELECT: tuple[tuple[str, str], ...] = (
-    ("assertion_id", "a.assertion_id"),
+_OBSERVATION_FRAME_SELECT: tuple[tuple[str, str], ...] = (
+    ("observation_id", "a.observation_id"),
     ("entity", "e.identifier"),
     ("concerns", "e.concerns"),
     ("time_lower_raw", _temporal_part("lower", "raw_value")),
@@ -147,11 +147,11 @@ _ASSERTION_FRAME_SELECT: tuple[tuple[str, str], ...] = (
     ("spatial_temporal_link", "a.spatial_temporal_link"),
 )
 
-# LEFT JOINs: a corner-less assertion keeps its row (it simply ranks ineligible —
+# LEFT JOINs: a corner-less observation keeps its row (it simply ranks ineligible —
 # the old engine's behaviour for a row with no decoded times). ORDER BY a.rowid is
 # ingest order, the old frame's insertion order, preserving the ``_order`` tie-break.
 _FROM_JOINS = """
-FROM assertion a
+FROM observation a
 JOIN entity e ON e.entity_id = a.entity_id
 LEFT JOIN spatial_expression sx ON sx.spatial_expression_id = a.spatial_expression_id
 LEFT JOIN spatial_integration si ON si.spatial_expression_id = a.spatial_expression_id
@@ -162,9 +162,9 @@ ORDER BY a.rowid
 
 
 def _load_frame(connection: sqlite3.Connection) -> pd.DataFrame:
-    """One row per assertion, columns = the old flat names the ranking reads."""
+    """One row per observation, columns = the old flat names the ranking reads."""
     select_terms = ",\n  ".join(f"{expr} AS {name}"
-                                for name, expr in _ASSERTION_FRAME_SELECT)
+                                for name, expr in _OBSERVATION_FRAME_SELECT)
     cursor = connection.execute(f"SELECT\n  {select_terms}\n{_FROM_JOINS}")
     column_names = [description[0] for description in cursor.description]
     return pd.DataFrame(cursor.fetchall(), columns=column_names)
@@ -250,14 +250,14 @@ def _rank(df: pd.DataFrame, *, resolution_us: int = DEFAULT_RESOLUTION_US) -> pd
 def analyse(store: RunStore, *, version: str = UNTANGLE_VERSION,
             resolution_us: int = DEFAULT_RESOLUTION_US,
             clear_existing: bool = False) -> int:
-    """Rank the store's assertions and write one ``analysis`` row per assertion.
+    """Rank the store's observations and write one ``analysis`` row per observation.
 
     HOW: reassemble the old flat frame from the relational store (one row per
-    assertion, ingest order), run the unchanged ranking, then write
-    ``(assertion_id, untangle/<version>, record_type, record_rank)`` rows through
-    the L3 writer. Returns the number of rows written (== the assertion count).
+    observation, ingest order), run the unchanged ranking, then write
+    ``(observation_id, untangle/<version>, record_type, record_rank)`` rows through
+    the L3 writer. Returns the number of rows written (== the observation count).
     Normally a re-run with a changed ranker ADDS a new method generation beside the
-    old one; re-running the SAME version hits ``UNIQUE(assertion_id,
+    old one; re-running the SAME version hits ``UNIQUE(observation_id,
     method)`` and raises, so a recorded verdict is never silently overwritten.
 
     ``clear_existing`` is the ONE sanctioned exception: on APPEND (a new run added to
@@ -272,14 +272,14 @@ def analyse(store: RunStore, *, version: str = UNTANGLE_VERSION,
     frame = _rank(_load_frame(store.connection), resolution_us=resolution_us)
     written = 0
     ranked = 0
-    for assertion_id, record_type, record_rank in frame[
-            ["assertion_id", _RECORD_TYPE, _RECORD_RANK]].itertuples(index=False):
-        # pandas NA -> SQL NULL: an unranked assertion keeps its verdict row with a
+    for observation_id, record_type, record_rank in frame[
+            ["observation_id", _RECORD_TYPE, _RECORD_RANK]].itertuples(index=False):
+        # pandas NA -> SQL NULL: an unranked observation keeps its verdict row with a
         # NULL verdict ("examined, no duplicate group"), never a fabricated rank.
         rank_value = None if pd.isna(record_rank) else int(record_rank)
         store.write_analysis(V.Analysis(
-            analysis_id=ids.analysis_id(assertion_id, method),
-            assertion_id=assertion_id,
+            analysis_id=ids.analysis_id(observation_id, method),
+            observation_id=observation_id,
             method=method,
             record_type=None if pd.isna(record_type) else str(record_type),
             record_rank=rank_value,

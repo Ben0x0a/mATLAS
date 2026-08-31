@@ -110,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="matlas",
         description=(
             "SpatioTemporal Analysis - Forensic Data Processing. Process CSV, Excel, "
-            "SQLite and XML sources into the relational spatio-temporal assertion "
+            "SQLite and XML sources into the relational spatio-temporal observation "
             "model (flat CSV projection by default)."
         ),
     )

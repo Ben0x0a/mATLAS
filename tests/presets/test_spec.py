@@ -33,7 +33,7 @@ source_record_uid: field(Z_PK)
 common:
   entity: const(device)
   source_label: const(ZRTCLLOCATIONMO)
-assertions:
+observations:
   - position:
       latitude: field(ZLATITUDE)
       horizontal_speed_kmh: { from: field(ZSPEED), unit: m/s }
@@ -61,7 +61,7 @@ def test_valid_preset_parses() -> None:
     assert selector.format == "sqlite" and selector.table == "ZRTCLLOCATIONMO"
     assert selector.path.endswith("Cache.sqlite") and selector.role == "source"
     assert preset.source_record_uid is not None and preset.source_record_uid.ref.arg == "Z_PK"
-    template = preset.assertions[0]
+    template = preset.observations[0]
     fields = {f.model_field: f for f in template.fields}
     assert fields["latitude"].ref.arg == "ZLATITUDE"
     assert fields["horizontal_speed_kmh"].unit == "m/s"
@@ -91,7 +91,7 @@ def test_engine_owned_field_not_assignable() -> None:
 _MIN = """
 preset: {id: t, name: N, version: 1.0, tier: secondary}
 input_selector: {format: csv, name: f.csv}
-assertions:
+observations:
   - position: {latitude: field(Lat)}
     time: {instant: field(TS), format: "%Y"}
     links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
@@ -147,8 +147,8 @@ def test_distinct_roles_recorded() -> None:
 
 def test_expected_fields_parsed_including_globs() -> None:
     text = _MIN.replace(
-        "assertions:",
-        'expected_fields: [Lat, TS, "Timestamp - * (dd)"]\nassertions:',
+        "observations:",
+        'expected_fields: [Lat, TS, "Timestamp - * (dd)"]\nobservations:',
     )
     assert _parse(text).expected_fields == ("Lat", "TS", "Timestamp - * (dd)")
 
@@ -179,8 +179,8 @@ _INVALID: dict[str, str] = {
     "excel needs sheet": _MIN.replace(
         "input_selector: {format: csv, name: f.csv}",
         "input_selector: {format: excel, name: x.xlsx}"),
-    "assertions empty": _MIN.split("assertions:")[0] + "assertions: []\n",
-    "assertion missing time": _MIN.replace(
+    "observations empty": _MIN.split("observations:")[0] + "observations: []\n",
+    "observation missing time": _MIN.replace(
         '    time: {instant: field(TS), format: "%Y"}\n', ""),
     "time both instant and interval": _MIN.replace(
         'instant: field(TS), format: "%Y"',
@@ -210,7 +210,7 @@ _INVALID: dict[str, str] = {
         "latitude: field(Lat)",
         "latitude: {from: field(Lat), extract: absent.g}"),
     "extract references missing group": _MIN.replace(
-        "assertions:", "patterns:\n  p: \"(?P<lat>[0-9]+)\"\nassertions:").replace(
+        "observations:", "patterns:\n  p: \"(?P<lat>[0-9]+)\"\nobservations:").replace(
         "latitude: field(Lat)",
         "latitude: {from: field(Lat), extract: p.nope}"),
     # field-mapping dict validation (_parse_field): the dict form must carry a 'from' reference.
@@ -235,7 +235,7 @@ def test_extended_l1_vocabulary_is_assignable() -> None:
     multiplicity, referentials) and any ``context.<key>`` in its ``common:`` block, and a
     spatial referential in a position — not only the programmatic assemble path."""
     text = _MIN.replace(
-        "assertions:",
+        "observations:",
         "common:\n"
         "  entity_role: const(caller)\n"
         "  activity_kind: const(call)\n"
@@ -243,7 +243,7 @@ def test_extended_l1_vocabulary_is_assignable() -> None:
         "  multiplicity: field(N)\n"
         "  context.callee: field(Callee)\n"
         "  context.imei: field(IMEI)\n"
-        "assertions:",
+        "observations:",
     ).replace(
         "position: {latitude: field(Lat)}",
         "position: {latitude: field(Lat), spatial_referential: const(epsg:4326)}",
@@ -255,7 +255,7 @@ def test_extended_l1_vocabulary_is_assignable() -> None:
     assert common["identifier_type"].ref.arg == "bssid"   # free identifier type accepted
     assert common["context.callee"].ref.arg == "Callee"
     assert common["context.imei"].ref.arg == "IMEI"
-    position = {f.model_field: f for f in preset.assertions[0].fields}
+    position = {f.model_field: f for f in preset.observations[0].fields}
     assert position["spatial_referential"].ref.arg == "epsg:4326"
 
 
@@ -270,7 +270,7 @@ def test_time_bound_extract_parses() -> None:
         'time: {instant: field(TS), format: "%Y"}',
         'time: {instant: {from: field(TS), extract: clock.t}, format: "%H:%M"}',
     )
-    ts = _parse(text).assertions[0].temporal[0]
+    ts = _parse(text).observations[0].temporal[0]
     assert ts.lower_extract == ("clock", "t") and ts.upper_extract == ("clock", "t")
     # A bound mapping with no 'from' is rejected.
     bad = _MIN.replace('time: {instant: field(TS), format: "%Y"}',
@@ -292,7 +292,7 @@ def test_metric_field_requires_explicit_unit() -> None:
     with_unit = _MIN.replace(
         "position: {latitude: field(Lat)}",
         "position: {latitude: field(Lat), altitude_m: {from: field(Alt), unit: m}}")
-    altitude = {f.model_field: f for f in _parse(with_unit).assertions[0].fields}["altitude_m"]
+    altitude = {f.model_field: f for f in _parse(with_unit).observations[0].fields}["altitude_m"]
     assert altitude.unit == "m" and altitude.ref.arg == "Alt"
 
 
@@ -324,20 +324,20 @@ def test_duration_bound_parses_as_the_upper_with_its_source_unit() -> None:
     """``duration_sec:`` states the upper bound as an elapsed span. It lands in the same
     ``upper`` slot as an end clock — so every existing consumer (field inventory, matching,
     assembly) sees it for free — and only ``duration_unit`` records that it was a span."""
-    time = _parse(_INTERVAL).assertions[0].temporal[0]
+    time = _parse(_INTERVAL).observations[0].temporal[0]
     assert time.kind == "interval"
     assert time.lower.arg == "TS" and time.upper.arg == "Dur"
     assert time.duration_unit == "s"
     # An ordinary end clock leaves the marker unset — the two shapes stay distinguishable.
     plain = _parse(_INTERVAL.replace("duration_sec: {from: field(Dur), unit: s}",
-                                     "upper: field(End)")).assertions[0].temporal[0]
+                                     "upper: field(End)")).observations[0].temporal[0]
     assert plain.upper.arg == "End" and plain.duration_unit is None
 
 
 @pytest.mark.parametrize("unit", ["s", "ms", "us", "min", "h", "d"])
 def test_duration_units_supported(unit: str) -> None:
     spec = _parse(_INTERVAL.replace("unit: s}", f"unit: {unit}}}"))
-    assert spec.assertions[0].temporal[0].duration_unit == unit
+    assert spec.observations[0].temporal[0].duration_unit == unit
 
 
 def test_duration_bound_rejects_a_missing_or_unknown_unit() -> None:
@@ -361,7 +361,7 @@ def test_zone_const_must_be_an_offset_or_a_known_zone() -> None:
     """A named IANA zone is admitted; a typo is rejected at LOAD, because an unrecognised zone
     does not fail at conversion — it silently falls back to assuming UTC."""
     named = _MIN.replace('format: "%Y"', 'format: "%Y", zone: const(Europe/Zurich)')
-    assert _parse(named).assertions[0].temporal[0].zone.ref.arg == "Europe/Zurich"
+    assert _parse(named).observations[0].temporal[0].zone.ref.arg == "Europe/Zurich"
     for good in ("const(UTC)", "const(+01:00)", "const(local)", 'header("TZ *")'):
         _parse(_MIN.replace('format: "%Y"', f'format: "%Y", zone: {good}'))
     with pytest.raises(ValueError):

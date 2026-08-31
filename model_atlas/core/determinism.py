@@ -101,7 +101,7 @@ def sqlite_enumeration_sql(connection: sqlite3.Connection, table_name: str) -> s
     (detected robustly by ``_is_without_rowid`` — a rowid probe, never a schema substring)
     enumerates in primary-key order — PK columns taken in their PK position order from
     ``PRAGMA table_info`` (column 5 is the 1-based PK position, 0 = not part of the PK).
-    WHY pinned: ``line_no`` (and through it every record/assertion id) embeds the
+    WHY pinned: ``line_no`` (and through it every record/observation id) embeds the
     enumeration position — an unpinned order would shift ids between two runs over the
     same evidence and break diffability.
     """
@@ -132,7 +132,7 @@ def numbered_records(
     record's ``recovery_state`` marker.
     WHY one continuing sequence: if recovered rows renumbered (or interleaved with) live
     rows, how much a scan happened to recover would shift every following record's
-    ``line_no`` — and with it every record/assertion id — between two runs over the
+    ``line_no`` — and with it every record/observation id — between two runs over the
     same evidence.
     """
     line_no = 0

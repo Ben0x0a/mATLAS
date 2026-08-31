@@ -1,10 +1,10 @@
 """Tests for the GeoVisualizer export brick (model_atlas/export/geovisualizer.py).
 
 Two stores exercise this brick:
-  - the golden ``secondary`` fixture (both assertions instant): round-trip a small
+  - the golden ``secondary`` fixture (both observations instant): round-trip a small
     store, spot-check row-count/coordinates against the flat CSV of the SAME store;
   - the hand-authored manual store (tests/export/_pipeline.build_manual_store), whose
-    second assertion is a genuine interval with a compound IMEI-bearing identifier —
+    second observation is a genuine interval with a compound IMEI-bearing identifier —
     the only way to exercise the interval-bound expansion and the IMEI port, since the
     golden fixtures are instant-only, IMEI-free.
 """
@@ -28,7 +28,7 @@ def _read_geovis_csv(path: Path) -> pd.DataFrame:
     # digit string unquoted, so a generic reader would otherwise infer float64 and
     # round the 15-digit IMEI — a read-back artefact of this test, not the file on
     # disk (the bytes on disk are the exact digit string; see test_sqlite_db-style
-    # byte-level checks in the other export tests for the written-bytes assertion).
+    # byte-level checks in the other export tests for the written-bytes observation).
     return pd.read_csv(path, sep=";", encoding="utf-8-sig", dtype={"IMEI": str})
 
 
@@ -50,8 +50,8 @@ def test_geovisualizer_round_trips_small_store(tmp_path: Path) -> None:
     assert written == [tmp_path / "merged.geovisualizer.csv"]
     out = _read_geovis_csv(written[0])
 
-    # Both golden assertions are instants (lower == upper) -> no expansion, one
-    # GeoVisualizer row per assertion.
+    # Both golden observations are instants (lower == upper) -> no expansion, one
+    # GeoVisualizer row per observation.
     assert list(out.columns) == list(_GEOVIS_COLUMNS)
     assert len(out) == len(flat) == 2
     assert sorted(out["Latitude"].tolist()) == sorted(flat["latitude_wgs84"].tolist())
@@ -70,7 +70,7 @@ def test_geovisualizer_expands_interval_into_two_rows(tmp_path: Path) -> None:
         flat = build_flat_view(store.connection, include_source_columns=False)
 
     out = _read_geovis_csv(written[0])
-    # 2 assertions in the store: the instant one yields 1 row, the interval one yields
+    # 2 observations in the store: the instant one yields 1 row, the interval one yields
     # 2 (one per bound) -> 3 GeoVisualizer rows total.
     assert len(flat) == 2
     assert len(out) == 3
@@ -92,7 +92,7 @@ def test_geovisualizer_expands_interval_into_two_rows(tmp_path: Path) -> None:
     # The two bound timestamps differ (13:00 vs 14:30 local).
     assert interval_rows["Timestamp (local)"].nunique() == 2
 
-    # The instant assertion's row carries no IMEI (identifier is None) and a concrete
+    # The instant observation's row carries no IMEI (identifier is None) and a concrete
     # speed (10.8 km/h, not "null").
     instant_row = out[out["IMEI"] != MANUAL_IMEI].iloc[0]
     assert instant_row["IMEI"] == "" or pd.isna(instant_row["IMEI"])

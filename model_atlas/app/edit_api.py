@@ -60,7 +60,7 @@ seeds the origin with the original row id (the occurrence it was cloned from).
 
 A verbatim clone would ALSO duplicate any other UNIQUE value the source row carries, so
 ``save_as_new_row`` re-mints those too (``_clone_row``): a non-FK discriminator (e.g. analysis'
-``method`` in ``UNIQUE(assertion_id, method)``) is regenerated, while a UNIQUE tuple made only
+``method`` in ``UNIQUE(observation_id, method)``) is regenerated, while a UNIQUE tuple made only
 of foreign keys (the 1:1 owned-corner integrations' ``UNIQUE(spatial_expression_id)``) is
 given a FRESH parent occurrence — because pointing the FK at a non-existent id would fail FK
 enforcement, and the model owns the corner the same way the assembler does. Parents are minted
@@ -199,7 +199,7 @@ class EditApi:
         The one allowed edit path for L0/L1 evidence (and usable on any table). A verbatim clone
         would duplicate any UNIQUE value the source row carries (an owned-corner FK such as the
         integration's ``UNIQUE(spatial_expression_id)``, or a natural-key tuple such as analysis'
-        ``UNIQUE(assertion_id, method)``) and the insert would raise ``IntegrityError`` — so the
+        ``UNIQUE(observation_id, method)``) and the insert would raise ``IntegrityError`` — so the
         keys are RE-MINTED (see :meth:`_clone_row`): a non-FK discriminator is regenerated, and a
         UNIQUE tuple made only of foreign keys gets a fresh parent occurrence. Logs a ``new_row``
         entry per created row (parents first) carrying the FULL snapshot as canonical JSON;
@@ -228,8 +228,8 @@ class EditApi:
             which keeps a later rewind (deletes in descending-ordinal order) FK-safe: the child is
             removed before its parent.
           * Pass 2 (a UNIQUE tuple carrying a NON-FK discriminator, e.g. analysis'
-            ``UNIQUE(assertion_id, method)``): regenerate that discriminator so the FK
-            (``assertion_id``) still references the same real parent.
+            ``UNIQUE(observation_id, method)``): regenerate that discriminator so the FK
+            (``observation_id``) still references the same real parent.
         Each pass acts only when the tuple would actually collide, so an ``edits`` value the
         operator already made distinct is respected. Logs one ``new_row`` entry per created row.
         WHY not a verbatim clone: ``update`` on evidence directs the operator here, so this path

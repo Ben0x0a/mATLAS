@@ -5,7 +5,7 @@ Covers:     the entity-normalisation design note's Verify bullets (the two Swiss
             public normalises; two device mentions never get an identifier; "A. Moreau"
             / "moreau a." share a concerns_uid but remain two rows), the full per-kind
             rule table incl. every refuse condition, the digest recomputation (a
-            normalised entity's assertion digests move AND equal a fresh normative
+            normalised entity's observation digests move AND equal a fresh normative
             recomputation; a refused entity's digests are byte-identical), the
             matlas_meta rule-set stamps, and the report counts.
 Uses:       ``model_atlas.integrate.entity``, ``model_atlas.core`` (ids, vocabularies,
@@ -129,7 +129,7 @@ def store():
 
 
 def _seed_l0(store: RunStore) -> None:
-    """The minimal L0 chain every assertion needs (case -> run -> preset -> source)."""
+    """The minimal L0 chain every observation needs (case -> run -> preset -> source)."""
     case_id = ids.case_metadata_id()
     store.write_case_metadata(V.CaseMetadata(case_id=case_id, case_number="C-1"))
     run_id = ids.run_id()
@@ -156,13 +156,13 @@ def _write_mention(
     concerns: str | None = None,
     with_corners: bool = False,
 ) -> tuple[str, str]:
-    """Write one raw_record + entity + assertion exactly as T23 assembles them.
+    """Write one raw_record + entity + observation exactly as T23 assembles them.
 
     The digests hash identifier=None (the assembled, pre-normalisation entity corner)
     through the SAME core.ids recipes the assembler uses, so the fixture state is the
     genuine pre-T32 shape. ``with_corners`` adds spatial + temporal + activity corners
     so the digest recomputation must rebuild the full projection, not just the entity
-    block. Returns (entity_id, assertion_id).
+    block. Returns (entity_id, observation_id).
     """
     source_id = ids.source_id(INPUT_PATH, None, None)
     raw_record_id = ids.raw_record_id(source_id, line_no)
@@ -188,7 +188,7 @@ def _write_mention(
     spatial_expression_id = None
     temporal_expression_id = None
     activity_id = None
-    links = ids.AssertionLinks()
+    links = ids.ObservationLinks()
     if with_corners:
         spatial_expression_id = ids.spatial_expression_id(natural_key)
         store.write_spatial_expression(V.SpatialExpression(
@@ -229,7 +229,7 @@ def _write_mention(
             activity_record_id=ids.activity_record_id(activity_id, raw_record_id),
             activity_id=activity_id, raw_record_id=raw_record_id))
         activity_projection = ids.ActivityProjection("call", context)
-        links = ids.AssertionLinks("subject", "at", "observed_at", "instant")
+        links = ids.ObservationLinks("subject", "at", "observed_at", "instant")
 
     l1 = ids.l1_projection(
         entity=ids.EntityProjection(None, identifier_type, entity_type),
@@ -239,9 +239,9 @@ def _write_mention(
     content_hash, claim_digest = ids.digests(
         fingerprint_sha256=FINGERPRINT, preset_key=PRESET_KEY,
         line_no=line_no, output_ordinal=0, l1=l1)
-    assertion_id = ids.assertion_id(raw_record_id, PRESET_KEY, 0)
-    store.write_assertion(V.Assertion(
-        assertion_id=assertion_id, raw_record_id=raw_record_id,
+    observation_id = ids.observation_id(raw_record_id, PRESET_KEY, 0)
+    store.write_observation(V.Observation(
+        observation_id=observation_id, raw_record_id=raw_record_id,
         preset_id=ids.preset_id(PRESET_KEY, PRESET_VERSION), output_ordinal=0,
         entity_id=entity_id, content_hash=content_hash, claim_digest=claim_digest,
         entity_origin=V.Origin.PRESET_MAPPED,
@@ -252,7 +252,7 @@ def _write_mention(
         entity_position_link=links.entity_position_link,
         entity_time_link=links.entity_time_link,
         spatial_temporal_link=links.spatial_temporal_link))
-    return entity_id, assertion_id
+    return entity_id, observation_id
 
 
 def _entity_row(store: RunStore, entity_id: str) -> tuple:
@@ -261,10 +261,10 @@ def _entity_row(store: RunStore, entity_id: str) -> tuple:
         "FROM entity WHERE entity_id = ?", (entity_id,)).fetchone()
 
 
-def _digests(store: RunStore, assertion_id: str) -> tuple:
+def _digests(store: RunStore, observation_id: str) -> tuple:
     return store.connection.execute(
-        "SELECT content_hash, claim_digest FROM assertion WHERE assertion_id = ?",
-        (assertion_id,)).fetchone()
+        "SELECT content_hash, claim_digest FROM observation WHERE observation_id = ?",
+        (observation_id,)).fetchone()
 
 
 # --- the T32.md Verify bullets --------------------------------------------------
@@ -359,20 +359,20 @@ def test_concerns_uid_groups_without_merging_rows(store: RunStore) -> None:
 # --- the digest recomputation ----------------------------------------------------
 
 def test_normalised_entity_digests_recomputed_refused_unchanged(store: RunStore) -> None:
-    # Full-corner assertions so the recomputation must rebuild the whole projection.
-    normalised_id, normalised_assertion = _write_mention(
+    # Full-corner observations so the recomputation must rebuild the whole projection.
+    normalised_id, normalised_observation = _write_mention(
         store, 1, raw_identifier="+41 79 123 45 67", identifier_type="msisdn",
         entity_type="person", concerns="A. Moreau", with_corners=True)
-    refused_id, refused_assertion = _write_mention(
+    refused_id, refused_observation = _write_mention(
         store, 2, raw_identifier="0791234567", identifier_type="msisdn",
         entity_type="person", concerns="moreau a.", with_corners=True)
-    before_normalised = _digests(store, normalised_assertion)
-    before_refused = _digests(store, refused_assertion)
+    before_normalised = _digests(store, normalised_observation)
+    before_refused = _digests(store, refused_observation)
 
     report = normalise_entities(store)   # no region: line 2 refuses
 
     # The normalised entity's digests MOVED (identifier entered the L1 projection) ...
-    after_normalised = _digests(store, normalised_assertion)
+    after_normalised = _digests(store, normalised_observation)
     assert after_normalised[0] != before_normalised[0]
     assert after_normalised[1] != before_normalised[1]
     # ... and equal a fresh, independent recomputation through the normative recipes.
@@ -385,7 +385,7 @@ def test_normalised_entity_digests_recomputed_refused_unchanged(store: RunStore)
         temporal=ids.TemporalProjection(
             "instant", "unix_epoch_s",
             (ids.TemporalComponentProjection("lower", "start", "+01:00", "1700000000"),)),
-        links=ids.AssertionLinks("subject", "at", "observed_at", "instant"),
+        links=ids.ObservationLinks("subject", "at", "observed_at", "instant"),
         deleted=None, multiplicity=None,
         activity=ids.ActivityProjection("call", {"callee": "+41791234568"}))
     assert after_normalised == ids.digests(
@@ -395,7 +395,7 @@ def test_normalised_entity_digests_recomputed_refused_unchanged(store: RunStore)
     # The refused entity's digests are BYTE-IDENTICAL: refusal changes nothing the
     # projection hashes (identifier stays NULL, the claimed kind is preserved) — even
     # though its concerns_uid WAS derived (excluded from the digests, decision 22).
-    assert _digests(store, refused_assertion) == before_refused
+    assert _digests(store, refused_observation) == before_refused
     assert _entity_row(store, refused_id)[3] is not None      # concerns_uid derived
     assert _entity_row(store, refused_id)[1] == "msisdn"      # the claim survives
     assert report.digests_recomputed_count == 1
@@ -405,17 +405,17 @@ def test_normalised_entity_digests_recomputed_refused_unchanged(store: RunStore)
     assert _entity_row(store, refused_id)[2] == "0791234567"
 
 
-def test_recomputation_handles_cornerless_assertions(store: RunStore) -> None:
+def test_recomputation_handles_cornerless_observations(store: RunStore) -> None:
     # No spatial/temporal/activity corners: the projection's two-empty-slot shape.
-    entity_id, assertion_id = _write_mention(
+    entity_id, observation_id = _write_mention(
         store, 1, raw_identifier="John.Doe@Example.COM", identifier_type="email")
-    before = _digests(store, assertion_id)
+    before = _digests(store, observation_id)
     normalise_entities(store)
-    after = _digests(store, assertion_id)
+    after = _digests(store, observation_id)
     assert after != before
     expected_l1 = ids.l1_projection(
         entity=ids.EntityProjection("john.doe@example.com", "email", "unknown"),
-        spatial=None, temporal=None, links=ids.AssertionLinks(),
+        spatial=None, temporal=None, links=ids.ObservationLinks(),
         deleted=None, multiplicity=None, activity=None)
     assert after == ids.digests(
         fingerprint_sha256=FINGERPRINT, preset_key=PRESET_KEY,

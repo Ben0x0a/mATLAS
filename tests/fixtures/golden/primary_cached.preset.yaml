@@ -30,7 +30,7 @@ common:
   position_source: const(GNSS)
   raw_source_path: field(Source)
 
-assertions:
+observations:
   - position:
       latitude:              field(Latitude)
       longitude:             field(Longitude)

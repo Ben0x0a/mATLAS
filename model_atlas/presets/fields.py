@@ -25,7 +25,7 @@ def field_refs(preset: PresetSpec, *, include_optional: bool = True) -> list[str
 
     ``include_optional=False`` drops fields flagged ``optional: true`` — used to compute the
     REQUIRED fields (a preset's hard dependencies). The time bounds are always required (an
-    assertion without its instant cannot be built), so they are included regardless.
+    observation without its instant cannot be built), so they are included regardless.
     """
     refs: list[str] = []
 
@@ -41,7 +41,7 @@ def field_refs(preset: PresetSpec, *, include_optional: bool = True) -> list[str
         add(preset.source_record_uid)
     for spec in preset.common:
         add(spec)
-    for template in preset.assertions:
+    for template in preset.observations:
         for spec in template.fields:
             add(spec)
         for temporal in template.temporal:

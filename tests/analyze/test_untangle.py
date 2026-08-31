@@ -3,8 +3,8 @@
 Defines:    the pinned-oracle verdict test (the ``_EXPECTED`` tuple was verified
             against the retired ``transforms.rank.untangle`` before the cut-over to the
             relational engine, so the store-read ``analyse`` still answers to the old
-            engine's exact per-assertion ``(record_type, record_rank)``), the
-            re-run tests (a bumped version ADDS a second row per assertion and the
+            engine's exact per-observation ``(record_type, record_rank)``), the
+            re-run tests (a bumped version ADDS a second row per observation and the
             projection picks the current method's verdict; the SAME version re-run
             RAISES), the analysis id derivation check, and the empty-store no-op.
 Used by:    the verification gate (pytest tests/analyze/test_untangle.py).
@@ -59,7 +59,7 @@ def _placement(lower_us: int, hacc: float | None = None, **extra: object) -> dic
 # The scenario: one same-second group of four (accuracy ranking + a completeness
 # tie-break + a missing-accuracy row), a +30 s row (singleton at 1 s resolution,
 # group member at 60 s), a same-second row of ANOTHER entity (singleton — entity is
-# part of the grouping key), and a corner-less assertion (ineligible — no times).
+# part of the grouping key), and a corner-less observation (ineligible — no times).
 _SPECS: tuple[dict, ...] = (
     _placement(_SECOND_US + 100_000, hacc=12.0),                        # r0 -> rank 3
     _placement(_SECOND_US + 200_000, hacc=5.0),                         # r1 -> rank 2
@@ -82,7 +82,7 @@ _EXPECTED: tuple[tuple[str | None, int | None], ...] = (
 
 def _write_spec(store: RunStore, *, source_id: str, preset_id: str, preset_key: str,
                 line_no: int, spec: dict) -> str:
-    """Write one spec into its settled relational homes; return the assertion id."""
+    """Write one spec into its settled relational homes; return the observation id."""
     rr_id = ids.raw_record_id(source_id, line_no)
     store.write_raw_record(V.RawRecord(raw_record_id=rr_id, source_id=source_id,
                                        line_no=line_no, raw_json="{}"))
@@ -132,16 +132,16 @@ def _write_spec(store: RunStore, *, source_id: str, preset_id: str, preset_key: 
             altitude_m=spec.get("altitude_m"),
             horizontal_accuracy_m=spec.get("horizontal_accuracy_m")))
 
-    assertion_id = ids.assertion_id(rr_id, preset_key, 0)
-    store.write_assertion(V.Assertion(
-        assertion_id=assertion_id, raw_record_id=rr_id, preset_id=preset_id,
+    observation_id = ids.observation_id(rr_id, preset_key, 0)
+    store.write_observation(V.Observation(
+        observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
         output_ordinal=0, entity_id=entity_id, content_hash=f"ch-{line_no}",
         claim_digest=f"cd-{line_no}", spatial_expression_id=sx_id,
         temporal_expression_id=tx_id,
         entity_position_link=spec.get("entity_position_link"),
         entity_time_link=spec.get("entity_time_link"),
         spatial_temporal_link=spec.get("spatial_temporal_link")))
-    return assertion_id
+    return observation_id
 
 
 def _build_scenario(store: RunStore) -> list[str]:
@@ -168,9 +168,9 @@ def _build_scenario(store: RunStore) -> list[str]:
 
 def _analysis_verdicts(store: RunStore, method: str) -> dict[str, tuple]:
     return {
-        assertion_id: (record_type, record_rank)
-        for assertion_id, record_type, record_rank in store.connection.execute(
-            "SELECT assertion_id, record_type, record_rank FROM analysis "
+        observation_id: (record_type, record_rank)
+        for observation_id, record_type, record_rank in store.connection.execute(
+            "SELECT observation_id, record_type, record_rank FROM analysis "
             "WHERE method = ?", (method,))
     }
 
@@ -179,46 +179,46 @@ def _analysis_verdicts(store: RunStore, method: str) -> dict[str, tuple]:
 
 def test_parity_with_the_pinned_old_engine_oracle() -> None:
     with RunStore() as store:
-        assertion_ids = _build_scenario(store)
+        observation_ids = _build_scenario(store)
         written = untangle.analyse(store)
-        assert written == len(_SPECS)   # one verdict row per assertion, ranked or not
+        assert written == len(_SPECS)   # one verdict row per observation, ranked or not
         new_verdicts = _analysis_verdicts(store, "untangle/2.0")
 
-    assert tuple(new_verdicts[assertion_id] for assertion_id in assertion_ids) == _EXPECTED
+    assert tuple(new_verdicts[observation_id] for observation_id in observation_ids) == _EXPECTED
 
 
 def test_analysis_id_is_the_core_derivation() -> None:
     with RunStore() as store:
-        assertion_ids = _build_scenario(store)
+        observation_ids = _build_scenario(store)
         untangle.analyse(store)
         stored = dict(store.connection.execute(
-            "SELECT assertion_id, analysis_id FROM analysis"))
-    for assertion_id in assertion_ids:
-        assert stored[assertion_id] == ids.analysis_id(assertion_id, "untangle/2.0")
+            "SELECT observation_id, analysis_id FROM analysis"))
+    for observation_id in observation_ids:
+        assert stored[observation_id] == ids.analysis_id(observation_id, "untangle/2.0")
 
 
 # --- decision 19: a re-run ADDS rows; the projection reads the current method --
 
 def test_bumped_version_adds_rows_and_projection_picks_current() -> None:
     with RunStore() as store:
-        assertion_ids = _build_scenario(store)
+        observation_ids = _build_scenario(store)
         untangle.analyse(store)   # untangle/2.0 at 1 s resolution
         # The "changed ranker": a 60 s grouping resolution under a bumped version.
         # r4 (+30 s) now joins the group and, carrying the best accuracy, wins it.
         untangle.analyse(store, version="2.1", resolution_us=60_000_000)
 
-        # ADDED, never mutated: two verdict rows per assertion, one per method.
+        # ADDED, never mutated: two verdict rows per observation, one per method.
         assert store.connection.execute(
             "SELECT COUNT(*) FROM analysis").fetchone()[0] == 2 * len(_SPECS)
-        for assertion_id in assertion_ids:
+        for observation_id in observation_ids:
             methods = {row[0] for row in store.connection.execute(
-                "SELECT method FROM analysis WHERE assertion_id = ?", (assertion_id,))}
+                "SELECT method FROM analysis WHERE observation_id = ?", (observation_id,))}
             assert methods == {"untangle/2.0", "untangle/2.1"}
 
         # The projection's default is the CURRENT method (MAX(method) = 2.1)…
         current = flat_view.build_flat_view(
             store.connection, include_source_columns=False).set_index("row_uid")
-        r4 = assertion_ids[4]
+        r4 = observation_ids[4]
         assert current.at[r4, "record_type"] == "main"
         assert int(current.at[r4, "record_rank"]) == 1
         # …while the superseded generation stays readable by pinning its method.
@@ -226,12 +226,12 @@ def test_bumped_version_adds_rows_and_projection_picks_current() -> None:
             store.connection, include_source_columns=False,
             ranking_method="untangle/2.0").set_index("row_uid")
         assert pd.isna(pinned.at[r4, "record_type"])
-        assert current.at[assertion_ids[3], "record_type"] == "additional"  # r3 demoted by r4
-        assert pinned.at[assertion_ids[3], "record_type"] == "main"
+        assert current.at[observation_ids[3], "record_type"] == "additional"  # r3 demoted by r4
+        assert pinned.at[observation_ids[3], "record_type"] == "main"
 
 
 def test_same_version_rerun_raises() -> None:
-    # UNIQUE(assertion_id, method): overwriting a recorded verdict in place would be
+    # UNIQUE(observation_id, method): overwriting a recorded verdict in place would be
     # silent loss, so the same method generation may never be written twice.
     with RunStore() as store:
         _build_scenario(store)

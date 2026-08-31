@@ -191,7 +191,7 @@ common:
   # _parse_field, so a conditional is accepted here — unlike the short `links:` block, which
   # stays bare-enum only.
   spatial_temporal_link: if field(Created) == "NA" then const(instant)
-assertions:
+observations:
   - position:
       latitude: field(Lat)
       longitude: field(Lon)

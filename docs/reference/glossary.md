@@ -8,16 +8,20 @@ is defined; the other documents use them without re-defining. Terms are alphabet
 
 **Activity**
 The event a source record describes — a call, a message, a visit, a sighting. An activity groups
-the *assertions* that belong to one event: a call is one activity with two placed legs, each its
-own assertion. An activity is linked to exactly one raw record at ingest.
+the *observations* that belong to one event: a call is one activity with two placed legs, each its
+own observation. An activity is linked to exactly one raw record at ingest.
+
+Note the two uses of the word: **observation** is the L1 evidence row (the table), while
+`observation` is also one member of the `ActivityKind` vocabulary (an activity that is a plain
+sighting rather than a call, message or trip). Different namespaces - a row versus a kind.
 
 **Append**
 Running against an existing *case* database to add a new *run* to it, rather than creating a new
 case. The new run's evidence is added under the existing *case* identity. See also *create*.
 
-**Assertion**
+**Observation**
 The atomic unit of evidence: one placed claim drawn from one *raw record* by one *preset* — a
-single *entity*, at most one *position*, at most one time. An assertion is one output line only
+single *entity*, at most one *position*, at most one time. An observation is one output line only
 when it is a *placement*. Its identity is content-addressed (see *content hash*, *claim digest*).
 
 **Case**
@@ -25,7 +29,7 @@ One investigation. A case lives in exactly one `*.matlas.sqlite` database and ro
 below it: the *runs* recorded against it, their *sources*, and every derived value.
 
 **Claim digest**
-A content hash computed over an assertion's Layer-1 claim projection alone (independent of which
+A content hash computed over an observation's Layer-1 claim projection alone (independent of which
 *source* or *run* produced it). Two sources making the same claim share a claim digest; it never
 merges them — sameness is a query, not a stored merge (see *convergence*).
 
@@ -39,7 +43,7 @@ The analysis of who or what was *present* together in space and time. A *presenc
 merely *referenced* places and *negated* links do not count; an unknown link does.
 
 **Content hash**
-The content-addressed identity of an assertion, computed from its evidence fingerprint, preset,
+The content-addressed identity of an observation, computed from its evidence fingerprint, preset,
 source line, output ordinal, and Layer-1 projection. No *run* or *case* identifier feeds it, which
 is why *append* is deterministic and why a file read from a folder or a zip yields the same
 identity ("folder == zip" parity).
@@ -61,7 +65,7 @@ time column has one per bound. Components hold the source values exactly as give
 **Derived** — see *Layer 2*.
 
 **Entity**
-The subject an *assertion* is about: a device, account, or person identifier, stored as one lean
+The subject an *observation* is about: a device, account, or person identifier, stored as one lean
 row of *(type, identifier)* plus the *concerns* association. The identifier is *canonicalised* at
 *integration* (or the normaliser *refuses*).
 
@@ -80,12 +84,12 @@ coordinate, a UTC instant, a canonical identifier) — always stamped with the *
 
 **Layer 0 / Layer 1 / Layer 2 / Layer 3**
 The four tiers of the run database. **L0** = acquisition (what was opened: *runs*, *sources*, *raw
-records*). **L1** = the *verbatim* assertion (the source's claim, un-transformed). **L2** = *derived*,
+records*). **L1** = the *verbatim* observation (the source's claim, un-transformed). **L2** = *derived*,
 method-stamped values (canonical space/time, normalised identifiers). **L3** = *analysis* (judgements
-about assertions, e.g. duplicate ranking, concomitance).
+about observations, e.g. duplicate ranking, concomitance).
 
 **Locates**
-The derived flag on a projected row saying what the assertion's *position* locates — the *entity*
+The derived flag on a projected row saying what the observation's *position* locates — the *entity*
 itself, or another entity it points at. Present on every flat-CSV row so a self-location and a
 located-other never render alike.
 
@@ -96,7 +100,7 @@ values (a GPS fix vs a geocoder centroid) are always distinguishable.
 
 **Mention**
 A party *referenced* in a record without its own *placement* — a facet, a counterpart, a context
-reference. A mention attaches to an *assertion*; it never earns its own output line.
+reference. A mention attaches to an *observation*; it never earns its own output line.
 
 **Negation**
 A link asserting something did *not* co-occur ("never during this interval"). Excluded from
@@ -114,23 +118,23 @@ things that share a value (two people named "John Smith"). mATLAS is occurrence-
 sameness is decided by *convergence*, not by the key.
 
 **Placement**
-A located event — an *assertion* that has a position and/or a time of its own. A placement earns
+A located event — an *observation* that has a position and/or a time of its own. A placement earns
 one output line; a party with no placement of its own is a *mention*, not a line.
 
 **Position**
-The spatial part of an assertion (a coordinate, a cell, a place), expressed via a spatial
+The spatial part of an observation (a coordinate, a cell, a place), expressed via a spatial
 *expression* and, once *integrated*, a canonical WGS84 coordinate and spatial index.
 
 **Preset**
 A declarative YAML rule set describing which files it applies to and how to map their fields into
-*assertions*. Presets are matched to *sources* and applied to their *raw records*.
+*observations*. Presets are matched to *sources* and applied to their *raw records*.
 
-**Presence** — see *concomitance*. What an assertion's *placement* establishes: the subject *was*
+**Presence** — see *concomitance*. What an observation's *placement* establishes: the subject *was*
 there, as opposed to merely having *referenced* the place.
 
 **Raw record**
 One verbatim row within a *source* (a CSV line, a table row, a sheet row), stored exactly as read.
-The unit a *preset* is applied to; an *assertion* derives from one raw record.
+The unit a *preset* is applied to; an *observation* derives from one raw record.
 
 **Referential**
 The frame a value is expressed in: for space, the coordinate reference system / encoding (e.g.

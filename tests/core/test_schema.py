@@ -113,16 +113,16 @@ def test_loads_demo_fixture_with_clean_fk_check() -> None:
     # The whole point: FK integrity holds after loading every settled row.
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     # sanity: the fixture actually had rows (a silently empty load would pass FK check).
-    assert connection.execute("SELECT COUNT(*) FROM assertion").fetchone()[0] > 0
+    assert connection.execute("SELECT COUNT(*) FROM observation").fetchone()[0] > 0
     connection.close()
 
 
 # --- §2a and the owned-corner / edit-log UNIQUE guards ---------------------
 
-def _seed_one_assertion(connection: sqlite3.Connection) -> dict[str, str]:
-    """Insert the minimal parent chain + one assertion; return the ids used."""
+def _seed_one_observation(connection: sqlite3.Connection) -> dict[str, str]:
+    """Insert the minimal parent chain + one observation; return the ids used."""
     ids = {name: str(uuid.uuid4()) for name in (
-        "case", "run", "preset", "source", "record", "entity", "sx", "tx", "assertion")}
+        "case", "run", "preset", "source", "record", "entity", "sx", "tx", "observation")}
     connection.execute("INSERT INTO case_metadata (case_id, case_number) VALUES (?, ?)",
                        (ids["case"], "C-1"))
     connection.execute("INSERT INTO run (run_id, case_id) VALUES (?, ?)",
@@ -146,22 +146,22 @@ def _seed_one_assertion(connection: sqlite3.Connection) -> dict[str, str]:
         "INSERT INTO temporal_expression (temporal_expression_id, kind) VALUES (?, ?)",
         (ids["tx"], "instant"))
     connection.execute(
-        "INSERT INTO assertion (assertion_id, raw_record_id, preset_id, output_ordinal, "
+        "INSERT INTO observation (observation_id, raw_record_id, preset_id, output_ordinal, "
         "entity_id, spatial_expression_id, temporal_expression_id, content_hash, "
         "claim_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (ids["assertion"], ids["record"], ids["preset"], 0, ids["entity"],
+        (ids["observation"], ids["record"], ids["preset"], 0, ids["entity"],
          ids["sx"], ids["tx"], "ch", "cd"))
     return ids
 
 
-def test_duplicate_assertion_natural_key_raises() -> None:
+def test_duplicate_observation_natural_key_raises() -> None:
     connection = _memory_conn()
-    ids = _seed_one_assertion(connection)
+    ids = _seed_one_observation(connection)
     # Same (raw_record_id, preset_id, output_ordinal) with fresh owned corners: the §2a
     # guard must reject the duplicate reading.
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(
-            "INSERT INTO assertion (assertion_id, raw_record_id, preset_id, "
+            "INSERT INTO observation (observation_id, raw_record_id, preset_id, "
             "output_ordinal, entity_id, content_hash, claim_digest) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (str(uuid.uuid4()), ids["record"], ids["preset"], 0,
@@ -170,8 +170,8 @@ def test_duplicate_assertion_natural_key_raises() -> None:
 
 def test_shared_entity_corner_raises() -> None:
     connection = _memory_conn()
-    ids = _seed_one_assertion(connection)
-    # A second assertion referencing the SAME entity row violates UNIQUE(entity_id).
+    ids = _seed_one_observation(connection)
+    # A second observation referencing the SAME entity row violates UNIQUE(entity_id).
     connection.execute(
         "INSERT INTO raw_record (raw_record_id, source_id, line_no, raw_json) "
         "VALUES (?, ?, ?, ?)", (str(uuid.uuid4()), ids["source"], 2, "{}"))
@@ -179,7 +179,7 @@ def test_shared_entity_corner_raises() -> None:
         "SELECT raw_record_id FROM raw_record WHERE line_no = 2").fetchone()[0]
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(
-            "INSERT INTO assertion (assertion_id, raw_record_id, preset_id, "
+            "INSERT INTO observation (observation_id, raw_record_id, preset_id, "
             "output_ordinal, entity_id, content_hash, claim_digest) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (str(uuid.uuid4()), other_record, ids["preset"], 0,
@@ -188,7 +188,7 @@ def test_shared_entity_corner_raises() -> None:
 
 def test_shared_spatial_corner_raises() -> None:
     connection = _memory_conn()
-    ids = _seed_one_assertion(connection)
+    ids = _seed_one_observation(connection)
     connection.execute(
         "INSERT INTO raw_record (raw_record_id, source_id, line_no, raw_json) "
         "VALUES (?, ?, ?, ?)", (str(uuid.uuid4()), ids["source"], 2, "{}"))
@@ -197,7 +197,7 @@ def test_shared_spatial_corner_raises() -> None:
     # Reusing the same spatial_expression_id violates its owned-corner UNIQUE.
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(
-            "INSERT INTO assertion (assertion_id, raw_record_id, preset_id, "
+            "INSERT INTO observation (observation_id, raw_record_id, preset_id, "
             "output_ordinal, entity_id, spatial_expression_id, content_hash, "
             "claim_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (str(uuid.uuid4()), other_record, ids["preset"], 0,

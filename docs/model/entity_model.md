@@ -9,7 +9,7 @@ analyst layer that is deferred out of the current version. It elaborates the ent
 | tier | object | key kind | who writes it |
 | --- | --- | --- | --- |
 | L1 | **mention** (`entity`: value as written + type) | occurrence | ingest |
-| L1 | **facets / context** (`assertion_mention`: the caller's IMEI, the counterpart, the detector…) | pure link | ingest |
+| L1 | **facets / context** (`observation_mention`: the caller's IMEI, the counterpart, the detector…) | pure link | ingest |
 | L2 | **canonical form** (`entity_integration`: E.164, lowercase email…, private 1:1, method-stamped) | occurrence | ingest (methods) |
 | L3 | **nodes** (`resolved_entity`) + **relations** (`entity_relation`) | see below | operator / analysis / sanctioned ingest |
 | L3 | **resolution acts** (`mention_resolution`) | occurrence | operator / analysis only |
@@ -56,7 +56,7 @@ exposes two distinct write calls.
 
 `entity_relation` columns: `subject_id`, `object_id`, `relation_type`
 (used_by | subscribed_by | owned_by | **alias_of** | **registered_to** | …),
-`valid_from`, `valid_to` (**INTEGER unix µs** — same type as assertion time, so the
+`valid_from`, `valid_to` (**INTEGER unix µs** — same type as observation time, so the
 validity-covers-time join actually works), `origin`
 (operator | preset | **evidence**), `asserted_by` (agent string), `asserted_at`,
 and `raw_record_id` (nullable FK — **mandatory when origin = evidence**).
@@ -78,8 +78,8 @@ operator/analysis only — never at ingest.
 
 ## What produces the CSV `concerns`
 
-Unchanged by this document: one concerns value per assertion, fixed at
+Unchanged by this document: one concerns value per observation, fixed at
 parsing, `concerns_origin` recorded). The relation graph answers *analyst*
 questions ("whose number was this in March?"); it never produces the CSV column.
-Possible future unification of the decision-12 FK with `assertion_mention`
+Possible future unification of the decision-12 FK with `observation_mention`
 (role=owner) is recorded as an option, not done.

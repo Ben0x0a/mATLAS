@@ -148,7 +148,7 @@ def _parse_float(part: str, raw_value: str) -> float:
     # forms), so a non-finite result must be rejected explicitly. WHY loudly, like the
     # non-numeric case: a non-finite magnitude is bogus evidence — an 'inf' speed would
     # be stamped as a real value, and 'nan'/'inf' under latitude/longitude crashes deep
-    # in s2sphere's from_lat_lng assertion, aborting integration of every later
+    # in s2sphere's from_lat_lng observation, aborting integration of every later
     # expression rather than failing this one cleanly.
     if not math.isfinite(value):
         raise ValueError(

@@ -92,31 +92,31 @@ def _build_persisted_db(target: Path) -> dict[str, str]:
                 referential=V.SpatialReferential.EPSG_4326, spatial_source="GNSS",
                 components=(ids.SpatialComponentProjection(
                     part="latitude", raw_value="46.193000"),)),
-            temporal=None, links=ids.AssertionLinks(entity_role=V.EntityRole.SUBJECT),
+            temporal=None, links=ids.ObservationLinks(entity_role=V.EntityRole.SUBJECT),
             deleted=None, multiplicity=None, activity=None)
         content_hash, claim_digest = ids.digests(
             fingerprint_sha256="fp-1", preset_key="gps", line_no=line_no,
             output_ordinal=output_ordinal, l1=l1)
-        assertion_id = ids.assertion_id(rr_id, "gps", output_ordinal)
-        store.write_assertion(V.Assertion(
-            assertion_id=assertion_id, raw_record_id=rr_id, preset_id=preset_id,
+        observation_id = ids.observation_id(rr_id, "gps", output_ordinal)
+        store.write_observation(V.Observation(
+            observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
             output_ordinal=output_ordinal, entity_id=entity_id,
             content_hash=content_hash, claim_digest=claim_digest,
             entity_origin=V.Origin.PRESET_MAPPED, spatial_expression_id=sx_id,
             temporal_expression_id=tx_id, entity_role=V.EntityRole.SUBJECT))
 
         # An analysis verdict, so the editable-table tests can exercise analysis'
-        # UNIQUE(assertion_id, method) — the composite natural key with a non-FK discriminator.
+        # UNIQUE(observation_id, method) — the composite natural key with a non-FK discriminator.
         an_method = "untangle/1.0"
-        an_id = ids.analysis_id(assertion_id, an_method)
+        an_id = ids.analysis_id(observation_id, an_method)
         store.write_analysis(V.Analysis(
-            analysis_id=an_id, assertion_id=assertion_id, method=an_method,
+            analysis_id=an_id, observation_id=observation_id, method=an_method,
             record_type="gps_fix", record_rank=1))
         store.persist(target)
     return {"entity_id": entity_id, "spatial_integration_id": si_id,
             "spatial_expression_id": sx_id, "timespan_integration_id": ti_id,
             "temporal_expression_id": tx_id, "analysis_id": an_id,
-            "assertion_id": assertion_id}
+            "observation_id": observation_id}
 
 
 @pytest.fixture
@@ -146,7 +146,7 @@ def test_open_rejects_missing_file(tmp_path: Path) -> None:
 
 # --- D34 protection --------------------------------------------------------
 
-@pytest.mark.parametrize("table", ["assertion", "entity", "spatial_component"])
+@pytest.mark.parametrize("table", ["observation", "entity", "spatial_component"])
 def test_update_raises_on_evidence(persisted_db, table) -> None:
     path, keys = persisted_db
     with EditApi.open(path, who="tester") as api:
@@ -238,20 +238,20 @@ def test_save_as_new_row_mints_fresh_parent_for_owned_corner(
 
 
 def test_save_as_new_row_regenerates_non_fk_discriminator(persisted_db) -> None:
-    # analysis' UNIQUE(assertion_id, method) has a non-FK discriminator: save_as_new_row keeps
-    # the assertion FK (the verdict is about the same assertion) and regenerates ``method`` so
-    # the natural key differs — no IntegrityError, no fabricated parent assertion.
+    # analysis' UNIQUE(observation_id, method) has a non-FK discriminator: save_as_new_row keeps
+    # the observation FK (the verdict is about the same observation) and regenerates ``method`` so
+    # the natural key differs — no IntegrityError, no fabricated parent observation.
     path, keys = persisted_db
     with EditApi.open(path, who="tester") as api:
         original = api.row("analysis", keys["analysis_id"])
-        assertions_before = len(api.rows("assertion"))
+        observations_before = len(api.rows("observation"))
         new_id = api.save_as_new_row("analysis", keys["analysis_id"], {})
         assert new_id != keys["analysis_id"]
         assert api.row("analysis", keys["analysis_id"]) == original
         new_row = api.row("analysis", new_id)
-        assert new_row["assertion_id"] == original["assertion_id"]   # same real parent
+        assert new_row["observation_id"] == original["observation_id"]   # same real parent
         assert new_row["method"] != original["method"]               # fresh discriminator
-        assert len(api.rows("assertion")) == assertions_before       # no forged assertion
+        assert len(api.rows("observation")) == observations_before       # no forged observation
         log = api.edit_log()
         assert len(log) == 1 and log[0]["edit_kind"] == V.EditKind.NEW_ROW.value
 

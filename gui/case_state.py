@@ -1,7 +1,7 @@
 """Case-context view helpers for the GUI: read the running totals of a persisted case
 database and format them for the window title / status line.
 
-Defines:    CaseCounts (runs / sources / assertions), read_case_counts (query a persisted
+Defines:    CaseCounts (runs / sources / observations), read_case_counts (query a persisted
             case DB read-only) and format_case_summary (the one-line human summary).
 Used by:    gui.app (MainController surfaces the active case after each run).
 Depends on: the standard library ONLY (sqlite3) — deliberately Qt-free, so the counts +
@@ -26,11 +26,11 @@ class CaseCounts:
 
     runs: int
     sources: int
-    assertions: int
+    observations: int
 
 
 def read_case_counts(db_path: str | Path) -> CaseCounts:
-    """Read the case's run / source / assertion totals from its persisted database.
+    """Read the case's run / source / observation totals from its persisted database.
 
     Opened READ-ONLY so surfacing the summary can never mutate the evidence database. The
     caller guards failures — a summary is best-effort feedback, never part of the run's
@@ -43,14 +43,14 @@ def read_case_counts(db_path: str | Path) -> CaseCounts:
     try:
         runs = connection.execute("SELECT COUNT(*) FROM run").fetchone()[0]
         sources = connection.execute("SELECT COUNT(*) FROM source").fetchone()[0]
-        assertions = connection.execute("SELECT COUNT(*) FROM assertion").fetchone()[0]
-        return CaseCounts(runs=runs, sources=sources, assertions=assertions)
+        observations = connection.execute("SELECT COUNT(*) FROM observation").fetchone()[0]
+        return CaseCounts(runs=runs, sources=sources, observations=observations)
     finally:
         connection.close()
 
 
 def format_case_summary(case_name: str, counts: CaseCounts) -> str:
     """The one-line case summary shown after a run, e.g.
-    ``Case 'op': 2 run(s) · 3 source(s) · 512 assertion(s)``."""
+    ``Case 'op': 2 run(s) · 3 source(s) · 512 observation(s)``."""
     return (f"Case {case_name!r}: {counts.runs} run(s) · {counts.sources} source(s) · "
-            f"{counts.assertions} assertion(s)")
+            f"{counts.observations} observation(s)")

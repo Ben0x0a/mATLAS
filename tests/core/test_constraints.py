@@ -16,12 +16,12 @@ Row -> test map (sibling coverage in [brackets]):
  1 two exhibits collapse into one source (§2c)
      -> test_two_exhibits_never_collapse_into_one_source
         [test_store.py::test_two_exhibits_collapse_into_one_source_raises]
- 2 duplicate evidence drops an assertion (§2a)
+ 2 duplicate evidence drops an observation (§2a)
      -> test_duplicate_evidence_surfaces_as_a_finding_never_a_merge
-        [test_store.py::test_duplicate_evidence_drops_an_assertion_raises]
- 3 two assertions share a corner or an entity row
-     -> test_two_assertions_cannot_share_a_spatial_corner
-        [test_store.py::test_two_assertions_share_a_corner_or_entity_raises (entity leg)]
+        [test_store.py::test_duplicate_evidence_drops_an_observation_raises]
+ 3 two observations share a corner or an entity row
+     -> test_two_observations_cannot_share_a_spatial_corner
+        [test_store.py::test_two_observations_share_a_corner_or_entity_raises (entity leg)]
  4 two phones become one entity (§2d)
      -> test_two_devices_never_become_one_entity
         [test_store.py::test_two_phones_become_one_entity_stays_distinct]
@@ -112,15 +112,15 @@ def _entity(store: RunStore, rr_id: str) -> str:
     return entity_id
 
 
-def _assertion(store: RunStore, rr_id: str, preset_id: str, entity_id: str, *,
+def _observation(store: RunStore, rr_id: str, preset_id: str, entity_id: str, *,
                content_hash: str = "ch", claim_digest: str = "cd",
                spatial_expression_id: str | None = None) -> str:
-    assertion_id = ids.assertion_id(rr_id, _PRESET_KEY, 0)
-    store.write_assertion(V.Assertion(
-        assertion_id=assertion_id, raw_record_id=rr_id, preset_id=preset_id,
+    observation_id = ids.observation_id(rr_id, _PRESET_KEY, 0)
+    store.write_observation(V.Observation(
+        observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
         output_ordinal=0, entity_id=entity_id, content_hash=content_hash,
         claim_digest=claim_digest, spatial_expression_id=spatial_expression_id))
-    return assertion_id
+    return observation_id
 
 
 # --- row 1 -------------------------------------------------------------------
@@ -144,21 +144,21 @@ def test_two_exhibits_never_collapse_into_one_source() -> None:
 # --- row 2 -------------------------------------------------------------------
 
 def test_duplicate_evidence_surfaces_as_a_finding_never_a_merge() -> None:
-    """Row 2: duplicate evidence drops an assertion (§2a).
+    """Row 2: duplicate evidence drops an observation (§2a).
 
-    Angle here: the digest is NEVER a key — two assertions carrying the SAME
+    Angle here: the digest is NEVER a key — two observations carrying the SAME
     claim_digest both persist, and the duplicate SURFACES through the
     ``possible_same_evidence`` finding view instead of merging. The natural-key raise
-    is test_store.py::test_duplicate_evidence_drops_an_assertion_raises.
+    is test_store.py::test_duplicate_evidence_drops_an_observation_raises.
     """
     with RunStore() as store:
         _, preset_id, source_id = _seed(store)
         for line_no in (1, 2):
             rr_id = _record(store, source_id, line_no)
-            _assertion(store, rr_id, preset_id, _entity(store, rr_id),
+            _observation(store, rr_id, preset_id, _entity(store, rr_id),
                        content_hash=f"ch-{line_no}", claim_digest="cd-same")
         assert store.connection.execute(
-            "SELECT COUNT(*) FROM assertion").fetchone()[0] == 2  # nothing dropped
+            "SELECT COUNT(*) FROM observation").fetchone()[0] == 2  # nothing dropped
         assert store.connection.execute(
             "SELECT claim_digest, copies FROM possible_same_evidence"
         ).fetchall() == [("cd-same", 2)]                          # …and it surfaces
@@ -166,12 +166,12 @@ def test_duplicate_evidence_surfaces_as_a_finding_never_a_merge() -> None:
 
 # --- row 3 -------------------------------------------------------------------
 
-def test_two_assertions_cannot_share_a_spatial_corner() -> None:
-    """Row 3: two assertions share a corner or an entity row.
+def test_two_observations_cannot_share_a_spatial_corner() -> None:
+    """Row 3: two observations share a corner or an entity row.
 
-    Angle here: the SPATIAL corner (UNIQUE ``assertion.spatial_expression_id``) — the
+    Angle here: the SPATIAL corner (UNIQUE ``observation.spatial_expression_id``) — the
     shared-ENTITY leg of the same row is
-    test_store.py::test_two_assertions_share_a_corner_or_entity_raises.
+    test_store.py::test_two_observations_share_a_corner_or_entity_raises.
     """
     with RunStore() as store:
         _, preset_id, source_id = _seed(store)
@@ -181,11 +181,11 @@ def test_two_assertions_cannot_share_a_spatial_corner() -> None:
         store.write_spatial_expression(V.SpatialExpression(
             spatial_expression_id=sx_id,
             referential=V.SpatialReferential.EPSG_4326))
-        _assertion(store, rr1, preset_id, _entity(store, rr1),
+        _observation(store, rr1, preset_id, _entity(store, rr1),
                    spatial_expression_id=sx_id)
         entity_2 = _entity(store, rr2)
         with pytest.raises(sqlite3.IntegrityError):
-            _assertion(store, rr2, preset_id, entity_2,
+            _observation(store, rr2, preset_id, entity_2,
                        spatial_expression_id=sx_id)   # a corner is owned 1:1, never shared
 
 
@@ -243,7 +243,7 @@ def test_operator_input_cannot_reach_a_digest() -> None:
         "entity", "spatial", "temporal", "links", "deleted", "multiplicity", "activity"]
     assert set(ids.EntityProjection.__dataclass_fields__) == {
         "identifier", "identifier_type", "type"}
-    assert set(ids.AssertionLinks.__dataclass_fields__) == {
+    assert set(ids.ObservationLinks.__dataclass_fields__) == {
         "entity_role", "entity_position_link", "entity_time_link",
         "spatial_temporal_link"}
 
@@ -262,7 +262,7 @@ def test_a_context_party_cannot_silently_vanish() -> None:
             entity=ids.EntityProjection("+41791234567", V.IdentifierType.MSISDN,
                                         V.EntityType.DEVICE),
             spatial=None, temporal=None,
-            links=ids.AssertionLinks(entity_role=V.EntityRole.SENDER),
+            links=ids.ObservationLinks(entity_role=V.EntityRole.SENDER),
             deleted=None, multiplicity=None,
             activity=ids.ActivityProjection(V.ActivityKind.MESSAGE,
                                             {"recipients": recipients}))
@@ -316,7 +316,7 @@ def test_a_positionless_claim_survives_projection() -> None:
     """
     l1 = ids.l1_projection(
         entity=ids.EntityProjection(None, V.IdentifierType.NONE, V.EntityType.PERSON),
-        spatial=None, temporal=None, links=ids.AssertionLinks(),
+        spatial=None, temporal=None, links=ids.ObservationLinks(),
         deleted=None, multiplicity=None, activity=None)
     # 4 entity slots + 1 spatial flag + 1 temporal flag + 5 links/deleted/multiplicity
     # + 1 activity flag = 12 slots -> 11 separators.
@@ -341,17 +341,17 @@ def test_merging_two_run_dbs_collides_loudly_never_silently(tmp_path) -> None:
         for store in (store_a, store_b):
             _, preset_id, source_id = _seed(store)
             rr_id = _record(store, source_id, 1)
-            _assertion(store, rr_id, preset_id, _entity(store, rr_id))
-        select_ids = "SELECT assertion_id FROM assertion ORDER BY assertion_id"
+            _observation(store, rr_id, preset_id, _entity(store, rr_id))
+        select_ids = "SELECT observation_id FROM observation ORDER BY observation_id"
         assert (store_a.connection.execute(select_ids).fetchall()
                 == store_b.connection.execute(select_ids).fetchall())  # diffability
-        # Simulate the forbidden merge: pour run B's assertions into run A's file.
+        # Simulate the forbidden merge: pour run B's observations into run A's file.
         other = tmp_path / "run_b.matlas.sqlite"
         store_b.persist(other)
         store_a.connection.execute("ATTACH ? AS other", (str(other),))
         with pytest.raises(sqlite3.IntegrityError):
             store_a.connection.execute(
-                "INSERT INTO main.assertion SELECT * FROM other.assertion")
+                "INSERT INTO main.observation SELECT * FROM other.observation")
 
 
 # --- row 11 ------------------------------------------------------------------
@@ -410,11 +410,11 @@ def test_a_preset_edit_without_version_bump_is_surfaced() -> None:
     Angle here: identity stability is what makes the D40 finding COMPARABLE —
     ``preset_id`` derives from key ⟂ version alone (the digest is not an input), so an
     un-bumped edit lands on the SAME id across runs and the digest mismatch is
-    queryable; a proper bump moves ``preset_id``, while the assertion's natural key
+    queryable; a proper bump moves ``preset_id``, while the observation's natural key
     uses the preset KEY (D27) and so stays version-stable. The raising write is
     test_store.py::test_preset_edit_without_version_bump_raises.
     """
     assert list(inspect.signature(ids.preset_id).parameters) == ["key", "version"]
     assert ids.preset_id(_PRESET_KEY, "1.0") != ids.preset_id(_PRESET_KEY, "1.1")
-    # D27: the assertion key carries the preset KEY, not its (version-bumped) id.
-    assert "preset_key" in inspect.signature(ids.assertion_id).parameters
+    # D27: the observation key carries the preset KEY, not its (version-bumped) id.
+    assert "preset_key" in inspect.signature(ids.observation_id).parameters

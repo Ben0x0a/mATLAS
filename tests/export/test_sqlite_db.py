@@ -59,8 +59,8 @@ def test_sqlite_db_reopens_with_version_stamps_and_clean_fk_check(tmp_path: Path
             row[0] for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'")
         }
-        assert {"assertion", "entity", "spatial_integration", "timespan_integration"} <= tables
-        assert connection.execute("SELECT COUNT(*) FROM assertion").fetchone()[0] == 2
+        assert {"observation", "entity", "spatial_integration", "timespan_integration"} <= tables
+        assert connection.execute("SELECT COUNT(*) FROM observation").fetchone()[0] == 2
     finally:
         connection.close()
 

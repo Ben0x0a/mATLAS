@@ -37,7 +37,7 @@ run. The implementation then made that content address a `PRIMARY KEY`.
 
 Those two decisions are incompatible. A content address is *designed* to be equal for equal
 content; a primary key is *required* to be distinct per row. When the same evidence appeared
-twice, the store silently discarded the duplicate — assertion rows, and worse, the entire
+twice, the store silently discarded the duplicate — observation rows, and worse, the entire
 `source` row recording that a second artefact had been opened.
 
 The resolution is not to weaken the content address. It is to stop asking one field to do
@@ -68,7 +68,7 @@ natural key (derived from the row's own content) doing a surrogate's job.
 
 **Data Vault 2.0 (Linstedt).** The pattern maps almost one-for-one onto this model. A *hub*
 holds a business key (our `entity`). *Links* and *satellites* carry the facts and their
-descriptive data (our `assertion`, `position`, `timespan`). Critically, every row records
+descriptive data (our `observation`, `position`, `timespan`). Critically, every row records
 its **record source** and load metadata, and the model is **insert-only** — identical data
 arriving from two feeds stays two rows, distinguishable by where it came from. Data Vault
 exists because auditability requires exactly the property we lost.
@@ -77,15 +77,15 @@ exists because auditability requires exactly the property we lost.
 is addressed by the hash of its content, and two identical files share one blob — that is
 correct deduplication of *content*. But the *tree entry* records each path the file appears
 at, so Git never forgets that a file exists in two places. Our bug was deduplicating the
-tree entry, not just the blob. `content_hash` is our blob id; `assertion_id` is our tree
+tree entry, not just the blob. `content_hash` is our blob id; `observation_id` is our tree
 entry.
 
 **W3C PROV-O.** The traceability sidecar already speaks PROV. `run` is a PROV `Activity`,
-`source` and `assertion` are PROV `Entity`s, and each assertion `wasGeneratedBy` the run
+`source` and `observation` are PROV `Entity`s, and each observation `wasGeneratedBy` the run
 `wasDerivedFrom` a record. PROV entities have identity independent of their value precisely
 so that two entities with equal values remain distinct and separately attributable.
 
-**RDF reification / RDF-star.** An assertion here is a reified ternary fact — *this entity,
+**RDF reification / RDF-star.** An observation here is a reified ternary fact — *this entity,
 at this place, at this time*. Reification exists so a statement can itself be the subject of
 statements (who asserted it, from what source, with what confidence). A reified statement
 needs its own identity, distinct from its content, or you cannot attribute two independent
@@ -107,26 +107,26 @@ hash, keep it queryable, and never let it be the key.
 | `run` | `run_id` | occurrence | this execution (`started_at` + input path) |
 | `source` | `source_id` | occurrence | **outer artefact** + inner path + subunit + preset |
 | `source_record` | `source_record_id` | occurrence | `source_id` + `line_no` |
-| `assertion` | `assertion_id` | occurrence | `source_record_id` + `output_ordinal` |
+| `observation` | `observation_id` | occurrence | `source_record_id` + `output_ordinal` |
 | `entity` | `entity_id` | **content** | `entity_label` + `entity_type` |
-| `position` | `position_id` | occurrence | its own reading (owned via `assertion.position_id UNIQUE`) |
-| `timespan` | `timespan_id` | occurrence | its own reading (owned via `assertion.timespan_id UNIQUE`) |
+| `position` | `position_id` | occurrence | its own reading (owned via `observation.position_id UNIQUE`) |
+| `timespan` | `timespan_id` | occurrence | its own reading (owned via `observation.timespan_id UNIQUE`) |
 
-### The assertion is a pure link
+### The observation is a pure link
 
-`assertion` carries no measurements of its own. It takes one `entity`, one `position`, one
+`observation` carries no measurements of its own. It takes one `entity`, one `position`, one
 `timespan`, one `source_record`, and records only the *metadata of the statement*: the three
 link vocabularies (`entity_position_link`, `entity_time_link`, `spatial_temporal_link`),
 `attribution_origin`, `deleted`, and the untangle ranks. The three corners hang **off** the
-assertion by foreign key — the symmetric triangle: entity, position, timespan, joined by the
+observation by foreign key — the symmetric triangle: entity, position, timespan, joined by the
 fact that links them.
 
 ### Why the corners point the way they do, and why sharing is impossible
 
-The FK lives on the assertion (`position_id`, `timespan_id`), not the reverse, and each is
+The FK lives on the observation (`position_id`, `timespan_id`), not the reverse, and each is
 declared **`UNIQUE`**. That single constraint is what enforces observation semantics in the
-schema rather than in a comment: a position row can be owned by at most one assertion, so two
-assertions with identical coordinates can never point at the same row — they get two rows.
+schema rather than in a comment: a position row can be owned by at most one observation, so two
+observations with identical coordinates can never point at the same row — they get two rows.
 The corner ids are therefore *occurrence surrogates*, not content addresses. `position` and
 `timespan` each carry their own measurement provenance (`latitude_source_field`,
 `lower_source_field`, `raw_position`, …), which is the deeper reason two readings are never
@@ -146,17 +146,17 @@ examiner discovers they are the same evidence.
 
 ## Where the portable digest lives
 
-`assertion.content_hash` is the path-independent content address — today's `row_uid`
+`observation.content_hash` is the path-independent content address — today's `row_uid`
 derivation, unchanged, demoted from key to column and indexed. It buys back every property
 the old scheme had, without the collision:
 
 ```sql
 -- folder == zip parity: the same evidence yields the same content_hash
-SELECT content_hash FROM assertion WHERE assertion_id = ?;
+SELECT content_hash FROM observation WHERE observation_id = ?;
 
 -- duplicate evidence becomes a finding, not a silent drop
 SELECT content_hash, COUNT(*) AS copies, GROUP_CONCAT(DISTINCT s.input_file_path)
-FROM assertion a
+FROM observation a
 JOIN source_record r ON r.source_record_id = a.source_record_id
 JOIN source s ON s.source_id = r.source_id
 GROUP BY content_hash HAVING copies > 1;
@@ -176,7 +176,7 @@ repo's existing unit-suffix habit:
 
 | Suffix | Meaning | Example |
 | --- | --- | --- |
-| `_id` | opaque surrogate occurrence key (uuid5) | `assertion_id` |
+| `_id` | opaque surrogate occurrence key (uuid5) | `observation_id` |
 | `_hash` | content address; equal ⇒ equal content | `content_hash` |
 | `_sha256` | a named hash algorithm over file bytes | `fingerprint_sha256` |
 | `_at` | ISO-8601 UTC instant | `started_at` |
@@ -196,22 +196,22 @@ The schema is designed to fail loudly rather than lose data.
   single change that would have surfaced the original defect immediately.
 - **`UNIQUE` constraints on the natural keys** — `source(run_id, input_file_path,
   raw_source_path, subunit, preset_id)`, `source_record(source_id, line_no)`,
-  `assertion(source_record_id, output_ordinal)`, and `assertion(position_id)` /
-  `assertion(timespan_id)` (the corner-ownership guard). The surrogate key is unique by
+  `observation(source_record_id, output_ordinal)`, and `observation(position_id)` /
+  `observation(timespan_id)` (the corner-ownership guard). The surrogate key is unique by
   construction; the natural key is unique by constraint. If the derivation ever drifts, the
   database says so.
 - **`PRAGMA foreign_keys = ON`.** SQLite does not enforce foreign keys by default. An
   orphaned corner row is a corrupt record.
 - **`CHECK` constraints from the controlled vocabularies** in `model_atlas.core.vocabularies`,
   allowing `NULL` wherever the model allows it today.
-- **Indices** on `assertion.content_hash` and `source.fingerprint_sha256`, so the duplicate
+- **Indices** on `observation.content_hash` and `source.fingerprint_sha256`, so the duplicate
   queries above are cheap on a large run.
 
 ## Consequences for the flat output
 
-`row_uid` in the CSV becomes the occurrence key (`assertion.assertion_id`) — unique per
+`row_uid` in the CSV becomes the occurrence key (`observation.observation_id`) — unique per
 output row, which is what the name always promised. A new `content_uid` column carries
-`assertion.content_hash`, the portable digest.
+`observation.content_hash`, the portable digest.
 
 This **intentionally changes `row_uid` values and adds a column**, so the golden CSVs are
 regenerated once, deliberately, and reviewed. Byte-parity with the pre-refactor output is

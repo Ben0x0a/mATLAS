@@ -19,7 +19,7 @@ print(result.row_counts)
 ```
 
 `process()` discovers sources under `input_path`, matches them to YAML presets,
-extracts and maps columns into the canonical assertion model, runs untangle, and
+extracts and maps columns into the canonical observation model, runs untangle, and
 writes CSV output plus `.matlas.traceability.json` and `.matlas.warnings.json`
 sidecars. It returns a `ProcessResult` with row counts, matched/unmatched source
 lists, warning strings, and output paths.
@@ -37,8 +37,8 @@ process()
   -> load_preset_specs()          (presets.spec_loader)
   -> match_file()                 (presets.matcher)
   -> SingleSourceExtractor.extract() (sources.extractor -> FormatReader)
-  -> build_assertions()           (transforms.assemble -> one run-wide RunStore)
-  -> RunStore.to_flat_frame()     (model.store — the assertion_flat view)
+  -> build_observations()           (transforms.assemble -> one run-wide RunStore)
+  -> RunStore.to_flat_frame()     (model.store — the observation_flat view)
   -> untangle()                   (transforms.rank -> ranks written back to the store)
   -> run_exporters()              (exporters — csv / sqlite run DB / ...)
   -> ProcessResult

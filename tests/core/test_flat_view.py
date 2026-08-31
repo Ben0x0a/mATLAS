@@ -2,7 +2,7 @@
 
 Defines:    the column-contract test (the projected frame carries exactly the
             docs/csv_migration.md columns, in order, against the worked-example demo
-            DB), the one-row-per-assertion grain test (28 rows, corner-less assertions
+            DB), the one-row-per-observation grain test (28 rows, corner-less observations
             kept with empty cells), the unquoted-numeric rendering test, the derived
             ``locates`` test (single source of truth = the vocabulary enum), and the
             ``orig_<col>`` passthrough tests (first-appearance order, verbatim values,
@@ -11,7 +11,7 @@ Used by:    the verification gate (pytest tests/core/test_flat_view.py).
 Depends on: ``model_atlas.core.flat_view`` (under test), ``model_atlas.core.vocabularies``
             (the ``EntityPositionLink.locates`` derivation the projection must agree
             with), pandas, and the worked-example demo DB
-            ``docs/examples/matlas_example.sqlite`` (28 assertions, one positionless
+            ``docs/examples/matlas_example.sqlite`` (28 observations, one positionless
             nav-origin leg).
 """
 from __future__ import annotations
@@ -102,24 +102,24 @@ def test_orig_columns_excluded_on_request(demo: sqlite3.Connection) -> None:
     assert tuple(bare.columns) == _EXPECTED_CANONICAL
 
 
-# --- the grain: one row per assertion ----------------------------------------
+# --- the grain: one row per observation ----------------------------------------
 
-def test_one_row_per_assertion(demo: sqlite3.Connection, frame: pd.DataFrame) -> None:
-    expected = {row[0] for row in demo.execute("SELECT assertion_id FROM assertion")}
+def test_one_row_per_observation(demo: sqlite3.Connection, frame: pd.DataFrame) -> None:
+    expected = {row[0] for row in demo.execute("SELECT observation_id FROM observation")}
     assert len(frame) == 28 == len(expected)
-    # row_uid = assertion_id (migration row: the founding-defect fix — genuinely unique).
+    # row_uid = observation_id (migration row: the founding-defect fix — genuinely unique).
     assert set(frame["row_uid"]) == expected
     assert frame["row_uid"].is_unique
 
 
 def test_row_uid_content_uid_case_number(demo: sqlite3.Connection,
                                          frame: pd.DataFrame) -> None:
-    hashes = dict(demo.execute("SELECT assertion_id, content_hash FROM assertion"))
+    hashes = dict(demo.execute("SELECT observation_id, content_hash FROM observation"))
     assert all(hashes[uid] == cu for uid, cu in zip(frame["row_uid"], frame["content_uid"]))
     assert set(frame["case_number"]) == {"GE-2026-04412"}
 
 
-def test_positionless_assertion_kept_with_empty_coordinates(frame: pd.DataFrame) -> None:
+def test_positionless_observation_kept_with_empty_coordinates(frame: pd.DataFrame) -> None:
     # The nav-search ORIGIN leg ("Home") has a spatial expression but no integration —
     # the flat rule says the line survives with EMPTY coordinate cells, never dropped
     # and never invented (§2 "a positionless claim vanishes from CSV" guard).
@@ -158,7 +158,7 @@ def test_s2_cell_id_exact_int64(demo: sqlite3.Connection, frame: pd.DataFrame) -
     # The S2 leaf cell exceeds float64's 53-bit integer range; any float detour would
     # silently corrupt it. Compare every projected value to the stored int, exactly.
     stored = dict(demo.execute(
-        "SELECT a.assertion_id, six.s2_cell_id FROM assertion a "
+        "SELECT a.observation_id, six.s2_cell_id FROM observation a "
         "LEFT JOIN spatial_integration si "
         "  ON si.spatial_expression_id = a.spatial_expression_id "
         "LEFT JOIN spatial_index six "

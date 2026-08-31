@@ -131,7 +131,7 @@ record reference, so the fan-out no longer destroys the event structure — and 
 line count equals the placement count, which is the grain an examiner exploits.
 The activity is a grouping bonus only): anything exploitable
 spatio-temporally lives in the entity, the links and the roles, never only in the
-activity — a leg's counterpart is the other assertion sharing its `activity_id`.
+activity — a leg's counterpart is the other observation sharing its `activity_id`.
 
 ## Validation — the source types this model was tested against
 

@@ -61,7 +61,7 @@ def test_kml_round_trips_small_store(tmp_path: Path) -> None:
     names = {placemark.find(f"{_KML_NS}name").text for placemark in placemarks}
     assert names == {"subject"}
 
-    # A TimeStamp/when is present (an instant assertion — lower bound is set).
+    # A TimeStamp/when is present (an instant observation — lower bound is set).
     for placemark in placemarks:
         when = placemark.find(f"{_KML_NS}TimeStamp/{_KML_NS}when")
         assert when is not None and when.text

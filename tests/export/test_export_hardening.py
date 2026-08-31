@@ -42,7 +42,7 @@ _KML_NS = "{http://www.opengis.net/kml/2.2}"
 def test_xlsx_preserves_large_s2_cell_id_exactly(tmp_path: Path) -> None:
     with RunStore() as store:
         build_manual_store(store)
-        # Plant an int64-max S2 cell id on the instant assertion's spatial integration.
+        # Plant an int64-max S2 cell id on the instant observation's spatial integration.
         store.write_spatial_index(V.SpatialIndex(
             spatial_index_id="sidx-instant", spatial_integration_id="si-instant",
             s2_cell_id=_INT64_MAX, s2_level=30))
@@ -68,7 +68,7 @@ def test_xlsx_preserves_large_s2_cell_id_exactly(tmp_path: Path) -> None:
 # --- 2. formula injection neutralised in xlsx + both CSVs ---------------------
 
 def _mutate_formula_entity(store: RunStore) -> None:
-    """Make the instant assertion's entity/concerns a live-formula string.
+    """Make the instant observation's entity/concerns a live-formula string.
 
     ``concerns`` (entity.concerns) is the GeoVisualizer ``Target`` and a flat-CSV
     column; ``entity`` (entity.identifier) is another flat-CSV column — so one mutation
@@ -137,7 +137,7 @@ def test_xlsx_writes_formula_as_inert_text(tmp_path: Path) -> None:
 # --- 3. out-of-range epoch skips one feature, never the file ------------------
 
 def _plant_bad_epoch(store: RunStore) -> None:
-    """Corrupt the instant assertion's lower/upper epoch to an int64-max micro value —
+    """Corrupt the instant observation's lower/upper epoch to an int64-max micro value —
     a datetime-range overflow when localised (the raiser Part 3 guards)."""
     store.connection.execute(
         "UPDATE timespan_integration SET lower_unix_utc_us = ?, upper_unix_utc_us = ? "

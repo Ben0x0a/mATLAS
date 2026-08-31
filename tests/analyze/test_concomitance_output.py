@@ -12,16 +12,16 @@ from pathlib import Path
 from model_atlas.analyze.concomitance_output import CSV_HEADER, CsvMatchSink, MatchRow
 
 
-def _row(assertion_a: str = "a1", assertion_b: str = "a2") -> MatchRow:
+def _row(observation_a: str = "a1", observation_b: str = "a2") -> MatchRow:
     return MatchRow(
         g1_identifier="+41790000001", g1_identifier_type="msisdn", g1_entity_type="device",
         g1_latitude=46.2030, g1_longitude=6.1430, g1_accuracy_m=5.0,
         g1_time_start="2026-03-14T02:00:00+00:00", g1_time_end="2026-03-14T02:05:00+00:00",
-        g1_assertion_id=assertion_a, g1_source="case.csv",
+        g1_observation_id=observation_a, g1_source="case.csv",
         g2_identifier="GE123456", g2_identifier_type="plate", g2_entity_type="vehicle",
         g2_latitude=46.2031, g2_longitude=6.1431, g2_accuracy_m=None,
         g2_time_start="2026-03-14T02:02:00+00:00", g2_time_end="2026-03-14T02:06:00+00:00",
-        g2_assertion_id=assertion_b, g2_source=None,
+        g2_observation_id=observation_b, g2_source=None,
         distance_m=12.34, distance_within_accuracy=False,
         time_delta_s=-30.0, time_overlap=False)
 
@@ -31,11 +31,11 @@ def test_header_matches_the_task_contract_exactly() -> None:
         "g1_identifier", "g1_identifier_type", "g1_entity_type",
         "g1_latitude", "g1_longitude", "g1_accuracy_m",
         "g1_time_start", "g1_time_end",
-        "g1_assertion_id", "g1_source",
+        "g1_observation_id", "g1_source",
         "g2_identifier", "g2_identifier_type", "g2_entity_type",
         "g2_latitude", "g2_longitude", "g2_accuracy_m",
         "g2_time_start", "g2_time_end",
-        "g2_assertion_id", "g2_source",
+        "g2_observation_id", "g2_source",
         "distance_m", "distance_within_accuracy", "time_delta_s", "time_overlap",
     )
 

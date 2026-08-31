@@ -87,7 +87,7 @@ empty.
 there" — conflating them hides whether an absence is a gap in the preset or in the evidence.
 
 **Multiplicity absent means one.**
-An assertion with no multiplicity recorded represents a single occurrence.
+An observation with no multiplicity recorded represents a single occurrence.
 
 ---
 
@@ -164,10 +164,10 @@ what each source independently said.
 
 ## 5. Analyse & concomitance
 
-**Analysis is about assertions, never inside them.**
-Analysis rows (e.g. duplicate-record ranking) reference assertions from the outside; they never
-edit an assertion. Re-running analysis with a **new** method version adds rows; re-running the
-**same** version refuses to overwrite. Every assertion gets an analysis row — an empty verdict
+**Analysis is about observations, never inside them.**
+Analysis rows (e.g. duplicate-record ranking) reference observations from the outside; they never
+edit an observation. Re-running analysis with a **new** method version adds rows; re-running the
+**same** version refuses to overwrite. Every observation gets an analysis row — an empty verdict
 means "examined, not a duplicate", not "unexamined".
 *Why:* derived judgements must be separable from evidence and reproducible; a missing row would be
 ambiguous between "not looked at" and "nothing found".
@@ -206,7 +206,7 @@ within the one file for a caller who wants to partition them.
 was redundant once every row carries its preset.
 
 **The flat CSV is the default projection; other exports are opt-in.**
-A run writes the flat assertion CSV unless the operator selects otherwise; additional formats are
+A run writes the flat observation CSV unless the operator selects otherwise; additional formats are
 requested explicitly. Every export is a projection of the **whole case**, not just the latest run.
 
 **Encoding: BOM for spreadsheet formats, none for the web formats.**
@@ -233,7 +233,7 @@ export is a throwaway projection of the whole case.
 
 **A run creates a case or appends to it.**
 If the target case database does not exist, the run creates it and mints the case identity. If it
-already exists, the run **appends**: a new run row plus its sources/assertions are added under the
+already exists, the run **appends**: a new run row plus its sources/observations are added under the
 existing case identity (read from the database, never re-derived).
 
 **Append is deterministic by construction.**

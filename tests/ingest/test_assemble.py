@@ -2,10 +2,10 @@
 
 Covers the L1-writer verification gate:
   * the nine worked examples (docs/model_worked_examples.md) reproduce their documented
-    assertion counts — ANPR 1 · CCTV 1 · witness 1 · CDR 1 (+ the B-leg's own record
+    observation counts — ANPR 1 · CCTV 1 · witness 1 · CDR 1 (+ the B-leg's own record
     = a second, separate line) · Cache 1 · visit 1 · robbery 1 · route search 2 ·
     shared pin 1 — and their component / context shapes;
-  * one file matched by TWO presets stays ONE source with TWO assertion sets sharing
+  * one file matched by TWO presets stays ONE source with TWO observation sets sharing
     the raw_records, converging on claim_digest but not content_hash;
   * both digests recompute byte-equal from the stored rows via ``core.ids`` (never a
     local recipe), and folder==zip parity holds end-to-end through the L0 writer;
@@ -40,7 +40,7 @@ from model_atlas.ingest.writer import ingest_input
 from model_atlas.integrate.spatial import integrate_spatial
 from model_atlas.presets.expr import is_condition, parse_cond, parse_ref
 from model_atlas.presets.spec import (
-    AssertionTemplate,
+    ObservationTemplate,
     FieldSpec,
     InputSelector,
     PresetMeta,
@@ -80,12 +80,12 @@ def _time(kind: str, lower: str, upper: str | None = None, *,
                     epoch=epoch, format=fmt, zone=zone_spec)
 
 
-def _preset(key: str, common: list[FieldSpec], assertions: list[AssertionTemplate],
+def _preset(key: str, common: list[FieldSpec], observations: list[ObservationTemplate],
             patterns: dict[str, str] | None = None) -> PresetSpec:
     return PresetSpec(
         meta=PresetMeta(id=key, name=key, version="1.0"),
         input_selectors=(_SELECTOR,), path=Path(f"{key}.yaml"),
-        common=tuple(common), assertions=tuple(assertions),
+        common=tuple(common), observations=tuple(observations),
         patterns=patterns or {},
     )
 
@@ -160,7 +160,7 @@ def _example_anpr():
         _f("temporal_referential", "const(local_string)"),
         _f("temporal_source", "const(NTP)"), _f("temporal_role_lower", "const(last_seen)"),
         _f("source_label", "const(ANPR)"),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple([_f("raw_position", "field(camera_id)"),
                       *_links("at_fixed_detector", "observed_at", "instant")]),
         temporal=(_time("instant", "field(ts)", fmt="%Y-%m-%d %H:%M:%S",
@@ -179,7 +179,7 @@ def _example_cctv():
         _f("spatial_referential", "const(address)"),
         _f("temporal_source", "const(internal_clock)"),
         _f("temporal_role_lower", "const(start)"), _f("temporal_role_upper", "const(end)"),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple([_f("raw_position", "field(site)"),
                       *_links("at", "recorded_at", "continuous_during_interval")]),
         # no zone: the source stated no offset — stated_offset stays NULL per bound.
@@ -205,7 +205,7 @@ def _example_witness():
         _f("spatial_referential", "const(place_name)"),
         _f("temporal_referential", "const(local_string)"),
         _f("temporal_role_lower", "const(start)"), _f("temporal_role_upper", "const(end)"),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple([FieldSpec(model_field="raw_position",
                                 ref=parse_ref("field(statement)"),
                                 extract=("place", "place")),
@@ -239,7 +239,7 @@ def _example_cdr_a():
                    common=[*_cdr_common("caller", "a_party",
                                         {"callee": "b_party", "caller_imei": "imei"}),
                            _f("source_label", "const(CDR op-A)")],
-                   assertions=[AssertionTemplate(
+                   observations=[ObservationTemplate(
                        fields=tuple([_f("raw_position", "field(cell)"),
                                      *_links("within_range_of", "event_at",
                                              "continuous_during_interval")]),
@@ -257,7 +257,7 @@ def _example_cdr_b():
     # (never a third line on the A-leg record — decision 14).
     spec = _preset("cdr_b",
                    common=_cdr_common("callee", "callee", {"counterpart": "caller"}),
-                   assertions=[AssertionTemplate(
+                   observations=[ObservationTemplate(
                        fields=tuple([_f("raw_position", "field(cell_b)"),
                                      *_links("within_range_of", "event_at",
                                              "continuous_during_interval")]),
@@ -276,7 +276,7 @@ def _example_cache():
         _f("position_source", "const(GNSS)"),
         _f("temporal_source", "const(internal_clock)"),
         _f("temporal_role_lower", "const(last_seen)"),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple([
             _f("latitude", "field(ZLATITUDE)"),
             _f("longitude", "field(ZLONGITUDE)"),
@@ -300,7 +300,7 @@ def _example_visit():
         _f("position_source", "const(GNSS)"),
         _f("temporal_role_lower", "const(check_in)"),
         _f("temporal_role_upper", "const(check_out)"),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple([_f("latitude", "field(ZLAT)"),
                       _f("longitude", "field(ZLON)"),
                       _f("spatial_referential", "const(epsg:4326)"),
@@ -323,7 +323,7 @@ def _example_robbery():
         _f("spatial_referential", "const(address)"),
         _f("temporal_referential", "const(local_string)"),
         _f("temporal_role_lower", "const(start)"), _f("temporal_role_upper", "const(end)"),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple([_f("raw_position", "field(location)"),
                       *_links("claimed_at", "reported_for", "continuous_during_interval")]),
         temporal=(_time("interval", "field(from)", "field(to)"),),
@@ -335,8 +335,8 @@ def _example_robbery():
 
 
 def _example_route():
-    def leg(place_field: str, role: str, referential: str) -> AssertionTemplate:
-        return AssertionTemplate(
+    def leg(place_field: str, role: str, referential: str) -> ObservationTemplate:
+        return ObservationTemplate(
             fields=tuple([_f("raw_position", f"field({place_field})"),
                           _f("position_type", f"const({role})"),
                           _f("spatial_referential", f"const({referential})"),
@@ -353,7 +353,7 @@ def _example_route():
         _f("entity_type", "const(account)"), _f("entity_role", "const(subject)"),
         _f("position_source", "const(manual)"),
         _f("temporal_source", "const(NTP)"), _f("temporal_role_lower", "const(start)"),
-    ], assertions=[leg("destination", "destination", "address"),
+    ], observations=[leg("destination", "destination", "address"),
                    leg("origin", "origin", "place_name")])
     records = _records({"account": "jdoe@gmail.com",
                         "destination": "Rue du Stand 15, Geneve", "origin": "Home",
@@ -370,7 +370,7 @@ def _example_pin():
         _f("position_source", "const(GNSS)"),
         # decision 33: the app's own deleted flag via an if/then conditional (R11).
         _f("deleted", 'if field(is_deleted) == "1" then const(deleted) else const(live)'),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple([_f("latitude", "field(lat)"),
                       _f("longitude", "field(lon)"),
                       _f("spatial_referential", "const(epsg:4326)"),
@@ -407,12 +407,12 @@ _DOCUMENTED_COUNTS = {
 # --- worked-example row counts ------------------------------------------------
 
 @pytest.mark.parametrize("name", sorted(_EXAMPLES))
-def test_worked_example_assertion_counts(name: str) -> None:
+def test_worked_example_observation_counts(name: str) -> None:
     spec, records, expected = _EXAMPLES[name]()
     assert expected == _DOCUMENTED_COUNTS[name]
     with _assembled(spec, records) as (store, report, _):
-        stored = _one(store, "SELECT COUNT(*) AS n FROM assertion")["n"]
-    assert report.assertion_count == expected
+        stored = _one(store, "SELECT COUNT(*) AS n FROM observation")["n"]
+    assert report.observation_count == expected
     assert stored == expected
 
 
@@ -441,12 +441,12 @@ def test_anpr_shapes() -> None:
                 bound["source_field"], bound["raw_value"]) \
             == ("lower", "last_seen", "+01:00", "ts", "2026-03-14 02:05:33")
 
-        assertion = _one(store, "SELECT * FROM assertion")
-        assert (assertion["entity_role"], assertion["entity_position_link"],
-                assertion["entity_time_link"], assertion["spatial_temporal_link"]) \
+        observation = _one(store, "SELECT * FROM observation")
+        assert (observation["entity_role"], observation["entity_position_link"],
+                observation["entity_time_link"], observation["spatial_temporal_link"]) \
             == ("subject", "at_fixed_detector", "observed_at", "instant")
-        assert assertion["activity_id"] is None             # nothing to group (D35)
-        assert assertion["source_label"] == "ANPR"
+        assert observation["activity_id"] is None             # nothing to group (D35)
+        assert observation["source_label"] == "ANPR"
 
 
 def test_time_bound_extract_pulls_substring_from_free_text() -> None:
@@ -455,7 +455,7 @@ def test_time_bound_extract_pulls_substring_from_free_text() -> None:
     spec = _preset(
         "witness_time",
         common=[_f("entity", "const(witness)"), _f("identifier_type", "const(none)")],
-        assertions=[AssertionTemplate(
+        observations=[ObservationTemplate(
             fields=tuple(_links("claimed_at", "observed_at", "instant")),
             temporal=(TimeSpec(
                 kind="instant",
@@ -492,9 +492,9 @@ def test_cdr_activity_context_and_duration_part() -> None:
             ("lower", "start", "+01:00", "2026-03-14 02:20:31"),
             ("duration", "end", "+01:00", "187"),           # upper renamed (decision 23)
         ]
-        assertion = _one(store, "SELECT * FROM assertion")
-        assert assertion["activity_id"] == activity["activity_id"]
-        assert assertion["entity_role"] == "caller"
+        observation = _one(store, "SELECT * FROM observation")
+        assert observation["activity_id"] == activity["activity_id"]
+        assert observation["entity_role"] == "caller"
 
 
 def test_duration_bound_is_written_verbatim_under_the_duration_part() -> None:
@@ -503,10 +503,10 @@ def test_duration_bound_is_written_verbatim_under_the_duration_part() -> None:
     ``upper``, which is what tells every reader it holds a span, not an end clock."""
     spec, records, _ = _example_cdr_a()
     # The doc fixture renames the part by hand; a duration_unit makes it the DEFAULT.
-    time = replace(spec.assertions[0].temporal[0], duration_unit="s")
+    time = replace(spec.observations[0].temporal[0], duration_unit="s")
     common = tuple(f for f in spec.common if f.model_field != "temporal_part_upper")
     spec = replace(spec, common=common,
-                   assertions=(replace(spec.assertions[0], temporal=(time,)),))
+                   observations=(replace(spec.observations[0], temporal=(time,)),))
     with _assembled(spec, records) as (store, _, _):
         bounds = _rows(store, "SELECT * FROM temporal_component ORDER BY ordinal")
         assert [(b["part"], b["temporal_role"], b["raw_value"]) for b in bounds] == [
@@ -515,19 +515,19 @@ def test_duration_bound_is_written_verbatim_under_the_duration_part() -> None:
         ]
 
 
-def test_mapped_source_record_uid_lands_on_every_assertion() -> None:
+def test_mapped_source_record_uid_lands_on_every_observation() -> None:
     """A preset-mapped ``source_record_uid`` is resolved ONCE per source record and repeated
-    on every assertion that record fans out into — that repetition is its job (it GROUPS the
+    on every observation that record fans out into — that repetition is its job (it GROUPS the
     output rows). It stays verbatim, and it must not disturb either digest."""
-    spec, records, _ = _example_route()          # one record -> two assertions
+    spec, records, _ = _example_route()          # one record -> two observations
     with _assembled(spec, records) as (store, _, _):
         baseline = [r["claim_digest"] for r in _rows(
-            store, "SELECT claim_digest FROM assertion ORDER BY output_ordinal")]
+            store, "SELECT claim_digest FROM observation ORDER BY output_ordinal")]
 
     uid_spec = replace(spec, source_record_uid=_f("source_record_uid", "field(item_id)"))
     uid_records = [replace(r, fields={**r.fields, "item_id": "ITEM-42"}) for r in records]
     with _assembled(uid_spec, uid_records) as (store, _, _):
-        rows = _rows(store, "SELECT source_record_uid, claim_digest FROM assertion "
+        rows = _rows(store, "SELECT source_record_uid, claim_digest FROM observation "
                             "ORDER BY output_ordinal")
         assert len(rows) == 2
         assert [r["source_record_uid"] for r in rows] == ["ITEM-42", "ITEM-42"]
@@ -538,7 +538,7 @@ def test_mapped_source_record_uid_lands_on_every_assertion() -> None:
     # falls back to the engine-generated raw_record_id.
     with _assembled(spec, records) as (store, _, _):
         assert all(r["source_record_uid"] is None
-                   for r in _rows(store, "SELECT source_record_uid FROM assertion"))
+                   for r in _rows(store, "SELECT source_record_uid FROM observation"))
 
 
 def test_duplicate_mapped_source_record_uid_raises() -> None:
@@ -590,26 +590,26 @@ def test_visit_per_bound_roles() -> None:
         assert _one(store, "SELECT kind FROM temporal_expression")["kind"] == "interval"
 
 
-def test_route_two_assertions_share_one_activity() -> None:
+def test_route_two_observations_share_one_activity() -> None:
     spec, records, _ = _example_route()
     with _assembled(spec, records) as (store, _, _):
-        assertions = _rows(store, "SELECT * FROM assertion ORDER BY output_ordinal")
-        assert [a["output_ordinal"] for a in assertions] == [0, 1]
-        assert assertions[0]["activity_id"] == assertions[1]["activity_id"]
+        observations = _rows(store, "SELECT * FROM observation ORDER BY output_ordinal")
+        assert [a["output_ordinal"] for a in observations] == [0, 1]
+        assert observations[0]["activity_id"] == observations[1]["activity_id"]
         activity = _one(store, "SELECT * FROM activity")
         assert activity["kind"] == "trip"
         assert json.loads(activity["context_json"]) == {
             "destination": "Rue du Stand 15, Geneve", "origin": "Home"}
         comps = _rows(store,
                       "SELECT sc.* FROM spatial_component sc "
-                      "JOIN assertion a ON a.spatial_expression_id = sc.spatial_expression_id "
+                      "JOIN observation a ON a.spatial_expression_id = sc.spatial_expression_id "
                       "ORDER BY a.output_ordinal")
         # decision 25: each leg's value-group carries its own spatial_role.
         assert [(c["spatial_role"], c["raw_value"]) for c in comps] == [
             ("destination", "Rue du Stand 15, Geneve"), ("origin", "Home")]
         referentials = _rows(store,
                              "SELECT sx.referential FROM spatial_expression sx "
-                             "JOIN assertion a ON a.spatial_expression_id = sx.spatial_expression_id "
+                             "JOIN observation a ON a.spatial_expression_id = sx.spatial_expression_id "
                              "ORDER BY a.output_ordinal")
         assert [r["referential"] for r in referentials] == ["address", "place_name"]
 
@@ -617,9 +617,9 @@ def test_route_two_assertions_share_one_activity() -> None:
 def test_pin_deleted_conditional_and_context() -> None:
     spec, records, _ = _example_pin()
     with _assembled(spec, records) as (store, _, _):
-        assertion = _one(store, "SELECT * FROM assertion")
-        assert assertion["deleted"] == "deleted"             # decision 33 branch matched (R11)
-        assert assertion["entity_role"] == "sender"
+        observation = _one(store, "SELECT * FROM observation")
+        assert observation["deleted"] == "deleted"             # decision 33 branch matched (R11)
+        assert observation["entity_role"] == "sender"
         activity = _one(store, "SELECT * FROM activity")
         assert activity["kind"] == "message"
         assert json.loads(activity["context_json"]) == {"recipient": "+41762223344"}
@@ -643,7 +643,7 @@ def test_witness_concerns_and_extracted_raw_identifier() -> None:
 
 # --- two presets, one source (decision 27) -------------------------------------
 
-def test_two_presets_one_source_two_assertion_sets() -> None:
+def test_two_presets_one_source_two_observation_sets() -> None:
     spec_a, records, _ = _example_cdr_a()
     # The same mapping under a second preset key: a second READING of the same file.
     spec_b = replace(spec_a, meta=replace(spec_a.meta, id="cdr_alt"))
@@ -656,16 +656,16 @@ def test_two_presets_one_source_two_assertion_sets() -> None:
 
         assert _one(store, "SELECT COUNT(*) AS n FROM source")["n"] == 1
         assert _one(store, "SELECT COUNT(*) AS n FROM raw_record")["n"] == 1
-        assertions = _rows(store, "SELECT * FROM assertion")
-        assert len(assertions) == 2
-        assert len({a["preset_id"] for a in assertions}) == 2
-        assert len({a["raw_record_id"] for a in assertions}) == 1   # shared raw_records
+        observations = _rows(store, "SELECT * FROM observation")
+        assert len(observations) == 2
+        assert len({a["preset_id"] for a in observations}) == 2
+        assert len({a["raw_record_id"] for a in observations}) == 1   # shared raw_records
         # Two readings, two activities (record-scoped ids, continued ordinals).
         assert _one(store, "SELECT COUNT(*) AS n FROM activity")["n"] == 2
         # Same claim through two presets: claim_digest converges (preset-free), while
         # content_hash stays distinct (the preset key is in its prefix — decision 27).
-        assert len({a["claim_digest"] for a in assertions}) == 1
-        assert len({a["content_hash"] for a in assertions}) == 2
+        assert len({a["claim_digest"] for a in observations}) == 1
+        assert len({a["content_hash"] for a in observations}) == 2
 
 
 def test_two_presets_without_shared_ordinals_collide_loudly() -> None:
@@ -684,30 +684,30 @@ def test_two_presets_without_shared_ordinals_collide_loudly() -> None:
 
 # --- digests via core/ids -------------------------------------------------------
 
-def _recompute_digests(store: RunStore, assertion: dict) -> tuple[str, str]:
+def _recompute_digests(store: RunStore, observation: dict) -> tuple[str, str]:
     """Rebuild the L1 projection input from the STORED rows and re-derive both digests
     through core.ids — the round-trip proof that assemble used the normative recipe."""
-    entity_row = _one(store, "SELECT * FROM entity WHERE entity_id = ?", assertion["entity_id"])
+    entity_row = _one(store, "SELECT * FROM entity WHERE entity_id = ?", observation["entity_id"])
     entity = ids.EntityProjection(entity_row["identifier"], entity_row["identifier_type"],
                                   entity_row["type"])
 
     spatial = None
-    if assertion["spatial_expression_id"] is not None:
+    if observation["spatial_expression_id"] is not None:
         sx = _one(store, "SELECT * FROM spatial_expression WHERE spatial_expression_id = ?",
-                  assertion["spatial_expression_id"])
+                  observation["spatial_expression_id"])
         comps = _rows(store, "SELECT * FROM spatial_component WHERE spatial_expression_id = ? "
-                             "ORDER BY ordinal", assertion["spatial_expression_id"])
+                             "ORDER BY ordinal", observation["spatial_expression_id"])
         spatial = ids.SpatialProjection(
             sx["referential"], sx["spatial_source"],
             tuple(ids.SpatialComponentProjection(c["part"], c["spatial_role"], c["raw_value"])
                   for c in comps))
 
     temporal = None
-    if assertion["temporal_expression_id"] is not None:
+    if observation["temporal_expression_id"] is not None:
         tx = _one(store, "SELECT * FROM temporal_expression WHERE temporal_expression_id = ?",
-                  assertion["temporal_expression_id"])
+                  observation["temporal_expression_id"])
         comps = _rows(store, "SELECT * FROM temporal_component WHERE temporal_expression_id = ? "
-                             "ORDER BY ordinal", assertion["temporal_expression_id"])
+                             "ORDER BY ordinal", observation["temporal_expression_id"])
         temporal = ids.TemporalProjection(
             tx["kind"], tx["referential"],
             tuple(ids.TemporalComponentProjection(c["part"], c["temporal_role"],
@@ -715,36 +715,36 @@ def _recompute_digests(store: RunStore, assertion: dict) -> tuple[str, str]:
                   for c in comps))
 
     activity = None
-    if assertion["activity_id"] is not None:
+    if observation["activity_id"] is not None:
         act = _one(store, "SELECT * FROM activity WHERE activity_id = ?",
-                   assertion["activity_id"])
+                   observation["activity_id"])
         context = json.loads(act["context_json"]) if act["context_json"] is not None else None
         activity = ids.ActivityProjection(act["kind"], context)
 
-    links = ids.AssertionLinks(assertion["entity_role"], assertion["entity_position_link"],
-                               assertion["entity_time_link"], assertion["spatial_temporal_link"])
+    links = ids.ObservationLinks(observation["entity_role"], observation["entity_position_link"],
+                               observation["entity_time_link"], observation["spatial_temporal_link"])
     l1 = ids.l1_projection(entity=entity, spatial=spatial, temporal=temporal, links=links,
-                           deleted=assertion["deleted"], multiplicity=assertion["multiplicity"],
+                           deleted=observation["deleted"], multiplicity=observation["multiplicity"],
                            activity=activity)
     provenance = _one(store,
                       "SELECT s.fingerprint_sha256 AS fp, r.line_no AS line_no FROM raw_record r "
                       "JOIN source s ON s.source_id = r.source_id WHERE r.raw_record_id = ?",
-                      assertion["raw_record_id"])
+                      observation["raw_record_id"])
     preset_key = _one(store, "SELECT key FROM preset WHERE preset_id = ?",
-                      assertion["preset_id"])["key"]
+                      observation["preset_id"])["key"]
     return ids.digests(fingerprint_sha256=provenance["fp"], preset_key=preset_key,
                        line_no=provenance["line_no"],
-                       output_ordinal=assertion["output_ordinal"], l1=l1)
+                       output_ordinal=observation["output_ordinal"], l1=l1)
 
 
 @pytest.mark.parametrize("name", ["cdr_a", "pin", "route", "cache"])
 def test_stored_digests_recompute_via_core_ids(name: str) -> None:
     spec, records, _ = _EXAMPLES[name]()
     with _assembled(spec, records) as (store, _, _):
-        for assertion in _rows(store, "SELECT * FROM assertion"):
-            content_hash, claim_digest = _recompute_digests(store, assertion)
-            assert content_hash == assertion["content_hash"]
-            assert claim_digest == assertion["claim_digest"]
+        for observation in _rows(store, "SELECT * FROM observation"):
+            content_hash, claim_digest = _recompute_digests(store, observation)
+            assert content_hash == observation["content_hash"]
+            assert claim_digest == observation["claim_digest"]
 
 
 # --- folder == zip parity, end-to-end through the L0 writer ---------------------
@@ -775,7 +775,7 @@ def test_folder_zip_parity_end_to_end(tmp_path: Path) -> None:
             assemble_source(records, spec, store, source_id=source["source_id"],
                             fingerprint_sha256=source["fingerprint_sha256"])
             digest_sets.append({(a["content_hash"], a["claim_digest"])
-                                for a in _rows(store, "SELECT * FROM assertion")})
+                                for a in _rows(store, "SELECT * FROM observation")})
             source_ids.append(source["source_id"])
 
     # Two disclosures, two sources — but no path reaches a digest, so both sets match.
@@ -793,9 +793,9 @@ def test_na_sentinel_flows_to_text_and_unmapped_stays_null() -> None:
     spec = replace(spec, common=(*spec.common,
                                  _f("source_label", 'if field(site) == "nope" then const(x)')))
     with _assembled(spec, records) as (store, _, _):
-        assertion = _one(store, "SELECT * FROM assertion")
-        assert assertion["source_label"] == "N/A"      # evaluated, produced nothing
-        assert assertion["deleted"] is None            # never mapped -> NULL
+        observation = _one(store, "SELECT * FROM observation")
+        assert observation["source_label"] == "N/A"      # evaluated, produced nothing
+        assert observation["deleted"] is None            # never mapped -> NULL
 
 
 def test_operator_entity_param_overrides_and_sets_origin() -> None:
@@ -803,7 +803,7 @@ def test_operator_entity_param_overrides_and_sets_origin() -> None:
     with _assembled(spec, records, entity="+41791234567") as (store, _, _):
         entity = _one(store, "SELECT * FROM entity")
         assert entity["raw_identifier"] == "+41791234567"
-        assert _one(store, "SELECT entity_origin FROM assertion")["entity_origin"] \
+        assert _one(store, "SELECT entity_origin FROM observation")["entity_origin"] \
             == "operator_param"                        # R24: operator input is labelled
 
 
@@ -822,23 +822,23 @@ def test_multiplicity_stored_and_null_means_one() -> None:
     spec, records, _ = _example_cctv()
     spec = replace(spec, common=(*spec.common, _f("multiplicity", "const(3)")))
     with _assembled(spec, records) as (store, _, _):
-        assert _one(store, "SELECT multiplicity FROM assertion")["multiplicity"] == 3
+        assert _one(store, "SELECT multiplicity FROM observation")["multiplicity"] == 3
     spec_plain, records, _ = _example_cctv()
     with _assembled(spec_plain, records) as (store, _, _):
         # R15: an unmapped multiplicity is NULL — which reads as 1, nothing invented.
-        assert _one(store, "SELECT multiplicity FROM assertion")["multiplicity"] is None
+        assert _one(store, "SELECT multiplicity FROM observation")["multiplicity"] is None
 
 
 # --- FIX-11: writer-correctness / silent-loss fixes ---------------------------
 
 def test_common_mapped_coordinate_produces_a_spatial_corner() -> None:
     # FIX-11 #2: latitude/longitude mapped under common: must emit a spatial COMPONENT shared
-    # by the assertion, not vanish into `shared` — otherwise the position and its digest are lost.
+    # by the observation, not vanish into `shared` — otherwise the position and its digest are lost.
     spec = _preset("common_coords", common=[
         _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
         _f("latitude", "field(lat)"), _f("longitude", "field(lon)"),
         _f("spatial_referential", "const(epsg:4326)"),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple(_links("at", "observed_at", "instant")),
         temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
     )])
@@ -849,9 +849,9 @@ def test_common_mapped_coordinate_produces_a_spatial_corner() -> None:
             ("latitude", "lat", "46.2"), ("longitude", "lon", "6.1")]
         sx = _one(store, "SELECT * FROM spatial_expression")
         assert sx["referential"] == "epsg:4326"          # from the explicit common spatial_referential
-        assertion = _one(store, "SELECT * FROM assertion")
-        assert assertion["spatial_expression_id"] is not None
-        assert assertion["claim_digest"] is not None     # a real placed assertion, not placeless
+        observation = _one(store, "SELECT * FROM observation")
+        assert observation["spatial_expression_id"] is not None
+        assert observation["claim_digest"] is not None     # a real placed observation, not placeless
 
 
 def test_resolver_picks_up_a_field_present_only_in_a_later_record() -> None:
@@ -860,7 +860,7 @@ def test_resolver_picks_up_a_field_present_only_in_a_later_record() -> None:
     spec = _preset("hetero", common=[
         _f("entity", "field(imei)"), _f("identifier_type", "const(msisdn)"),
         _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple(_links("references", "event_at", "instant")),
         temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
     )])
@@ -871,7 +871,7 @@ def test_resolver_picks_up_a_field_present_only_in_a_later_record() -> None:
         idents = [row["raw_identifier"] for row in _rows(
             store,
             "SELECT e.raw_identifier FROM entity e "
-            "JOIN assertion a ON a.entity_id = e.entity_id "
+            "JOIN observation a ON a.entity_id = e.entity_id "
             "JOIN raw_record r ON r.raw_record_id = a.raw_record_id ORDER BY r.line_no")]
     # record 1 has no imei (None); record 2's late-only imei resolves, not silently dropped.
     assert idents == [None, "352099001761481"]
@@ -895,7 +895,7 @@ def test_empty_operator_entity_blanks_the_value_and_tags_it_consistently() -> No
     with _assembled(spec, records, entity="") as (store, _, _):
         entity = _one(store, "SELECT * FROM entity")
         assert entity["raw_identifier"] == ""            # the operator's blank, not the preset value
-        assert _one(store, "SELECT entity_origin FROM assertion")["entity_origin"] \
+        assert _one(store, "SELECT entity_origin FROM observation")["entity_origin"] \
             == "operator_param"
 
 
@@ -909,7 +909,7 @@ def _acc_interval_spec_records(with_lower_acc: bool):
         fields.insert(0, _f("time_accuracy_us_lower", "field(acc_lo)"))
     spec = _preset("acc_interval", common=[
         _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple([*fields, *_links("at", "observed_at", "continuous_during_interval")]),
         temporal=(_time("interval", "field(start)", "field(end)", epoch="unix_s"),),
     )])
@@ -928,11 +928,11 @@ def test_malformed_interval_gates_accuracy_per_side() -> None:
         assert ("upper", "1773450681") in parts
         assert ("upper_accuracy", "1000000") in parts
         assert not any(part == "lower_accuracy" for part, _ in parts)   # no orphan
-        digest_with = _one(store, "SELECT claim_digest FROM assertion")["claim_digest"]
+        digest_with = _one(store, "SELECT claim_digest FROM observation")["claim_digest"]
 
     spec2, records2 = _acc_interval_spec_records(with_lower_acc=False)
     with _assembled(spec2, records2) as (store, _, _):
-        digest_without = _one(store, "SELECT claim_digest FROM assertion")["claim_digest"]
+        digest_without = _one(store, "SELECT claim_digest FROM observation")["claim_digest"]
     # The malformed lower accuracy contributed nothing to identity, as it must not.
     assert digest_with == digest_without
 
@@ -947,7 +947,7 @@ def _agnostic_coords_preset(key: str, *, with_referential: bool) -> PresetSpec:
         position.append(_f("spatial_referential", "const(epsg:4326)"))
     return _preset(key, common=[
         _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple([*position, *_links("at", "observed_at", "instant")]),
         temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
     )])
@@ -994,7 +994,7 @@ def test_time_without_epoch_or_format_assumes_unix_us_and_warns() -> None:
     # epoch/format declared emits no such warning — every other timed test above asserts that.)
     spec = _preset("bare_time", common=[
         _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
-    ], assertions=[AssertionTemplate(
+    ], observations=[ObservationTemplate(
         fields=tuple([_f("raw_position", "field(loc)"),
                       *_links("at", "observed_at", "instant")]),
         temporal=(_time("instant", "field(ts)"),),   # no epoch, no format

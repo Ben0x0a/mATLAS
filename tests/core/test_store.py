@@ -3,7 +3,7 @@
 Defines:    a compact rebuild of the worked-example scenario THROUGH the store's write API
             (persist + reopen), one test per store-relevant silent-loss inventory row
             (run_db_schema.md — each RAISES / stays distinct as named), a double-run
-            determinism test, and the by-construction API-surface layer-split assertion.
+            determinism test, and the by-construction API-surface layer-split observation.
 Used by:    the verification gate (pytest tests/core/test_store.py).
 Depends on: ``model_atlas.core.store`` (the RunStore under test), ``model_atlas.core.ids``
             (deterministic ids + the digest recipe — the assembler's real path), and
@@ -58,11 +58,11 @@ def _write_source(store: RunStore, *, run_id: str, path: str, inner: str | None,
     return source_id
 
 
-def _write_gps_assertion(store: RunStore, *, source_id: str, preset_id: str,
+def _write_gps_observation(store: RunStore, *, source_id: str, preset_id: str,
                          preset_key: str, line_no: int, fingerprint: str) -> str:
     """A full L1→L3 placement: entity + spatial/temporal corners + integrations + analysis.
 
-    Returns the assertion id. Ids and the two digests are computed with core.ids exactly as
+    Returns the observation id. Ids and the two digests are computed with core.ids exactly as
     the assembler will, so the row is a faithful T00-shaped placement.
     """
     output_ordinal = 0
@@ -126,8 +126,8 @@ def _write_gps_assertion(store: RunStore, *, source_id: str, preset_id: str,
         temporal_expression_id=tx_id, method=ti_method,
         lower_unix_utc_us=763689600_000_000, upper_unix_utc_us=763689600_000_000))
 
-    # The assertion itself, after its corners exist (R20). Digests via core.ids.
-    links = ids.AssertionLinks(entity_role=V.EntityRole.SUBJECT)
+    # The observation itself, after its corners exist (R20). Digests via core.ids.
+    links = ids.ObservationLinks(entity_role=V.EntityRole.SUBJECT)
     l1 = ids.l1_projection(
         entity=ids.EntityProjection(identifier=None,
                                     identifier_type=V.IdentifierType.NONE,
@@ -149,9 +149,9 @@ def _write_gps_assertion(store: RunStore, *, source_id: str, preset_id: str,
     content_hash, claim_digest = ids.digests(
         fingerprint_sha256=fingerprint, preset_key=preset_key, line_no=line_no,
         output_ordinal=output_ordinal, l1=l1)
-    assertion_id = ids.assertion_id(rr_id, preset_key, output_ordinal)
-    store.write_assertion(V.Assertion(
-        assertion_id=assertion_id, raw_record_id=rr_id, preset_id=preset_id,
+    observation_id = ids.observation_id(rr_id, preset_key, output_ordinal)
+    store.write_observation(V.Observation(
+        observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
         output_ordinal=output_ordinal, entity_id=entity_id, content_hash=content_hash,
         claim_digest=claim_digest, entity_origin=V.Origin.PRESET_MAPPED,
         spatial_expression_id=sx_id, temporal_expression_id=tx_id,
@@ -160,10 +160,10 @@ def _write_gps_assertion(store: RunStore, *, source_id: str, preset_id: str,
         entity_time_link=V.EntityTimeLink.OBSERVED_AT,
         spatial_temporal_link=V.SpatialTemporalLink.INSTANT, source_label="iOS cache"))
     store.write_analysis(V.Analysis(
-        analysis_id=ids.analysis_id(assertion_id, "untangle/2.0"),
-        assertion_id=assertion_id, method="untangle/2.0", record_type="gps_fix",
+        analysis_id=ids.analysis_id(observation_id, "untangle/2.0"),
+        observation_id=observation_id, method="untangle/2.0", record_type="gps_fix",
         record_rank=1))
-    return assertion_id
+    return observation_id
 
 
 def _write_call_with_activity(store: RunStore, *, source_id: str, preset_id: str,
@@ -194,28 +194,28 @@ def _write_call_with_activity(store: RunStore, *, source_id: str, preset_id: str
                                     identifier_type=V.IdentifierType.MSISDN,
                                     type=V.EntityType.DEVICE),
         spatial=None, temporal=None,
-        links=ids.AssertionLinks(entity_role=V.EntityRole.CALLER),
+        links=ids.ObservationLinks(entity_role=V.EntityRole.CALLER),
         deleted=None, multiplicity=None,
         activity=ids.ActivityProjection(kind=V.ActivityKind.CALL,
                                         context={"callee": "+41762223344"}))
     content_hash, claim_digest = ids.digests(
         fingerprint_sha256=fingerprint, preset_key=preset_key, line_no=line_no,
         output_ordinal=output_ordinal, l1=l1)
-    assertion_id = ids.assertion_id(rr_id, preset_key, output_ordinal)
-    store.write_assertion(V.Assertion(
-        assertion_id=assertion_id, raw_record_id=rr_id, preset_id=preset_id,
+    observation_id = ids.observation_id(rr_id, preset_key, output_ordinal)
+    store.write_observation(V.Observation(
+        observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
         output_ordinal=output_ordinal, entity_id=entity_id, content_hash=content_hash,
         claim_digest=claim_digest, activity_id=activity_id,
         entity_role=V.EntityRole.CALLER,
         entity_position_link=V.EntityPositionLink.WITHIN_RANGE_OF,
         entity_time_link=V.EntityTimeLink.EVENT_AT, source_label="CDR op-A"))
-    return assertion_id
+    return observation_id
 
 
-def _write_positionless_assertion(store: RunStore, *, source_id: str, preset_id: str,
+def _write_positionless_observation(store: RunStore, *, source_id: str, preset_id: str,
                                   preset_key: str, line_no: int,
                                   fingerprint: str) -> str:
-    """An entity-only assertion (no spatial/temporal corner) — must persist (CSV rule)."""
+    """An entity-only observation (no spatial/temporal corner) — must persist (CSV rule)."""
     output_ordinal = 0
     rr_id = ids.raw_record_id(source_id, line_no)
     store.write_raw_record(V.RawRecord(
@@ -230,17 +230,17 @@ def _write_positionless_assertion(store: RunStore, *, source_id: str, preset_id:
         entity=ids.EntityProjection(identifier=None,
                                     identifier_type=V.IdentifierType.NONE,
                                     type=V.EntityType.PERSON),
-        spatial=None, temporal=None, links=ids.AssertionLinks(),
+        spatial=None, temporal=None, links=ids.ObservationLinks(),
         deleted=None, multiplicity=None, activity=None)
     content_hash, claim_digest = ids.digests(
         fingerprint_sha256=fingerprint, preset_key=preset_key, line_no=line_no,
         output_ordinal=output_ordinal, l1=l1)
-    assertion_id = ids.assertion_id(rr_id, preset_key, output_ordinal)
-    store.write_assertion(V.Assertion(
-        assertion_id=assertion_id, raw_record_id=rr_id, preset_id=preset_id,
+    observation_id = ids.observation_id(rr_id, preset_key, output_ordinal)
+    store.write_observation(V.Observation(
+        observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
         output_ordinal=output_ordinal, entity_id=entity_id, content_hash=content_hash,
         claim_digest=claim_digest, source_label="note"))
-    return assertion_id
+    return observation_id
 
 
 def _build_scenario(store: RunStore, *, case_id: str, run_id: str) -> None:
@@ -255,9 +255,9 @@ def _build_scenario(store: RunStore, *, case_id: str, run_id: str) -> None:
                              inner=None, fingerprint=fp_cache)
     s_zip = _write_source(store, run_id=run_id, path="/case/exhibit_A_copy.zip",
                           inner="exhibit_A_copy.zip!cache.sqlite", fingerprint=fp_cache)
-    _write_gps_assertion(store, source_id=s_folder, preset_id=p_cache,
+    _write_gps_observation(store, source_id=s_folder, preset_id=p_cache,
                          preset_key="ios_cache", line_no=1, fingerprint=fp_cache)
-    _write_gps_assertion(store, source_id=s_zip, preset_id=p_cache,
+    _write_gps_observation(store, source_id=s_zip, preset_id=p_cache,
                          preset_key="ios_cache", line_no=1, fingerprint=fp_cache)
 
     # A CDR source: an activity-bearing call + a positionless note.
@@ -266,7 +266,7 @@ def _build_scenario(store: RunStore, *, case_id: str, run_id: str) -> None:
                           inner=None, fingerprint=fp_cdr)
     _write_call_with_activity(store, source_id=s_cdr, preset_id=p_cdr,
                               preset_key="cdr_generic", line_no=1, fingerprint=fp_cdr)
-    _write_positionless_assertion(store, source_id=s_cdr, preset_id=p_cdr,
+    _write_positionless_observation(store, source_id=s_cdr, preset_id=p_cdr,
                                   preset_key="cdr_generic", line_no=2, fingerprint=fp_cdr)
 
     # An archive encounter + an opt-in, recorded skip of another (run_archive.skipped=1).
@@ -303,8 +303,8 @@ def test_scenario_persists_and_reopens_clean(tmp_path) -> None:
         assert (reopened.execute("PRAGMA application_id").fetchone()[0]
                 == schema.APPLICATION_ID)
         assert reopened.execute("SELECT COUNT(*) FROM matlas_meta").fetchone()[0] == 1
-        # Every layer landed: an assertion, an integration, an analysis row, an edit.
-        assert reopened.execute("SELECT COUNT(*) FROM assertion").fetchone()[0] == 4
+        # Every layer landed: an observation, an integration, an analysis row, an edit.
+        assert reopened.execute("SELECT COUNT(*) FROM observation").fetchone()[0] == 4
         assert reopened.execute(
             "SELECT COUNT(*) FROM spatial_integration").fetchone()[0] == 2
         assert reopened.execute("SELECT COUNT(*) FROM analysis").fetchone()[0] == 2
@@ -329,7 +329,7 @@ def test_open_persisted_reads_and_keeps_the_file(tmp_path) -> None:
     store = RunStore.open_persisted(out)
     try:
         assert store.connection.execute(
-            "SELECT COUNT(*) FROM assertion").fetchone()[0] == 4
+            "SELECT COUNT(*) FROM observation").fetchone()[0] == 4
     finally:
         store.close()
     # An existing run DB is evidence: close() must NOT delete it (unlike a scratch store).
@@ -452,8 +452,8 @@ def test_two_exhibits_collapse_into_one_source_raises() -> None:
                                         input_file_path=path))
 
 
-def test_duplicate_evidence_drops_an_assertion_raises() -> None:
-    """Row: duplicate evidence drops an assertion (§2a). Same (record,preset,ordinal) RAISES."""
+def test_duplicate_evidence_drops_an_observation_raises() -> None:
+    """Row: duplicate evidence drops an observation (§2a). Same (record,preset,ordinal) RAISES."""
     with RunStore() as store:
         run_id = ids.run_id()
         _write_case_and_run(store, case_id=ids.case_metadata_id(), run_id=run_id)
@@ -467,9 +467,9 @@ def test_duplicate_evidence_drops_an_assertion_raises() -> None:
         store.write_entity(V.Entity(entity_id=e1, identifier=None, raw_identifier=None,
                                     identifier_type=V.IdentifierType.NONE,
                                     type=V.EntityType.DEVICE))
-        assertion_id = ids.assertion_id(rr_id, "k", 0)
-        store.write_assertion(V.Assertion(
-            assertion_id=assertion_id, raw_record_id=rr_id, preset_id=preset_id,
+        observation_id = ids.observation_id(rr_id, "k", 0)
+        store.write_observation(V.Observation(
+            observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
             output_ordinal=0, entity_id=e1, content_hash="ch", claim_digest="cd"))
         # A second reading with the SAME (raw_record_id, preset_id, output_ordinal) and a
         # fresh entity corner: the §2a natural-key UNIQUE must reject the duplicate.
@@ -478,13 +478,13 @@ def test_duplicate_evidence_drops_an_assertion_raises() -> None:
                                     identifier_type=V.IdentifierType.NONE,
                                     type=V.EntityType.PERSON))
         with pytest.raises(sqlite3.IntegrityError):
-            store.write_assertion(V.Assertion(
-                assertion_id="other", raw_record_id=rr_id, preset_id=preset_id,
+            store.write_observation(V.Observation(
+                observation_id="other", raw_record_id=rr_id, preset_id=preset_id,
                 output_ordinal=0, entity_id=e2, content_hash="ch2", claim_digest="cd2"))
 
 
-def test_two_assertions_share_a_corner_or_entity_raises() -> None:
-    """Row: two assertions share a corner or an entity row. UNIQUE on each owned FK RAISES."""
+def test_two_observations_share_a_corner_or_entity_raises() -> None:
+    """Row: two observations share a corner or an entity row. UNIQUE on each owned FK RAISES."""
     with RunStore() as store:
         run_id = ids.run_id()
         _write_case_and_run(store, case_id=ids.case_metadata_id(), run_id=run_id)
@@ -502,15 +502,15 @@ def test_two_assertions_share_a_corner_or_entity_raises() -> None:
                                     raw_identifier=None,
                                     identifier_type=V.IdentifierType.NONE,
                                     type=V.EntityType.DEVICE))
-        store.write_assertion(V.Assertion(
-            assertion_id=ids.assertion_id(rr1, "k", 0), raw_record_id=rr1,
+        store.write_observation(V.Observation(
+            observation_id=ids.observation_id(rr1, "k", 0), raw_record_id=rr1,
             preset_id=preset_id, output_ordinal=0, entity_id=shared_entity,
             content_hash="ch", claim_digest="cd"))
-        # A second, otherwise-distinct assertion pointing at the SAME entity_id violates the
-        # owned-corner UNIQUE(entity_id) — two assertions may never share an entity row.
+        # A second, otherwise-distinct observation pointing at the SAME entity_id violates the
+        # owned-corner UNIQUE(entity_id) — two observations may never share an entity row.
         with pytest.raises(sqlite3.IntegrityError):
-            store.write_assertion(V.Assertion(
-                assertion_id=ids.assertion_id(rr2, "k", 0), raw_record_id=rr2,
+            store.write_observation(V.Observation(
+                observation_id=ids.observation_id(rr2, "k", 0), raw_record_id=rr2,
                 preset_id=preset_id, output_ordinal=0, entity_id=shared_entity,
                 content_hash="ch2", claim_digest="cd2"))
 
@@ -570,7 +570,7 @@ def test_operator_input_does_not_mutate_the_digest() -> None:
                                       identifier_type=V.IdentifierType.MSISDN,
                                       type=V.EntityType.DEVICE)
         l1 = ids.l1_projection(entity=entity, spatial=None, temporal=None,
-                               links=ids.AssertionLinks(entity_role=V.EntityRole.CALLER),
+                               links=ids.ObservationLinks(entity_role=V.EntityRole.CALLER),
                                deleted=None, multiplicity=None, activity=None)
         return ids.digests(fingerprint_sha256="fp", preset_key="k", line_no=1,
                            output_ordinal=0, l1=l1)
@@ -579,19 +579,19 @@ def test_operator_input_does_not_mutate_the_digest() -> None:
 
 
 def test_positionless_claim_persists() -> None:
-    """Row: a positionless claim vanishes from CSV. It persists (one line per assertion)."""
+    """Row: a positionless claim vanishes from CSV. It persists (one line per observation)."""
     with RunStore() as store:
         run_id = ids.run_id()
         _write_case_and_run(store, case_id=ids.case_metadata_id(), run_id=run_id)
         preset_id = _write_preset(store, run_id=run_id, key="k", version="1.0")
         source_id = _write_source(store, run_id=run_id, path="/f.csv", inner=None,
                                   fingerprint="fp")
-        assertion_id = _write_positionless_assertion(
+        observation_id = _write_positionless_observation(
             store, source_id=source_id, preset_id=preset_id, preset_key="k",
             line_no=1, fingerprint="fp")
         row = store.connection.execute(
-            "SELECT spatial_expression_id, temporal_expression_id FROM assertion "
-            "WHERE assertion_id = ?", (assertion_id,)).fetchone()
+            "SELECT spatial_expression_id, temporal_expression_id FROM observation "
+            "WHERE observation_id = ?", (observation_id,)).fetchone()
         assert row == (None, None)   # persisted with both corners NULL, nothing invented
 
 
@@ -678,7 +678,7 @@ def test_double_run_is_deterministic_modulo_run_id() -> None:
         fingerprint_b = _fingerprint_db(store_b.connection)
     assert fingerprint_a == fingerprint_b
     # sanity: the compared surface is non-empty (a silently empty dump would pass trivially).
-    assert fingerprint_a["assertion"], "no assertions compared"
+    assert fingerprint_a["observation"], "no observations compared"
 
 
 # --- the layer split is by construction ------------------------------------
