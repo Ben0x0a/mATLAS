@@ -6,7 +6,7 @@ Defines:    ``analyse`` — reads every observation joined to its entity and its
             groups, ranked by horizontal accuracy then completeness) and writes one
             method-stamped ``analysis`` row per observation — plus ``METHOD_NAME`` /
             ``UNTANGLE_VERSION`` / ``DEFAULT_RESOLUTION_US``.
-Used by:    the app-layer pipeline and tests/analyze/test_untangle.py.
+Used by:    the app-layer pipeline and tests/analyse/test_untangle.py.
 Depends on: ``model_atlas.core`` (``ids`` — the analysis id derivation,
             ``vocabularies`` — the ``Analysis`` family + the ``RecordType`` labels,
             ``store`` — the layer-typed L3 writer, ``flat_view`` — the shared

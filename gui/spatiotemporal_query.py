@@ -5,10 +5,10 @@ Defines:    ``DURATION_UNIT_NAMES`` / ``duration_from`` (the duration-unit vocab
             ``build_request`` can never disagree on what a unit means),
             ``split_identifiers`` (multi-value paste support for the criterion value
             field) and ``build_request(...)`` — panel inputs -> a
-            ``model_atlas.analyze.concomitance_request.ConcomitanceRequest``.
+            ``model_atlas.analyse.concomitance.ConcomitanceRequest``.
 Used by:    gui.spatiotemporal_controller (the Qt panel calls these and nothing else) and
             tests/gui/test_spatiotemporal_query.py.
-Depends on: model_atlas.analyze.concomitance_request (ConcomitanceRequest / EntityGroup /
+Depends on: model_atlas.analyse.concomitance (ConcomitanceRequest / EntityGroup /
             Criterion / MatchMode) and the standard library only (datetime, pathlib). No
             Qt import, so the mapping logic is testable headless — the whole point of
             splitting it out.
@@ -22,7 +22,7 @@ from typing import Sequence
 # The duration vocabulary is re-exported from the shared request layer so existing
 # importers of this seam keep working; it is DEFINED there because both shells need it
 # and a shell must never import another shell.
-from model_atlas.analyze.concomitance_request import (
+from model_atlas.analyse.concomitance import (
     DURATION_UNIT_NAMES,
     DURATION_UNITS,
     ConcomitanceRequest,

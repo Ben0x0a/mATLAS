@@ -9,11 +9,11 @@ Defines:    the public query ``find_concomitant(store_1, store_2=None, *, group_
             ALL S2 level-walking/covering lives here — the schema stores only the leaf.
 Used by:    ``model_atlas.app.concomitance_run`` (the ONLY caller — it opens the
             store views and owns the sink's open/close) and
-            tests/analyze/test_concomitance.py.
+            tests/analyse/test_concomitance.py.
 Depends on: ``model_atlas.core.vocabularies`` (the presence-exclusion link tokens and
-            the two criterion vocabularies), ``model_atlas.analyze.concomitance_request``
+            the two criterion vocabularies), ``model_atlas.analyse.concomitance``
             (``EntityGroup`` / ``Criterion`` / ``CriterionKind`` / ``MatchMode`` — the
-            agreed request contract), ``model_atlas.analyze.concomitance_output``
+            agreed request contract), ``model_atlas.analyse.concomitance``
             (``MatchRow`` / ``MatchSink`` — the agreed output contract),
             ``model_atlas.integrate.spatial`` (``s2_cell_to_stored`` — the ONE signed-
             int64 recipe, imported so build and query agree bit-for-bit) and ``s2sphere``.
@@ -169,13 +169,13 @@ from typing import Callable, Iterable, Protocol
 
 import s2sphere
 
-from model_atlas.analyze.concomitance_output import MatchRow, MatchSink
-from model_atlas.analyze.concomitance_request import (
+from model_atlas.analyse.concomitance.output import MatchRow, MatchSink
+from model_atlas.analyse.concomitance.request import (
     Criterion,
-    CriterionKind,
     EntityGroup,
     MatchMode,
 )
+from model_atlas.analyse.helpers import CriterionKind, FROM_JOINS
 from model_atlas.core import vocabularies as V
 from model_atlas.integrate.spatial import s2_cell_to_stored
 
@@ -230,7 +230,7 @@ class RunSummary:
     ``candidates_examined`` is the number of (anchor, partner) pairs that reached the
     EXACT filter, i.e. the work the S2 index did not manage to skip. It exists so the
     two ``SpatialStrategy`` options can be compared on evidence rather than observation
-    (see the strategy benchmark in tests/analyze/test_concomitance.py); it never
+    (see the strategy benchmark in tests/analyse/test_concomitance.py); it never
     affects membership.
     """
 
@@ -412,23 +412,6 @@ class _Candidate:
 
 
 # --- SQL assembly ----------------------------------------------------------------
-# One shared FROM/WHERE for BOTH the candidate load and the per-anchor range scans, so
-# anchor and partner are drawn from the IDENTICAL population apart from the group
-# clause — an asymmetry here (e.g. the partner path requiring an index row the
-# candidate path did not) would silently lose pairs. The spatial_index join is part of
-# the candidate definition: spatial integration writes one index row per integrated
-# point, so a point without one is not a queryable point.
-
-_FROM_JOINS = (
-    " FROM observation a"
-    " JOIN entity e ON e.entity_id = a.entity_id"
-    " JOIN spatial_integration si"
-    "   ON si.spatial_expression_id = a.spatial_expression_id"
-    " JOIN spatial_index six"
-    "   ON six.spatial_integration_id = si.spatial_integration_id"
-    " JOIN timespan_integration ti"
-    "   ON ti.temporal_expression_id = a.temporal_expression_id"
-)
 
 # The presence + completeness predicate. SQLite's ``IS NOT`` is the NULL-safe
 # inequality, so a NULL link SURVIVES each exclusion (unknown is not non-presence — a
@@ -509,7 +492,7 @@ def _load_candidates(connection: sqlite3.Connection,
     clause, params = _group_clause(group)
     group_sql = f" AND {clause}" if clause else ""
     rows = connection.execute(
-        _CANDIDATE_COLUMNS + _FROM_JOINS + _PRESENCE_WHERE + group_sql
+        _CANDIDATE_COLUMNS + FROM_JOINS + _PRESENCE_WHERE + group_sql
         + " ORDER BY a.observation_id",
         (*_PRESENCE_PARAMS, *params))
     candidates: dict[str, _Candidate] = {}
@@ -752,7 +735,7 @@ def find_concomitant(
         "COALESCE(si.horizontal_accuracy_m, 0)" if use_accuracy else "0")
 
     scan_sql_head = (
-        "SELECT a.observation_id" + _FROM_JOINS + _PRESENCE_WHERE
+        "SELECT a.observation_id" + FROM_JOINS + _PRESENCE_WHERE
         + (f" AND {group_2_clause}" if group_2_clause else ""))
 
     match_count = 0

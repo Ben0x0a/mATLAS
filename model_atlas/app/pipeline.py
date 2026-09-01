@@ -5,7 +5,7 @@ Defines:    ``process`` — discover + persist L0 (``ingest.writer.ingest_input`
             assemble L1 (``ingest.assemble.assemble_source``), integrate L2
             (``integrate.spatial`` / ``integrate.temporal``), normalise entities
             (``integrate.entity`` — MUST precede analysis, whose grouping key is the
-            normalised identifier), analyse L3 (``analyze.untangle``) and run the
+            normalised identifier), analyse L3 (``analyse.untangle``) and run the
             selected export bricks (``export.registry``; the ``csv`` brick is the
             default) plus the traceability / warnings sidecars — and ``ProcessResult``,
             the stable result shape the GUI and CLI consume.
@@ -13,7 +13,7 @@ Used by:    ``gui.app`` (worker thread), ``launcher.cli`` and
             ``model_atlas.__init__`` (public API re-export).
 Depends on: ``model_atlas.core`` (ids, determinism, store), ``model_atlas.ingest``
             (discover, writer, assemble, format_detect, containers),
-            ``model_atlas.integrate``, ``model_atlas.analyze``,
+            ``model_atlas.integrate``, ``model_atlas.analyse``,
             ``model_atlas.export`` (registry + sidecar writers),
             ``model_atlas.presets`` (spec_loader, matcher, spec, resolve),
             ``model_atlas.app`` (config, reporting).
@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from model_atlas import __version__
-from model_atlas.analyze.untangle import analyse
+from model_atlas.analyse.untangle import analyse
 from model_atlas.app import reporting
 from model_atlas.app.config import get_settings
 from model_atlas.core import ids

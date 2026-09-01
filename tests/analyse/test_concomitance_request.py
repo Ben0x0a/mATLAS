@@ -1,9 +1,9 @@
-"""Tests for model_atlas/analyze/concomitance_request.py (the Verify list).
+"""Tests for model_atlas/analyse/concomitance/request.py (the Verify list).
 
 Covers:     ``check_request``'s validation table (negative distance / negative window /
             both-zero / identical-groups WARNING that does NOT block / unwritable output
             folder) and ``same_selection``'s order-independent comparison.
-Uses:       ``model_atlas.analyze.concomitance_request`` only — Qt-free, I/O-free apart
+Uses:       ``model_atlas.analyse.concomitance`` only — Qt-free, I/O-free apart
             from the output-folder writability probe.
 """
 from __future__ import annotations
@@ -13,16 +13,16 @@ from pathlib import Path
 
 import pytest
 
-from model_atlas.analyze.concomitance_request import (
+from model_atlas.analyse.concomitance import (
     ConcomitanceRequest,
     Criterion,
-    CriterionKind,
     EntityGroup,
     MatchMode,
     Severity,
     check_request,
     same_selection,
 )
+from model_atlas.analyse.helpers import CriterionKind
 
 
 def _request(tmp_path: Path, **overrides: object) -> ConcomitanceRequest:

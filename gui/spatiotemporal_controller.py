@@ -17,9 +17,9 @@ Used by:    the GUI orchestrator, which constructs one ``SpatiotemporalControlle
 Depends on: gui.spatiotemporal_query (the Qt-free UI<->request mapping seam), gui.worker
             (TaskRunner / ProgressBridge — reused, never reinvented), model_atlas.app.
             concomitance_run (run_concomitance / ConcomitanceRunResult),
-            model_atlas.analyze.concomitance_request
+            model_atlas.analyse.concomitance
             (ConcomitanceRequest / Criterion / CriterionKind / EntityGroup / MatchMode /
-            Problem / Severity / check_request), model_atlas.analyze.case_vocabulary
+            Problem / Severity / check_request), model_atlas.analyse.helpers
             (read_case_vocabulary / VocabularyEntry), model_atlas.ingest.writer
             (is_matlas_run_db), gui.report_actions (the shared diagnostics button),
             PySide6, and the standard library (datetime, threading).
@@ -60,14 +60,14 @@ from PySide6.QtWidgets import (
 from gui import report_actions
 from gui.spatiotemporal_query import DURATION_UNIT_NAMES, build_request, split_identifiers
 from gui.worker import ProgressBridge, TaskRunner
-from model_atlas.analyze.case_vocabulary import VocabularyEntry, read_case_vocabulary
-from model_atlas.analyze.concomitance_request import (
+from model_atlas.analyse.helpers import VocabularyEntry, read_case_vocabulary
+from model_atlas.analyse.concomitance import (
     Criterion,
-    CriterionKind,
     MatchMode,
     Severity,
     check_request,
 )
+from model_atlas.analyse.helpers import CriterionKind
 from model_atlas.app.concomitance_run import ConcomitanceRunResult, run_concomitance
 from model_atlas.ingest.writer import is_matlas_run_db
 

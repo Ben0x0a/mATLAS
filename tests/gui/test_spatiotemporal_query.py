@@ -4,7 +4,7 @@ Covers:     ``split_identifiers`` (commas/newlines/blanks), ``duration_from`` (u
             scaling + unknown-unit/negative rejection), and ``build_request`` (inputs ->
             ``ConcomitanceRequest``: both groups' criteria/mode, the case_2 None-vs-blank
             handling, and the threshold/window mapping).
-Uses:       gui.spatiotemporal_query and model_atlas.analyze.concomitance_request shapes.
+Uses:       gui.spatiotemporal_query and model_atlas.analyse.concomitance shapes.
 No Qt import — these are pure functions.
 """
 from __future__ import annotations
@@ -14,7 +14,8 @@ import datetime as dt
 import pytest
 
 from gui.spatiotemporal_query import build_request, duration_from, split_identifiers
-from model_atlas.analyze.concomitance_request import Criterion, CriterionKind, MatchMode
+from model_atlas.analyse.concomitance import Criterion, MatchMode
+from model_atlas.analyse.helpers import CriterionKind
 
 
 # --- split_identifiers -----------------------------------------------------------------

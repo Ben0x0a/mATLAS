@@ -1,11 +1,11 @@
-"""Tests for model_atlas/analyze/case_vocabulary.py (the Verify list).
+"""Tests for model_atlas/analyse/case_vocabulary.py (the Verify list).
 
 Covers:     ``read_case_vocabulary`` returns only values actually present, with
             placement counts matching a hand-counted expectation, sorted count-desc/
             value-asc; an entity with no integrated point is absent; a kind with zero
             matching placements yields an empty tuple.
-Uses:       ``model_atlas.analyze.case_vocabulary`` + the same fixture-building helpers
-            as tests/analyze/test_concomitance.py (real layer-typed store writers, real
+Uses:       ``model_atlas.analyse.helpers`` + the same fixture-building helpers
+            as tests/analyse/test_concomitance.py (real layer-typed store writers, real
             ``integrate_spatial``), so the vocabulary's join can never silently diverge
             from what the engine can actually query.
 """
@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from model_atlas.analyze.case_vocabulary import read_case_vocabulary
-from model_atlas.analyze.concomitance_request import CriterionKind
+from model_atlas.analyse.helpers import read_case_vocabulary
+from model_atlas.analyse.helpers import CriterionKind
 from model_atlas.core import ids
 from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore

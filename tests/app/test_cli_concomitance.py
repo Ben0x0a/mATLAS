@@ -4,7 +4,7 @@ Covers:     ``--list-entities`` prints TSV on stdout and exits 0 without running
             matching ``read_case_vocabulary``; a malformed ``--group1`` (unknown kind,
             missing ``=``) exits non-zero naming the allowed kinds, never a traceback;
             ``--before``/``--after`` duration parsing shares ``DURATION_UNIT_NAMES``/
-            ``duration_from`` with the GUI, both via model_atlas.analyze.concomitance_request
+            ``duration_from`` with the GUI, both via model_atlas.analyse.concomitance
             (the same object, not a copy);
             a supported request writes the T101a CSV contract and exits 0;
             ``check_request`` ERRORs exit 1 and the identical-groups WARNING does not
@@ -22,11 +22,11 @@ from pathlib import Path
 import pytest
 
 from launcher import cli
-from model_atlas.analyze.case_vocabulary import read_case_vocabulary
-from model_atlas.analyze.concomitance_output import CSV_HEADER
-from model_atlas.analyze.concomitance_request import CriterionKind
+from model_atlas.analyse.helpers import read_case_vocabulary
+from model_atlas.analyse.concomitance import CSV_HEADER
+from model_atlas.analyse.helpers import CriterionKind
 from gui import spatiotemporal_query as gui_seam
-from model_atlas.analyze.concomitance_request import DURATION_UNIT_NAMES, duration_from
+from model_atlas.analyse.concomitance import DURATION_UNIT_NAMES, duration_from
 from tests.app.test_concomitance_run import KNOWN, _build_case, _north_of
 
 
@@ -39,7 +39,7 @@ def _run(argv: list[str]) -> int:
 def test_duration_arg_shares_the_one_unit_table() -> None:
     # Same function object and same name tuple, not a re-implementation: the CLI's
     # --before/--after suffixes and the GUI's unit combos can never disagree on what a
-    # unit means. Both reach it through model_atlas.analyze.concomitance_request, which
+    # unit means. Both reach it through model_atlas.analyse.concomitance, which
     # is where it is DEFINED — a shell importing another shell to share it would invert
     # the dependency direction.
     assert cli.duration_from is duration_from

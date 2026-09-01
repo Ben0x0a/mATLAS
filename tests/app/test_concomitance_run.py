@@ -7,7 +7,7 @@ Covers:     the FOUR shapes T101a had to refuse — two cases, an asymmetric win
             cancellation (partial count, file kept), the identical-groups warning, and
             a written CSV whose rows carry the position/time the old output lacked.
 Uses:       ``model_atlas.app.concomitance_run`` + the same fixture-building helpers as
-            tests/analyze/test_concomitance.py (real layer-typed store writers, real
+            tests/analyse/test_concomitance.py (real layer-typed store writers, real
             ``integrate_spatial``), persisted to a real file so the read-only URI-safe
             opener is exercised exactly as the GUI/CLI will use it.
 """
@@ -19,14 +19,14 @@ from pathlib import Path
 
 import pytest
 
-from model_atlas.analyze.concomitance import EARTH_RADIUS_M
-from model_atlas.analyze.concomitance_request import (
+from model_atlas.analyse.concomitance import EARTH_RADIUS_M
+from model_atlas.analyse.concomitance import (
     ConcomitanceRequest,
     Criterion,
-    CriterionKind,
     EntityGroup,
     MatchMode,
 )
+from model_atlas.analyse.helpers import CriterionKind
 from model_atlas.app.concomitance_run import run_concomitance
 from model_atlas.core import ids
 from model_atlas.core import vocabularies as V

@@ -1,4 +1,4 @@
-"""Tests for model_atlas/analyze/concomitance.py (the T102 Verify list).
+"""Tests for model_atlas/analyse/concomitance.py (the T102 Verify list).
 
 Covers:     BRUTE-FORCE PARITY as the primary oracle — the engine's streamed matches
             must equal a direct O(n²) evaluation of the stated definition, for the
@@ -10,8 +10,8 @@ Covers:     BRUTE-FORCE PARITY as the primary oracle — the engine's streamed m
             split-accuracy-axes counterexample (a named regression test); a randomised
             no-loss property sweep; strategy equivalence + a reported benchmark; two
             stores with the inverted same-identity rule; cancellation; and progress.
-Uses:       ``model_atlas.analyze.concomitance``, ``model_atlas.analyze.
-            concomitance_request`` / ``concomitance_output`` (the agreed contracts),
+Uses:       ``model_atlas.analyse.concomitance``, ``model_atlas.analyse.
+            concomitance.request`` / ``concomitance.output`` (the agreed contracts),
             ``model_atlas.core`` (ids, vocabularies, store) and ``model_atlas.integrate.
             spatial`` — the fixture writes L1 rows and builds the S2 index through the
             REAL ``integrate_spatial`` driver, so query-vs-build bit-parity is
@@ -30,20 +30,20 @@ import time
 import pytest
 import s2sphere
 
-from model_atlas.analyze.concomitance import (
+from model_atlas.analyse.concomitance import (
+    Criterion,
+    EntityGroup,
+    MatchMode,
+    MatchRow,
+)
+from model_atlas.analyse.concomitance.engine import (
     EARTH_RADIUS_M,
     SpatialStrategy,
     find_concomitant,
     great_circle_distance_m,
     s2_level_for_radius,
 )
-from model_atlas.analyze.concomitance_output import MatchRow
-from model_atlas.analyze.concomitance_request import (
-    Criterion,
-    CriterionKind,
-    EntityGroup,
-    MatchMode,
-)
+from model_atlas.analyse.helpers import CriterionKind
 from model_atlas.core import ids
 from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore

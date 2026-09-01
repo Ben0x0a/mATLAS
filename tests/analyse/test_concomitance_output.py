@@ -1,15 +1,15 @@
-"""Tests for model_atlas/analyze/concomitance_output.py (the Verify list).
+"""Tests for model_atlas/analyse/concomitance/output.py (the Verify list).
 
 Covers:     ``CsvMatchSink`` writes the exact header, streams row-by-row without holding
             the result set, ``close()`` is idempotent, and the same input twice produces
             a byte-identical file (determinism).
-Uses:       ``model_atlas.analyze.concomitance_output`` only — Qt-free, no sqlite3.
+Uses:       ``model_atlas.analyse.concomitance`` only — Qt-free, no sqlite3.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from model_atlas.analyze.concomitance_output import CSV_HEADER, CsvMatchSink, MatchRow
+from model_atlas.analyse.concomitance import CSV_HEADER, CsvMatchSink, MatchRow
 
 
 def _row(observation_a: str = "a1", observation_b: str = "a2") -> MatchRow:

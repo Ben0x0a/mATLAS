@@ -21,14 +21,7 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-
-
-class CriterionKind(Enum):
-    """What one criterion selects on — mirrors ``case_vocabulary``'s three queries."""
-
-    ENTITY_TYPE = "entity_type"
-    IDENTIFIER_TYPE = "identifier_type"
-    IDENTIFIER = "identifier"
+from model_atlas.analyse.helpers import CriterionKind
 
 
 # --- the duration vocabulary (shared by BOTH shells) ---------------------------------

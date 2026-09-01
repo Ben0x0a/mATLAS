@@ -28,8 +28,8 @@ pytest.importorskip("PySide6", reason="GUI extra not installed")
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QWidget
 
 from gui.spatiotemporal_controller import SpatiotemporalController, _SIDE_1, _SIDE_2
-from model_atlas.analyze.concomitance import EARTH_RADIUS_M
-from model_atlas.analyze.concomitance_request import CriterionKind
+from model_atlas.analyse.concomitance import EARTH_RADIUS_M
+from model_atlas.analyse.helpers import CriterionKind
 from model_atlas.core import ids
 from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore

@@ -1,4 +1,4 @@
-"""Tests for the untangle L3 brick (``model_atlas.analyze.untangle``).
+"""Tests for the untangle L3 brick (``model_atlas.analyse.untangle``).
 
 Defines:    the pinned-oracle verdict test (the ``_EXPECTED`` tuple was verified
             against the retired ``transforms.rank.untangle`` before the cut-over to the
@@ -7,8 +7,8 @@ Defines:    the pinned-oracle verdict test (the ``_EXPECTED`` tuple was verified
             re-run tests (a bumped version ADDS a second row per observation and the
             projection picks the current method's verdict; the SAME version re-run
             RAISES), the analysis id derivation check, and the empty-store no-op.
-Used by:    the verification gate (pytest tests/analyze/test_untangle.py).
-Depends on: ``model_atlas.analyze.untangle`` (under test), ``model_atlas.core``
+Used by:    the verification gate (pytest tests/analyse/test_untangle.py).
+Depends on: ``model_atlas.analyse.untangle`` (under test), ``model_atlas.core``
             (``ids`` / ``vocabularies`` / ``store`` / ``flat_view``), pandas and
             pytest.
 """
@@ -19,7 +19,7 @@ import sqlite3
 import pandas as pd
 import pytest
 
-from model_atlas.analyze import untangle
+from model_atlas.analyse import untangle
 from model_atlas.core import ids
 from model_atlas.core import flat_view
 from model_atlas.core import vocabularies as V

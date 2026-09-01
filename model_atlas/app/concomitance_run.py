@@ -8,9 +8,9 @@ Used by:    ``gui.spatiotemporal_controller`` (through ``TaskRunner``/``Progress
             and ``launcher.cli``'s concomitance subcommand. Neither callback
             parameter is Qt: both are plain callables, so this module stays importable
             with no GUI toolkit installed.
-Depends on: ``model_atlas.analyze.concomitance_request`` (``ConcomitanceRequest`` /
-            ``check_request`` / ``Problem`` / ``Severity``), ``model_atlas.analyze.
-            concomitance_output`` (``CsvMatchSink``), ``model_atlas.analyze.concomitance``
+Depends on: ``model_atlas.analyse.concomitance`` (``ConcomitanceRequest`` /
+            ``check_request`` / ``Problem`` / ``Severity``), ``model_atlas.analyse.
+            concomitance`` (``CsvMatchSink``, ``find_concomitant``)
             (``find_concomitant`` — the T102 engine, which now streams ``MatchRow``
             straight into the sink), and the standard library only (``sqlite3``,
             ``dataclasses``, ``pathlib``, ``typing``).
@@ -31,9 +31,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from model_atlas.analyze.concomitance import find_concomitant
-from model_atlas.analyze.concomitance_output import CsvMatchSink
-from model_atlas.analyze.concomitance_request import (
+from model_atlas.analyse.concomitance import find_concomitant
+from model_atlas.analyse.concomitance import CsvMatchSink
+from model_atlas.analyse.concomitance import (
     ConcomitanceRequest,
     Problem,
     Severity,
@@ -58,7 +58,7 @@ def _open_readonly(path: Path) -> sqlite3.Connection:
     """Open ``path`` read-only via a percent-encoded ``file:`` URI (mode=ro).
 
     Copied from ``gui.spatiotemporal_controller._PersistedRunView`` /
-    ``model_atlas.analyze.case_vocabulary._open_readonly`` rather than shared across the
+    ``model_atlas.analyse.helpers._open_readonly`` rather than shared across the
     package (each of the three call sites is a small, self-contained helper) — WHY
     ``Path.as_uri()``: it percent-encodes the folder BEFORE ``?mode=ro`` is appended, so a
     folder carrying a URI-significant character ('#', '?', '%') is never mis-parsed into a

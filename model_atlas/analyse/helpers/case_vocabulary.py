@@ -7,8 +7,8 @@ Defines:    ``VocabularyEntry`` (one selectable value + its optional qualifier +
             actually present in this evidence.
 Used by:    ``gui.spatiotemporal_controller`` (populates the two groups' criterion value
             dropdowns) and, in T101b, ``launcher.cli``.
-Depends on: ``model_atlas.analyze.concomitance_request`` (``CriterionKind``),
-            ``model_atlas.analyze.concomitance`` (``_FROM_JOINS`` — reused so the join
+Depends on: ``model_atlas.analyse.concomitance`` (``CriterionKind``),
+            ``model_atlas.analyse.concomitance`` (``FROM_JOINS`` — reused so the join
             that defines "a queryable placement" can never drift from the engine's own
             candidate definition; READ-ONLY import, ``concomitance.py`` is not edited),
             and the standard library only (``sqlite3``, ``dataclasses``, ``pathlib``).
@@ -17,10 +17,10 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
-from model_atlas.analyze.concomitance import _FROM_JOINS
-from model_atlas.analyze.concomitance_request import CriterionKind
+from model_atlas.analyse.helpers.queries import FROM_JOINS
 
 # "A queryable placement" = an observation with BOTH an integrated point and an integrated
 # time bound (task wording). Deliberately narrower than the engine's full presence
@@ -33,6 +33,20 @@ _PLACEMENT_WHERE = (
     " AND si.latitude_wgs84 IS NOT NULL AND si.longitude_wgs84 IS NOT NULL"
 )
 
+
+
+class CriterionKind(Enum):
+    """What one criterion selects on — the three axes this module can enumerate.
+
+    It lives HERE, beside the queries that answer it, rather than in the concomitance
+    request layer: the axes are a property of the case vocabulary, and concomitance is one
+    consumer that selects on them. Declaring it the other way round made the vocabulary
+    reader import the concomitance engine to answer "which tokens exist in this case".
+    """
+
+    ENTITY_TYPE = "entity_type"
+    IDENTIFIER_TYPE = "identifier_type"
+    IDENTIFIER = "identifier"
 
 @dataclass(frozen=True)
 class VocabularyEntry:
@@ -69,7 +83,7 @@ def _entries(connection: sqlite3.Connection, value_column: str, group_by: str,
     qualifier_select = f", {qualifier_column}" if qualifier_column else ""
     rows = connection.execute(
         f"SELECT {value_column} AS value{qualifier_select}, COUNT(*) AS placement_count"
-        + _FROM_JOINS + _PLACEMENT_WHERE
+        + FROM_JOINS + _PLACEMENT_WHERE
         + f" AND {value_column} IS NOT NULL"
         + f" GROUP BY {group_by}"
         + " ORDER BY placement_count DESC, value ASC"

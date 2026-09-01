@@ -10,7 +10,7 @@ Defines:    ``GOLDEN_SRC`` (the committed golden fixture directory), ``rows`` (a
 Used by:    tests/export/test_csv_flat.py, test_kml.py, test_geojson.py,
             test_xlsx.py, test_geovisualizer.py, test_sqlite_db.py.
 Depends on: model_atlas.core (ids, store, vocabularies), model_atlas.ingest,
-            model_atlas.integrate, model_atlas.analyze, model_atlas.presets.
+            model_atlas.integrate, model_atlas.analyse, model_atlas.presets.
 
 Not a test module itself (leading underscore, per the ``exporters.registry`` plugin
 convention of skipping ``_``-prefixed files) — pytest does not collect it.
@@ -43,7 +43,7 @@ from model_atlas.integrate.temporal import (
     integrate_expression,
     standard_methods,
 )
-from model_atlas.analyze.untangle import analyse
+from model_atlas.analyse.untangle import analyse
 from model_atlas.presets.spec import PresetSpec
 
 GOLDEN_SRC = Path(__file__).resolve().parents[1] / "fixtures" / "golden"

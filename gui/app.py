@@ -312,7 +312,7 @@ class MainController(QObject):
         """Build the two MVC panels inside their tab placeholders.
 
         Each controller owns its whole panel and takes only the tab QWidget; all logic
-        lives in the model layer (edit_api / analyze.concomitance) — the shell just
+        lives in the model layer (edit_api / analyse.concomitance) — the shell just
         constructs them. The edit panel reuses the shared TaskRunner so the app keeps a
         single lifecycle-managed worker (waited on aboutToQuit)."""
         # Drop the placeholder labels first: they were scaffolding for exactly these

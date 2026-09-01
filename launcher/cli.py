@@ -8,10 +8,10 @@ Defines:    ``build_parser`` / ``run`` (the ``matlas`` entry point) plus the ``p
 Used by:    the ``matlas`` console-script entry point.
 Depends on: ``model_atlas.app.pipeline`` (``process``), ``model_atlas.app.concomitance_run``
             (``run_concomitance``),
-            ``model_atlas.analyze.concomitance_request`` (the request dataclasses and
+            ``model_atlas.analyse.concomitance`` (the request dataclasses and
             ``check_request`` — the one validator both shells call),
-            ``model_atlas.analyze.case_vocabulary`` (``--list-entities``), and
-            ``model_atlas.analyze.concomitance_request`` for ``DURATION_UNIT_NAMES``/``duration_from`` —
+            ``model_atlas.analyse.helpers`` (``--list-entities``), and
+            ``model_atlas.analyse.concomitance`` for ``DURATION_UNIT_NAMES``/``duration_from`` —
             the Qt-free duration-unit table, imported (not copied) so the CLI's ``--before``/
             ``--after`` suffix parsing and the GUI's unit combo can never disagree on what
             a unit means.
@@ -27,16 +27,16 @@ import tempfile
 from pathlib import Path
 
 from model_atlas import __version__
-from model_atlas.analyze.case_vocabulary import read_case_vocabulary
-from model_atlas.analyze.concomitance_request import (
+from model_atlas.analyse.helpers import read_case_vocabulary
+from model_atlas.analyse.concomitance import (
     ConcomitanceRequest,
     Criterion,
-    CriterionKind,
     EntityGroup,
     MatchMode,
     Severity,
     check_request,
 )
+from model_atlas.analyse.helpers import CriterionKind
 from model_atlas.app.concomitance_run import run_concomitance
 from model_atlas.app.config import get_settings
 from model_atlas.app.diagnostics import install_excepthook
@@ -44,7 +44,7 @@ from model_atlas.app.logging_setup import configure_logging
 from model_atlas.app.pipeline import process
 from model_atlas.export.registry import available_exporters, load_builtin_exporters
 from model_atlas.app.profiles import build_profile_preset_folder, load_profile
-from model_atlas.analyze.concomitance_request import DURATION_UNIT_NAMES, duration_from
+from model_atlas.analyse.concomitance import DURATION_UNIT_NAMES, duration_from
 
 log = logging.getLogger("model_atlas.cli")
 
