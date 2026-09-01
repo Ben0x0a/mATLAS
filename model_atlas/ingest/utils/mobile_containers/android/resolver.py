@@ -33,14 +33,17 @@ from __future__ import annotations
 import logging
 
 from ..categories import (
+    AMBIGUOUS_IDENTIFIER_FINDING_NAME,
     ANDROID_DATA_CATEGORY_NAME,
     ANDROID_EXTERNAL_DATA_CATEGORY_NAME,
     ANDROID_EXTERNAL_MEDIA_CATEGORY_NAME,
     ANDROID_EXTERNAL_OBB_CATEGORY_NAME,
     ANDROID_USER_CATEGORY_NAME,
     ANDROID_USER_DE_CATEGORY_NAME,
+    MISSING_DATA_TREE_FINDING_NAME,
+    UNPARSABLE_USER_ID_FINDING_NAME,
 )
-from ..models import Container
+from ..models import Container, Finding
 from ..openers import Opener
 
 log = logging.getLogger(__name__)
@@ -63,9 +66,16 @@ class AndroidResolver:
 
     def __init__(self, opener: Opener) -> None:
         self._by_package: dict[str, list[Container]] = {}
+        self._findings: list[Finding] = []
         paths = list(opener.list_paths())
-        self.root_depth = _detect_root_depth(paths)
+        self.root_depth = detect_root_depth(paths)
         if self.root_depth is None:
+            # Recorded, not merely logged: a caller handed the wrong acquisition must be
+            # able to tell "this device has no Android data tree" from "this package owns
+            # nothing", and an empty result alone cannot distinguish them.
+            self._findings.append(Finding(
+                MISSING_DATA_TREE_FINDING_NAME,
+                "no /data/{data,user,user_de,media} tree found in this acquisition"))
             log.warning("No Android data tree found in this acquisition; nothing to index")
             return
         self._index(paths, self.root_depth)
@@ -73,6 +83,16 @@ class AndroidResolver:
             f"Indexed {sum(len(v) for v in self._by_package.values())} Android container(s) "
             f"for {len(self._by_package)} package(s) at root depth {self.root_depth}"
         )
+
+    @property
+    def findings(self) -> tuple[Finding, ...]:
+        """Everything worth reporting from building the index, in a stable order.
+
+        Same name, same shape and (where the condition exists on both platforms) the same
+        tags as ``IosResolver.findings``, so a caller can audit either platform's run
+        without branching on which one it got.
+        """
+        return tuple(self._findings)
 
     def resolve(self, package: str, category: str | None = None) -> list[Container]:
         """The locations ``package`` owns, optionally narrowed to one ``category``.
@@ -100,14 +120,15 @@ class AndroidResolver:
         seen: set[str] = set()
         for path in paths:
             segments = path.split("/")
-            container = _match_layout(segments, root_depth)
+            container = _match_layout(segments, root_depth, self._findings)
             if container is None or container.path in seen:
                 continue
             seen.add(container.path)
             self._by_package.setdefault(container.identifier, []).append(container)
+        self._findings.extend(_ambiguity_findings(self._by_package))
 
 
-def _detect_root_depth(paths: list[str]) -> int | None:
+def detect_root_depth(paths: list[str]) -> int | None:
     """The number of wrapper segments the acquisition tool put before ``data/``.
 
     HOW: the shallowest position at which a ``data/`` segment is followed by one of the
@@ -127,7 +148,9 @@ def _detect_root_depth(paths: list[str]) -> int | None:
     return shallowest
 
 
-def _match_layout(segments: list[str], root_depth: int) -> Container | None:
+def _match_layout(
+    segments: list[str], root_depth: int, findings: list[Finding] | None = None,
+) -> Container | None:
     """The container a path denotes, or ``None`` when it denotes none.
 
     Every branch is anchored at ``root_depth`` — the guard that stops an app's own cache
@@ -145,7 +168,7 @@ def _match_layout(segments: list[str], root_depth: int) -> Container | None:
     if tree in ("user", "user_de"):
         if len(segments) <= root_depth + 3:
             return None
-        user_id = _user_id(segments[root_depth + 2])
+        user_id = _user_id(segments[root_depth + 2], segments, findings)
         if user_id is None:
             return None
         category = (
@@ -156,7 +179,7 @@ def _match_layout(segments: list[str], root_depth: int) -> Container | None:
     if tree == "media":
         if len(segments) <= root_depth + 5 or segments[root_depth + 3] != "Android":
             return None
-        user_id = _user_id(segments[root_depth + 2])
+        user_id = _user_id(segments[root_depth + 2], segments, findings)
         category = _EXTERNAL_CATEGORIES.get(segments[root_depth + 4])
         if user_id is None or category is None:
             return None
@@ -181,8 +204,40 @@ def _container(
     )
 
 
-def _user_id(segment: str) -> int | None:
-    """The Android multi-user id, or ``None`` when the segment is not one."""
+def _user_id(
+    segment: str, segments: list[str], findings: list[Finding] | None = None,
+) -> int | None:
+    """The Android multi-user id, or ``None`` when the segment is not one.
+
+    A non-numeric segment where a user id belongs is RECORDED, not just skipped: the
+    layout is one this library claims to understand, so an unexpected shape there means
+    either a device convention it has not met or a path it is mis-reading — both worth
+    telling the caller about rather than dropping a possible container in silence.
+    """
     if not segment.isdigit():
+        if findings is not None:
+            findings.append(Finding(
+                UNPARSABLE_USER_ID_FINDING_NAME,
+                f"{'/'.join(segments)}: {segment!r} is not a user id"))
         return None
     return int(segment)
+
+
+def _ambiguity_findings(by_package: dict[str, list[Container]]) -> list[Finding]:
+    """One finding per (package, category, user) that resolved to more than one path.
+
+    The iOS side reports the same condition under the same tag. Both keep every match and
+    report — never a silent first-wins.
+    """
+    findings: list[Finding] = []
+    for package, containers in sorted(by_package.items()):
+        grouped: dict[tuple[str, int | None], list[str]] = {}
+        for container in containers:
+            grouped.setdefault((container.category, container.user_id), []).append(container.path)
+        for (category, user_id), paths in sorted(grouped.items(), key=lambda kv: kv[0][0]):
+            if len(paths) > 1:
+                findings.append(Finding(
+                    AMBIGUOUS_IDENTIFIER_FINDING_NAME,
+                    f"{package} category {category!r} user {user_id} resolved to "
+                    f"{len(paths)} paths: {', '.join(sorted(paths))}"))
+    return findings

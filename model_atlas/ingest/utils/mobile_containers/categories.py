@@ -61,6 +61,11 @@ UNREADABLE_METADATA_FINDING_NAME = "unreadable-metadata"
 AMBIGUOUS_IDENTIFIER_FINDING_NAME = "ambiguous-identifier"
 UNREADABLE_ENTITLEMENTS_FINDING_NAME = "unreadable-entitlements"
 MISSING_REFERENCES_FINDING_NAME = "missing-references-database"
+# Android. The two platforms share AMBIGUOUS_IDENTIFIER_FINDING_NAME above: "one identifier
+# resolved to two containers of the same kind" means the same thing on both, and a caller
+# auditing findings should not have to learn two tags for one condition.
+MISSING_DATA_TREE_FINDING_NAME = "missing-data-tree"
+UNPARSABLE_USER_ID_FINDING_NAME = "unparsable-user-id"
 
 
 def category_for_content_class(content_class: int) -> tuple[str, bool]:

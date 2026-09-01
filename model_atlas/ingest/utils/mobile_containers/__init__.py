@@ -1,9 +1,10 @@
 """Where does this app keep its data? — a standalone iOS/Android container resolver.
 
-Defines:    the library's whole public surface — ``Container``, ``Finding``, the
-            ``Opener`` protocol with its ``ZipOpener`` / ``DirectoryOpener``
-            implementations, ``IosResolver`` and ``AndroidResolver``, and the category
-            name constants both platforms label their results with.
+Defines:    the library's whole public surface — ``build_resolver`` and
+            ``detect_platform`` (the platform-agnostic entry point), the ``Resolver``
+            protocol both platforms satisfy, ``Container``, ``Finding``, the ``Opener``
+            protocol with its ``ZipOpener`` / ``DirectoryOpener`` implementations, the
+            two concrete resolvers, and the category names both platforms label with.
 Used by:    ``model_atlas.ingest`` (a preset naming an app rather than a path) and any
             caller that wants the same answer on its own.
 Depends on: the standard library ONLY — ``plistlib``, ``sqlite3``, ``pathlib``,
@@ -18,14 +19,27 @@ would hard-code the package's current address into every module, so moving it wo
 rewriting each import — exactly the rewrite this arrangement exists to avoid. PEP 8 allows
 explicit relative imports for precisely this case.
 
+The one call a caller needs, whichever platform produced the acquisition::
+
+    with ZipOpener(acquisition) as opener:
+        resolver = build_resolver(opener)          # detects iOS or Android
+        locations = resolver.resolve("com.sbb.ch")  # every container it owns
+        oddities = resolver.findings                # never a silent drop
+
 The shared contract, identical on both platforms::
 
     resolve(package: str, category: str | None = None) -> list[Container]
+    findings -> tuple[Finding, ...]
 
 Without a category, every location the package owns comes back, each labelled with its
 own category. With one, the result is narrowed to that kind. Both resolvers are built once
 per acquisition from an injected ``Opener`` — the acquisition is opened a single time,
 streamed, and never modified or extracted wholesale.
+
+Detection lives in this library rather than in the caller because "which platform is this?"
+is answerable only from the same evidence the resolvers already read; a copy of the rules
+outside would drift, and a detached copy of the library would be unable to answer its own
+question.
 
 Why the library exists: on iOS an app's data lives under per-install GUIDs, so no preset
 can hard-code a path, and one app's data is spread across several containers at once — the
@@ -49,6 +63,14 @@ from .categories import (
     IOS_EXTENSION_CATEGORY_NAME,
 )
 from .ios.resolver import IosResolver
+from .platforms import (
+    ANDROID_PLATFORM_NAME,
+    IOS_PLATFORM_NAME,
+    Resolver,
+    UnsupportedAcquisitionError,
+    build_resolver,
+    detect_platform,
+)
 from .models import Container, Finding
 from .openers import (
     DirectoryOpener,
@@ -57,6 +79,12 @@ from .openers import (
 )
 
 __all__ = [
+    "build_resolver",
+    "detect_platform",
+    "Resolver",
+    "UnsupportedAcquisitionError",
+    "ANDROID_PLATFORM_NAME",
+    "IOS_PLATFORM_NAME",
     "AndroidResolver",
     "Container",
     "DirectoryOpener",
