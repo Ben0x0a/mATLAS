@@ -26,6 +26,7 @@ dependencies = [
     # zoneinfo needs the IANA tz database; Windows has no system copy, so ship it there.
     "tzdata; platform_system == 'Windows'",
     "s2sphere>=0.2.5",
+    "cryptography>=50.0.1",
 ]
 
 [project.optional-dependencies]
