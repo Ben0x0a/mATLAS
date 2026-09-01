@@ -2,7 +2,7 @@
 
 Defines:    a round-trip test proving every enum-valued string in the worked-example
             demo DB is a member of the corresponding enum (columns enumerated
-            dynamically, no hardcoded row lists), the Locates/Genesis derivation tests,
+            dynamically, no hardcoded row lists), the needs_bearer/is_presence derivations,
             the phrase-fragment tests (including the negation/reference strings), and
             the is_standard_part predicate test.
 Used by:    pytest.
@@ -19,21 +19,18 @@ import pytest
 from model_atlas.core.vocabularies import (
     ActivityKind,
     EditKind,
-    EntityPositionLink,
-    EntityRole,
-    EntityTimeLink,
+    ActivityRole,
+    Attestation,
+    EntityLink,
     EntityType,
-    Genesis,
-    Locates,
+    Occupancy,
     Origin,
     RecordState,
     SourceTier,
     SpatialReferential,
-    SpatialRole,
-    SpatialTemporalLink,
+    SpatialLink,
     TemporalKind,
     TemporalReferential,
-    TemporalRole,
     column_cast,
     is_standard_part,
 )
@@ -45,22 +42,21 @@ _DEMO_DB = (
 
 # (table, column) -> the enum whose members must contain every stored value. The
 # columns are the enum-valued (closed-vocabulary) ones; free-text/method-defined columns
-# (e.g. analysis.record_type, activity.context_json, entity.identifier_type — a free string
+# (e.g. analysis.record_rank_type, activity.context_json, entity.identifier_type — a free string
 # whose known kinds IdentifierType only suggests) are deliberately excluded.
 _ENUM_COLUMNS: dict[tuple[str, str], type[Enum]] = {
     ("entity", "type"): EntityType,
     ("entity", "concerns_origin"): Origin,
     ("observation", "entity_origin"): Origin,
-    ("observation", "entity_role"): EntityRole,
-    ("observation", "entity_position_link"): EntityPositionLink,
-    ("observation", "entity_time_link"): EntityTimeLink,
-    ("observation", "spatial_temporal_link"): SpatialTemporalLink,
+    ("observation", "activity_role"): ActivityRole,
+    ("observation", "entity_link"): EntityLink,
+    ("observation", "spatial_link"): SpatialLink,
+    ("observation", "occupancy"): Occupancy,
+    ("observation", "attestation"): Attestation,
     ("observation", "deleted"): RecordState,
     ("spatial_expression", "referential"): SpatialReferential,
-    ("spatial_component", "spatial_role"): SpatialRole,
     ("temporal_expression", "kind"): TemporalKind,
     ("temporal_expression", "referential"): TemporalReferential,
-    ("temporal_component", "temporal_role"): TemporalRole,
     ("activity", "kind"): ActivityKind,
     ("raw_record", "recovery_state"): RecordState,
     ("edit_log", "edit_kind"): EditKind,
@@ -108,42 +104,77 @@ def test_demo_db_component_parts_are_standard() -> None:
         assert is_standard_part(part), f"{part!r} should be a standard part"
 
 
-# --- Locates derivation (decision 11) -------------------------------------
+# --- The two surviving derivations ----------------------------------------
+# Genesis/Locates are GONE with the conflated EntityPositionLink/EntityTimeLink they
+# un-mixed. What replaces them reads a SINGLE orthogonal field each, so neither can lose
+# information the way those views did (``at`` and ``claimed_at`` both rendered ``self``).
 
-def test_locates_derivation_matches_decision_11() -> None:
-    expected = {
-        EntityPositionLink.AT: Locates.SELF,
-        EntityPositionLink.CLAIMED_AT: Locates.SELF,
-        EntityPositionLink.WITHIN_RANGE_OF: Locates.INFRASTRUCTURE,
-        EntityPositionLink.AT_FIXED_DETECTOR: Locates.INFRASTRUCTURE,
-        EntityPositionLink.REFERENCES: Locates.REFERENCED,
-        EntityPositionLink.INFERRED: Locates.UNKNOWN,
-        EntityPositionLink.UNKNOWN: Locates.UNKNOWN,
+def test_needs_bearer_is_exactly_not_self() -> None:
+    """The bearer invariant: a bearer row exists iff the link is not ``self``.
+
+    Every member must resolve, so a future addition cannot silently lack a rule.
+    """
+    assert {link: link.needs_bearer for link in EntityLink} == {
+        EntityLink.SELF: False,
+        EntityLink.SERVED_BY: True,
+        EntityLink.SEEN_BY: True,
+        EntityLink.USED_AT: True,
+        EntityLink.STAYED_AT: True,
+        EntityLink.SEARCHED_FOR: True,
+        EntityLink.SHARED: True,
+        EntityLink.CACHED: True,
+        EntityLink.UNKNOWN: True,
     }
-    # Every member must resolve, so a future addition cannot silently lack a locates.
-    assert {link: link.locates for link in EntityPositionLink} == expected
 
 
-def test_genesis_derivation_covers_every_member() -> None:
-    # Every E-T member (including the negation) must map to a genesis.
-    assert {link: link.genesis for link in EntityTimeLink} == {
-        EntityTimeLink.OBSERVED_AT: Genesis.PRESENCE,
-        EntityTimeLink.EVENT_AT: Genesis.ACTION,
-        EntityTimeLink.RECORDED_AT: Genesis.SYSTEM,
-        EntityTimeLink.REPORTED_FOR: Genesis.REPORTED,
-        EntityTimeLink.INTENDED_FOR: Genesis.PLANNED,
-        EntityTimeLink.NEVER_DURING_INTERVAL: Genesis.NEGATED,
-        EntityTimeLink.UNKNOWN: Genesis.UNKNOWN,
+def test_is_presence_separates_the_three_negatives() -> None:
+    """The ONE presence predicate, replacing a three-token test across two enums.
+
+    The point of the split: ``references`` (interest, no presence), ``absent`` (asserted
+    non-presence) and ``unknown`` (no claim either way) are all NOT presence, but they are
+    not each other — and ``unknown`` must stay distinguishable so it can be surfaced for
+    review rather than silently dropped.
+    """
+    assert {link: link.is_presence for link in SpatialLink} == {
+        SpatialLink.AT: True,
+        SpatialLink.WITHIN: True,
+        SpatialLink.NEAR: True,
+        SpatialLink.REFERENCES: False,
+        SpatialLink.ABSENT: False,
+        SpatialLink.UNKNOWN: False,
     }
+    assert len({SpatialLink.REFERENCES, SpatialLink.ABSENT, SpatialLink.UNKNOWN}) == 3
+
+
+def test_negation_lives_only_on_the_spatial_link() -> None:
+    """Polarity on space, quantification on time — the convention modal duality forces.
+
+    NOT-diamond-P == box-NOT-P, so permitting negation on both corners would let one fact be
+    written two ways. That was the real bug: ``NEVER_DURING_INTERVAL`` existed on
+    ``EntityTimeLink`` AND ``SpatialTemporalLink`` at once, with no rule for disagreement.
+    """
+    assert not any("absent" in m.value or "never" in m.value for m in Occupancy)
+    assert SpatialLink.ABSENT.value == "absent"
+
+
+def test_occupancy_has_no_instant_member() -> None:
+    """An instant is the degenerate interval ``lower == upper``, where box == diamond.
+
+    The shape of the expression is ``TemporalKind``'s job; occupancy would carry no
+    information there, so the member must not exist.
+    """
+    assert not any(m.value == "instant" for m in Occupancy)
+    assert any(m.value == "instant" for m in TemporalKind)
 
 
 # --- Phrase fragments (decision 37) ---------------------------------------
 
 _PHRASED_ENUMS = (
-    EntityPositionLink,
-    EntityTimeLink,
-    SpatialTemporalLink,
-    EntityRole,
+    EntityLink,
+    SpatialLink,
+    Occupancy,
+    Attestation,
+    ActivityRole,
     TemporalKind,
 )
 
@@ -158,11 +189,13 @@ def test_every_phrased_member_has_a_non_empty_phrase(enum: type[Enum]) -> None:
 
 def test_negation_and_reference_members_phrase_accordingly() -> None:
     # The negation reads as negation; REFERENCES reads as a reference, never presence.
-    assert EntityTimeLink.NEVER_DURING_INTERVAL.phrase == "was never present during"
-    assert SpatialTemporalLink.NEVER_DURING_INTERVAL.phrase == "at no point during"
-    assert EntityPositionLink.REFERENCES.phrase == "referred to"
-    # A claim reads as a claim, not a measured presence.
-    assert EntityPositionLink.CLAIMED_AT.phrase == "was claimed to be at"
+    assert SpatialLink.ABSENT.phrase == "not at"
+    assert SpatialLink.REFERENCES.phrase == "referring to"
+    # An assertion by a person reads as attribution, never as a weight or a doubt: the model
+    # records WHO asserts, and leaves credibility to the court.
+    assert Attestation.PERSON.phrase == "as stated by a person"
+    # `cached` must not read as presence — it is the verb that leaves no spatial claim.
+    assert EntityLink.CACHED.phrase == "cached"
 
 
 # --- is_standard_part predicate -------------------------------------------

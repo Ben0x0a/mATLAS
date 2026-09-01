@@ -79,8 +79,8 @@ class _Fixture:
             content_hash=f"ch-{self.line_no}", claim_digest=f"cd-{self.line_no}",
             spatial_expression_id=sx_id,
             temporal_expression_id=tx_id if placed else None,
-            entity_role="subject", entity_position_link="at",
-            entity_time_link="observed_at", spatial_temporal_link="instant"))
+            activity_role="unknown", spatial_link="at",
+            entity_link="self", occupancy="once"))
         return observation_id
 
 

@@ -23,7 +23,7 @@ common: {entity: const(device), input_record_id: field(Loc), raw_source_path: fi
 observations:
   - position: {latitude: field(Lat), longitude: field(Lon), spatial_referential: const(epsg:4326)}
     time: {instant: field(TS), epoch: unix_s}
-    links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
+    links: {entity: self, spatial: at, temporal: once}
 """
 
 
@@ -61,7 +61,7 @@ def test_half_coordinate_warns() -> None:
 
 
 def test_missing_link_warns() -> None:
-    text = _CLEAN.replace(", spatial_temporal: instant}", "}")
+    text = _CLEAN.replace(", temporal: once}", "}")
     assert "missing-link" in _codes(lint_spec(_spec(text)), WARNING)
 
 
@@ -187,10 +187,10 @@ def test_conditional_under_links_is_reported_with_the_rewrite(tmp_path: Path) ->
     """``links:`` takes bare enum tokens; a conditional there is a load error whose message
     does not say where the value belongs instead."""
     text = _CLEAN.replace(
-        "spatial_temporal: instant}",
-        "spatial_temporal: if field(Dur) == 0 then const(instant) else const(once_during_interval)}")
+        "temporal: once}",
+        "temporal: if field(Dur) == 0 then const(once) else const(sporadic)}")
     finding = _finding(text, tmp_path, "conditional-in-links")
-    assert "spatial_temporal_link:" in finding.suggestion
+    assert "occupancy:" in finding.suggestion
     assert "position:" in finding.suggestion
 
 
@@ -248,15 +248,6 @@ def test_fixed_offset_zone_advises_naming_the_iana_zone() -> None:
 _DURATION_TIME = ('time: {interval: {lower: field(TS), '
                   'duration_sec: {from: field(Dur), unit: s}}, format: "%Y-%m-%d", '
                   'zone: const(Europe/Zurich)}')
-
-
-def test_duration_bound_advice() -> None:
-    text = _CLEAN.replace("time: {instant: field(TS), epoch: unix_s}", _DURATION_TIME)
-    codes = _codes(lint_spec(_spec(text)), ADVICE)
-    assert "duration-no-role" in codes
-    with_role = text.replace("zone: const(Europe/Zurich)}",
-                             "zone: const(Europe/Zurich), temporal_role_upper: const(end)}")
-    assert "duration-no-role" not in _codes(lint_spec(_spec(with_role)), ADVICE)
 
 
 def test_duration_unit_mismatch_advice() -> None:

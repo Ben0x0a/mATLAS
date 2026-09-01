@@ -1,21 +1,6 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <!-- SQL XML created by WWW SQL Designer, https://github.com/ondras/wwwsqldesigner/ -->
 <!-- Active URL: https://sql.toad.cz/ -->
-<!-- mATLAS run database - 2026-07-14 shape (decisions 16-34).                       -->
-<!--   +D28 Case root (one case per DB) · +D29 Archive dedup (CD hash)               -->
-<!--   +D31 Spatial Index (S2 leaf cell) · +D32 timespan datetime/date/time cols     -->
-<!--   +D34 Edit log · D27 preset companion + observation(preset,ordinal) UNIQUE       -->
-<!-- Skeletal on purpose: full column lists live in docs/run_db_schema.md.           -->
-<!--   - Entity: identifier (normalized) + raw_identifier (verbatim, d.21) + type    -->
-<!--     + concerns (absorbs linked_entity) + concerns_uid (stemmed digest, d.22)    -->
-<!--   - Roles + stated offsets live on the COMPONENT (d.25); expressions keep       -->
-<!--     referential + mechanism (spatial_source / temporal_source)                  -->
-<!--   - part names = the preset field names (d.23); anything accepted, standard     -->
-<!--     names export-projected                                                      -->
-<!--   - activity <-> record binding = Activity-record link (d.26; ingest writes     -->
-<!--     exactly one per activity; analysis may attach further records later)        -->
-<!--   - V1 source hierarchy reinstated (d.24): input source (source.input_file_path -->
-<!--     + inner_path) vs data source (observation.data_source, record-borne)          -->
 <sql>
 <datatypes db="sqlite">
 	<group label="Affinity">
@@ -25,251 +10,711 @@
 		<type label="Real" default="0" length="0" sql="REAL" quote="" color="rgb(238,238,170)"/>
 		<type label="None" default="" length="0" sql="NONE" quote="" color="rgb(200,255,200)"/>
 	</group>
-</datatypes>
-
-<table x="1280" y="25" name="Case">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid4 - the ROOT (decision 28); exactly one row per run-DB file (one case per database)</comment></row>
-  <row name="case_number" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>user-facing investigation identifier</comment></row>
-  <row name="title" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="description" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="created_at" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>ISO-8601 UTC</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <comment>Decision 28: case -> run -> source -> raw_record -> observation</comment>
+</datatypes><table x="1563" y="469" name="Case">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid4 - the ROOT (decision 28); exactly one row per run-DB file (one case per database)</comment>
+</row>
+<row name="case_number" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>user-facing investigation identifier</comment>
+</row>
+<row name="title" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="description" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="created_at" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>ISO-8601 UTC</comment>
+</row>
+<row name="created_by" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<comment>Decision 28: case -&gt; run -&gt; source -&gt; raw_record -&gt; observation</comment>
 </table>
-
-<table x="1053" y="25" name="Run metadata">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid4 - the only non-deterministic id</comment></row>
-  <row name="id_case" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>decision 28</comment><relation table="Case" row="id" /></row>
-  <row name="input_path" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>the operator's --input root (decision 24: run grain)</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
+<table x="1505" y="260" name="Run metadata">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid4 - the only non-deterministic id</comment>
+</row>
+<row name="id_case" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Case" row="id" />
+<comment>decision 28</comment>
+</row>
+<row name="input_path" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>the operator's --input root (decision 24: run grain)</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
 </table>
-
-<table x="1280" y="175" name="Archive">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(path) - decision 38: never the hash (2c); diffable across runs</comment></row>
-  <row name="path" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>the archive as opened; UNIQUE</comment></row>
-  <row name="cd_sha256" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>central-directory hash (reuses sqlite/integrity.py fingerprint_zip), INDEXED column - same archive bytes twice = a query/finding (GROUP BY cd_sha256)</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_archive_path"><part>path</part></key>
+<table x="1775" y="90" name="Archive">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid5(path) - decision 38: never the hash (2c); diffable across runs</comment>
+</row>
+<row name="path" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>the archive as opened; UNIQUE</comment>
+</row>
+<row name="cd_sha256" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>central-directory hash (reuses sqlite/integrity.py fingerprint_zip), INDEXED column - same archive bytes twice = a query/finding (GROUP BY cd_sha256)</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_archive_path">
+<part>path</part>
+</key>
 </table>
-
-<table x="1450" y="175" name="Run-Archive link">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(id_run, id_archive) - run metadata (decision 38)</comment></row>
-  <row name="id_run" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Run metadata" row="id" /></row>
-  <row name="id_archive" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Archive" row="id" /></row>
-  <row name="parsed_at" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="skipped" null="0" autoincrement="0"><datatype>INTEGER</datatype><comment>decision 38: opt-in skip, RECORDED - eligible only when a previous run parsed the same cd_sha256 with the same preset set (key+version+definition_digest)</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_run_archive"><part>id_run</part><part>id_archive</part></key>
-  <comment>Decision 38: one run opens many archives, one archive appears in many runs; every encounter recorded, skips included</comment>
+<table x="1543" y="59" name="Run-Archive link">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid5(id_run, id_archive) - run metadata (decision 38)</comment>
+</row>
+<row name="id_run" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Run metadata" row="id" />
+</row>
+<row name="id_archive" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Archive" row="id" />
+</row>
+<row name="parsed_at" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="skipped" null="0" autoincrement="0">
+<datatype>INTEGER</datatype>
+<comment>decision 38: opt-in skip, RECORDED - eligible only when a previous run parsed the same cd_sha256 with the same preset set (key+version+definition_digest)</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_run_archive">
+<part>id_run</part>
+<part>id_archive</part>
+</key>
+<comment>Decision 38: one run opens many archives, one archive appears in many runs; every encounter recorded, skips included</comment>
 </table>
-
-<table x="60" y="120" name="Run-Preset link">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(id_run, id_preset) - run metadata (decision 39)</comment></row>
-  <row name="id_run" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Run metadata" row="id" /></row>
-  <row name="id_preset" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Preset" row="id" /></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_run_preset"><part>id_run</part><part>id_preset</part></key>
-  <comment>Decision 39: every preset SELECTED for the run, even when it yields no observation; run.settings_json carries every operator arg/option</comment>
+<table x="1260" y="347" name="Run-Preset link">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid5(id_run, id_preset) - run metadata (decision 39)</comment>
+</row>
+<row name="id_run" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Run metadata" row="id" />
+</row>
+<row name="id_preset" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Preset" row="id" />
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_run_preset">
+<part>id_run</part>
+<part>id_preset</part>
+</key>
+<comment>Decision 39: every preset SELECTED for the run, even when it yields no observation; run.settings_json carries every operator arg/option</comment>
 </table>
-
-<table x="1050" y="121" name="Source metadata">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5 over paths, never the fingerprint</comment></row>
-  <row name="id_run" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Run metadata" row="id" /></row>
-  <row name="input_file_path" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>INPUT SOURCE (decision 24): the outermost artefact mATLAS opened</comment></row>
-  <row name="inner_path" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>chain-inclusive path inside containers (outer.zip!inner.zip!db.sqlite) - R10</comment></row>
-  <row name="subunit" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>table / sheet / query inside the file</comment></row>
-  <row name="source_tier" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>primary (acquisition parsed) | secondary (a tool's export parsed)</comment></row>
-  <row name="data_source" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>DATA SOURCE (decision 24, source grain): where the data originally lived (UFDR/tool manifest device path); NULL for primary acquisitions - projection falls back to the input source</comment></row>
-  <row name="fingerprint_sha256" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>hash match = finding, never a merge</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
+<table x="1270" y="109" name="Source metadata">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid5 over paths, never the fingerprint</comment>
+</row>
+<row name="id_run" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Run metadata" row="id" />
+</row>
+<row name="input_file_path" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>INPUT SOURCE (decision 24): the outermost artefact mATLAS opened</comment>
+</row>
+<row name="inner_path" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>chain-inclusive path inside containers (outer.zip!inner.zip!db.sqlite) - R10</comment>
+</row>
+<row name="subunit" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>table / sheet / query inside the file</comment>
+</row>
+<row name="source_tier" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>primary (acquisition parsed) | secondary (a tool's export parsed)</comment>
+</row>
+<row name="data_source" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>DATA SOURCE (decision 24, source grain): where the data originally lived (UFDR/tool manifest device path); NULL for primary acquisitions - projection falls back to the input source</comment>
+</row>
+<row name="fingerprint_sha256" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>hash match = finding, never a merge</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
 </table>
-
-<table x="1113" y="272" name="Raw Record">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="id_source" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Source metadata" row="id" /></row>
-  <row name="raw_json" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>the complete source row, verbatim - incl. every context party</comment></row>
-  <row name="recovery_source" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>fine origin: live/wal/journal/freelist/freespace - ordered by descending reliability, so it doubles as the confidence signal; digest-excluded, reaches a claim via the join</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
+<table x="1009" y="170" name="Raw Record">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+</row>
+<row name="id_source" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Source metadata" row="id" />
+</row>
+<row name="raw_json" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>the complete source row, verbatim - incl. every context party</comment>
+</row>
+<row name="recovery_source" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>fine origin: live/wal/journal/freelist/freespace - ordered by descending reliability, so it doubles as the confidence signal; digest-excluded, reaches a claim via the join</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
 </table>
-
-<table x="240" y="120" name="Preset">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>content key uuid5(key, version) - decision 27</comment></row>
-  <row name="key" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>stable preset key</comment></row>
-  <row name="name" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="version" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="definition_digest" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>decision 40: sha256 of the canonical preset definition - catches edits without a version bump; skip eligibility compares digests</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_preset"><part>key</part><part>version</part></key>
-  <comment>Decision 27: one file matching several presets = one source, many observations; the preset is a property of the READING</comment>
+<table x="1008" y="323" name="Preset">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>content key uuid5(key, version) - decision 27</comment>
+</row>
+<row name="key" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>stable preset key</comment>
+</row>
+<row name="name" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="version" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="definition_digest" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>decision 40: sha256 of the canonical preset definition - catches edits without a version bump; skip eligibility compares digests</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_preset">
+<part>key</part>
+<part>version</part>
+</key>
+<comment>Decision 27: one file matching several presets = one source, many observations; the preset is a property of the READING</comment>
 </table>
-
-<table x="460" y="325" name="Observation">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="id_raw_record" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>every claim comes from a record</comment><relation table="Raw Record" row="id" /></row>
-  <row name="id_preset" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>decision 27: which reading produced this observation</comment><relation table="Preset" row="id" /></row>
-  <row name="output_ordinal" null="0" autoincrement="0"><datatype>INTEGER</datatype><comment>fan-out position; UNIQUE(id_raw_record, id_preset, output_ordinal) - §2a guard</comment></row>
-  <row name="id_entity" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>exactly one entity per observation (UNIQUE); further placed parties = further observations on the same activity</comment><relation table="Entity" row="id" /></row>
-  <row name="id_activity" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>NULL for a standalone observation (GPS fix)</comment><relation table="Activity" row="id" /></row>
-  <row name="entity_role" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>the entity's part in the activity: caller | callee | sender | recipient | reporter | subject | ...</comment></row>
-  <row name="id_spatial" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>nullable: a login has no place; UNIQUE = owned corner</comment><relation table="Spatial Expression" row="id" /></row>
-  <row name="id_temporal" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>nullable; UNIQUE = owned corner</comment><relation table="Temporal Expression" row="id" /></row>
-  <row name="entity_position_link" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>CHECK: EntityPositionLink vocabulary (epistemic nuance lives in the three links)</comment></row>
-  <row name="entity_time_link" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>CHECK: EntityTimeLink vocabulary</comment></row>
-  <row name="spatial_temporal_link" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>CHECK: SpatialTemporalLink vocabulary</comment></row>
-  <row name="entity_origin" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>preset_mapped | operator_param (R24)</comment></row>
-  <row name="deleted" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>the SOURCE's own deletion claim (L1) - distinct from raw_record.recovery_state (R11)</comment></row>
-  <row name="multiplicity" null="1" autoincrement="0"><datatype>INTEGER</datatype><comment>NULL = 1; aggregate records like '137 calls in March' (R15)</comment></row>
-  <row name="source_label" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>the one per-claim provenance field (decision 24)</comment></row>
-  <row name="input_record_id" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>preset-mapped human locator back to the source record; LOCATES one record</comment></row>
-  <row name="source_record_uid" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>preset-mapped source key (a tool Item ID); GROUPS the rows one record fanned out into. Preset-resolved, so it lives here and not on the preset-free raw_record; NULL = the engine-generated raw_record_id is used. Feeds no digest</comment></row>
-  <row name="content_hash" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>digest scoped to the preset's reading of this file; repeats legally, never a key</comment></row>
-  <row name="claim_digest" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>file-independent L1-only digest (R5): overlapping disclosures converge here as a finding</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_observation"><part>id_raw_record</part><part>id_preset</part><part>output_ordinal</part></key>
-  <key type="UNIQUE" name="uq_spatial_owner"><part>id_spatial</part></key>
-  <key type="UNIQUE" name="uq_temporal_owner"><part>id_temporal</part></key>
-  <key type="UNIQUE" name="uq_entity_owner"><part>id_entity</part></key>
-  <key type="INDEX" name="ix_content_hash"><part>content_hash</part></key>
-  <key type="INDEX" name="ix_claim_digest"><part>claim_digest</part></key>
-  <comment>linked_entity dropped (decision 17): the attributed party is entity.concerns. UNIQUE(record,preset,ordinal) = the §2a guard + decision 27</comment>
+<table x="629" y="264" name="Observation">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+</row>
+<row name="id_raw_record" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Raw Record" row="id" />
+<comment>every claim comes from a record</comment>
+</row>
+<row name="id_preset" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Preset" row="id" />
+<comment>decision 27: which reading produced this observation</comment>
+</row>
+<row name="output_ordinal" null="0" autoincrement="0">
+<datatype>INTEGER</datatype>
+<comment>fan-out position; UNIQUE(id_raw_record, id_preset, output_ordinal) - §2a guard</comment>
+</row>
+<row name="id_entity" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Entity" row="id" />
+<comment>the TARGETED entity - the one under investigation, and the one the flat CSV names on its line (UNIQUE, owned). Further placed parties = further observations on the same activity</comment>
+</row>
+<row name="id_bearer_entity" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><relation table="Entity" row="id" />
+<comment>the POSITION BEARER (UNIQUE, owned) - the entity whose position the spatial corner actually states: a CDR antenna, an ANPR camera, an ATM terminal. NULL exactly when entity_link is self, i.e. the targeted entity holds its own position. Storage orders by whose position it is; the projection orders by who is under investigation, so the flat view joins Entity twice</comment>
+</row>
+<row name="id_activity" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><relation table="Activity" row="id" />
+<comment>NULL for a standalone observation (GPS fix)</comment>
+</row>
+<row name="activity_role" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>CHECK: ActivityRole - the TARGETED entity's part in the activity: caller | callee | sender | recipient | unknown. Was entity_role; subject dropped (it is now the plain meaning of id_entity), reporter became attestation=person, owner went to the deferred relation graph</comment>
+</row>
+<row name="id_spatial" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><relation table="Spatial Expression" row="id" />
+<comment>nullable: a login has no place; UNIQUE = owned corner</comment>
+</row>
+<row name="id_temporal" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><relation table="Temporal Expression" row="id" />
+<comment>nullable; UNIQUE = owned corner</comment>
+</row>
+<row name="entity_link" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>ENTITY CORNER LINK - through what interaction do we know this position? CHECK: EntityLink = self | served_by | seen_by | used_at | stayed_at | searched_for | shared | cached | unknown. The verb alone decides whether there is a spatial claim at all: cached leaves none. A bearer row exists iff this is not self</comment>
+</row>
+<row name="spatial_link" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>SPATIAL CORNER LINK - how closely does the geometry bind the entity? CHECK: SpatialLink = at | within | near | references | absent | unknown. Stored, NOT derived from the verb: self plus a GNSS fix is at a point, self plus an IP geolocation is within a city polygon. The three negatives are distinct - references is interest without presence, absent is asserted non-presence, unknown is no claim either way</comment>
+</row>
+<row name="occupancy" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>TEMPORAL CORNER LINK - how much of the interval does the claim cover? CHECK: Occupancy = continuous (box/always) | once (diamond, exactly one) | sporadic (diamond, at least one) | unknown. No instant member (an instant is the degenerate interval lower = upper, where box and diamond coincide) and no never member (negation is polarity and lives on spatial_link=absent, because modal duality would otherwise let one fact be written two ways)</comment>
+</row>
+<row name="attestation" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>STATEMENT LEVEL, not a corner - who asserts this? CHECK: Attestation = instrument | system_record | person | third_party_register | unknown. Records WHO asserts, never what it is worth: weight, credibility and admissibility are court questions the model must not state. Orthogonal to entity_link, which is why folding it into the links (2026-07-11) could never work</comment>
+</row>
+<row name="recorded_at" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>when the RECORD was written, distinct from when the phenomenon happened (the temporal corner) - days apart on a card authorisation vs settlement posting. Provenance about the record, so it feeds NEITHER digest: a re-export with a new write time must not move a claim's identity</comment>
+</row>
+<row name="entity_origin" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>preset_mapped | operator_param (R24)</comment>
+</row>
+<row name="deleted" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>the SOURCE's own deletion claim (L1) - distinct from raw_record.recovery_state (R11)</comment>
+</row>
+<row name="multiplicity" null="1" autoincrement="0">
+<datatype>INTEGER</datatype>
+<default>NULL</default><comment>NULL = 1; aggregate records like '137 calls in March' (R15)</comment>
+</row>
+<row name="source_label" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>the one per-claim provenance field (decision 24)</comment>
+</row>
+<row name="input_record_id" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>preset-mapped human locator back to the source record; LOCATES one record</comment>
+</row>
+<row name="source_record_uid" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>preset-mapped source key (a tool Item ID); GROUPS the rows one record fanned out into. Preset-resolved, so it lives here and not on the preset-free raw_record; NULL = the engine-generated raw_record_id is used. Feeds no digest</comment>
+</row>
+<row name="content_hash" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>digest scoped to the preset's reading of this file; repeats legally, never a key</comment>
+</row>
+<row name="claim_digest" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>file-independent L1-only digest (R5): overlapping disclosures converge here as a finding</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_observation">
+<part>id_raw_record</part>
+<part>id_preset</part>
+<part>output_ordinal</part>
+</key>
+<key type="UNIQUE" name="uq_spatial_owner">
+<part>id_spatial</part>
+</key>
+<key type="UNIQUE" name="uq_temporal_owner">
+<part>id_temporal</part>
+</key>
+<key type="UNIQUE" name="uq_entity_owner">
+<part>id_entity</part>
+</key>
+<key type="INDEX" name="ix_content_hash">
+<part>content_hash</part>
+</key>
+<key type="INDEX" name="ix_claim_digest">
+<part>claim_digest</part>
+</key>
+<comment>linked_entity dropped (decision 17): the attributed party is entity.concerns. UNIQUE(record,preset,ordinal) = the §2a guard + decision 27</comment>
 </table>
-
-<table x="470" y="69" name="Entity">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>occurrence, never merged</comment></row>
-  <row name="identifier" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>NORMALIZED at ingest (E.164, lowercase email, ...); NULL for a purely typed mention ('the device'). Convergence = GROUP BY (identifier_type, identifier)</comment></row>
-  <row name="raw_identifier" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>decision 21: the identifier AS WRITTEN, verbatim - the entity corner's L1 residence on the row itself</comment></row>
-  <row name="identifier_type" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>which normalization: msisdn | imei | email | plate | account | other | none (decision 17)</comment></row>
-  <row name="type" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>what the thing IS: device | person | vehicle | camera | case | ...</comment></row>
-  <row name="concerns" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>the attributed party, fixed at parsing (absorbs linked_entity / decision 12); excluded from both digests</comment></row>
-  <row name="concerns_origin" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>operator_param | preset_mapped - who specified it</comment></row>
-  <row name="concerns_uid" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>decision 22: digest of the case-folded/stemmed concerns ('A. Moreau' / 'moreau a.' group together); derived, never a key, excluded from digests</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <comment>Decision 17: one lean row. Normalization + stemming rule-set versions recorded once per run (matlas_meta)</comment>
+<table x="613" y="1" name="Entity">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>occurrence, never merged</comment>
+</row>
+<row name="identifier" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>NORMALIZED at ingest (E.164, lowercase email, ...); NULL for a purely typed mention ('the device'). Convergence = GROUP BY (identifier_type, identifier)</comment>
+</row>
+<row name="raw_identifier" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>decision 21: the identifier AS WRITTEN, verbatim - the entity corner's L1 residence on the row itself</comment>
+</row>
+<row name="identifier_type" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>which normalization: msisdn | imei | email | plate | account | other | none (decision 17)</comment>
+</row>
+<row name="type" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>what the thing IS: device | person | vehicle | camera | case | ...</comment>
+</row>
+<row name="concerns" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>the attributed party, fixed at parsing (absorbs linked_entity / decision 12); excluded from both digests</comment>
+</row>
+<row name="concerns_origin" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>operator_param | preset_mapped - who specified it</comment>
+</row>
+<row name="concerns_uid" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>decision 22: digest of the case-folded/stemmed concerns ('A. Moreau' / 'moreau a.' group together); derived, never a key, excluded from digests</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<comment>Decision 17: one lean row. Normalization + stemming rule-set versions recorded once per run (matlas_meta)</comment>
 </table>
-
-<table x="710" y="413" name="Activity">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(raw_record_id, activity_ordinal) at ingest; cross-record merging = analysis-time Activity-record link rows</comment></row>
-  <row name="kind" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>call | message | trip | transaction | incident | ...</comment></row>
-  <row name="context_json" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>decision 18: preset-mapped activity context (callee, IMEI, recipients...) - canonical JSON, inside the L1 digest projection, projected to the flat counterpart/facets columns</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <comment>One real-world happening AS ONE RECORD describes it at ingest. A call = 2 observations sharing an activity only when BOTH legs are placed</comment>
+<table x="1045" y="506" name="Activity">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid5(raw_record_id, activity_ordinal) at ingest; cross-record merging = analysis-time Activity-record link rows</comment>
+</row>
+<row name="kind" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>call | message | trip | transaction | incident | ...</comment>
+</row>
+<row name="context_json" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>decision 18: preset-mapped activity context (callee, IMEI, recipients...) - canonical JSON, inside the L1 digest projection, projected to the flat counterpart/facets columns</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<comment>One real-world happening AS ONE RECORD describes it at ingest. A call = 2 observations sharing an activity only when BOTH legs are placed</comment>
 </table>
-
-<table x="879" y="413" name="Activity-record link">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(id_activity, id_raw_record)</comment></row>
-  <row name="id_activity" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Activity" row="id" /></row>
-  <row name="id_raw_record" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Raw Record" row="id" /></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_activity_record"><part>id_activity</part><part>id_raw_record</part></key>
-  <comment>Decision 26: ingest writes EXACTLY ONE row per activity (its own record - the R7 guard as invariant + lint); analysis may attach further records later ('both operators' records describe this call')</comment>
+<table x="1207" y="489" name="Activity-record link">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid5(id_activity, id_raw_record)</comment>
+</row>
+<row name="id_activity" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Activity" row="id" />
+</row>
+<row name="id_raw_record" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Raw Record" row="id" />
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_activity_record">
+<part>id_activity</part>
+<part>id_raw_record</part>
+</key>
+<comment>Decision 26: ingest writes EXACTLY ONE row per activity (its own record - the R7 guard as invariant + lint); analysis may attach further records later ('both operators' records describe this call')</comment>
 </table>
-
-<table x="4" y="248" name="Analysis">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(id_observation, method)</comment></row>
-  <row name="id_observation" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Observation" row="id" /></row>
-  <row name="method" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>algorithm + version - a re-run ADDS rows, never mutates</comment></row>
-  <row name="record_type" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>main | additional (CHECK: RecordType)</comment></row>
-  <row name="record_rank" null="1" autoincrement="0"><datatype>INTEGER</datatype></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_analysis"><part>id_observation</part><part>method</part></key>
-  <comment>Decision 19: THE analysis-layer table - the tool's verdict ABOUT an observation, never inside it. CSV projects the current method's row</comment>
+<table x="388" y="342" name="Analysis">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid5(id_observation, method)</comment>
+</row>
+<row name="id_observation" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Observation" row="id" />
+</row>
+<row name="method" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>algorithm + version - a re-run ADDS rows, never mutates</comment>
+</row>
+<row name="record_rank" null="1" autoincrement="0">
+<datatype>INTEGER</datatype>
+<default>NULL</default></row>
+<row name="record_rank_type" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>main | additional (CHECK: RecordType)</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_analysis">
+<part>id_observation</part>
+<part>method</part>
+</key>
+<comment>Decision 19: THE analysis-layer table - the tool's verdict ABOUT an observation, never inside it. CSV projects the current method's row</comment>
 </table>
-
-<table x="242" y="612" name="Spatial Expression">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="referential" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>encoding / CRS of the raw value: epsg:4326 | geohash | mgrs | address | place_name | cell_ref | asset_ref | region</comment></row>
-  <row name="spatial_source" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>mechanism (the V1 position_source): GNSS | WiFi | cell | fused | ... - symmetric with temporal_source</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <comment>HEADER only (decision 15): the raw values live in Spatial Component rows; spatial_role is per component (decision 25). For detector records the instrument IS this expression (the camera id is its asset_ref component)</comment>
+<table x="325" y="649" name="Spatial Expression">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+</row>
+<row name="referential" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>encoding / CRS of the raw value: epsg:4326 | geohash | mgrs | address | place_name | cell_ref | asset_ref | region</comment>
+</row>
+<row name="spatial_source" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>mechanism (the V1 position_source): GNSS | WiFi | cell | fused | ... - symmetric with temporal_source</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<comment>HEADER only (decision 15): the raw values live in Spatial Component rows. For detector records the instrument IS this expression (the camera id is its asset_ref component)</comment>
 </table>
-
-<table x="235" y="840" name="Spatial Component">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(id_spatial_expression, ordinal)</comment></row>
-  <row name="id_spatial_expression" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Spatial Expression" row="id" /></row>
-  <row name="ordinal" null="0" autoincrement="0"><datatype>INTEGER</datatype></row>
-  <row name="part" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>PRESET field names (decision 23): raw_position | latitude | longitude | altitude_m | horizontal_accuracy_m | vertical_accuracy_m | horizontal_speed_kmh | vertical_speed_kmh | horizontal_speed_accuracy_kmh | vertical_speed_accuracy_kmh | heading_deg | heading_accuracy_deg | beam_azimuth_deg | beam_width_deg | zone | easting | northing. Anything accepted; standard names export-projected</comment></row>
-  <row name="spatial_role" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>decision 25: the value-group's part in the activity: vicinity | entry | exit | origin | destination | waypoint | ...</comment></row>
-  <row name="source_field" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>which source column it came from</comment></row>
-  <row name="raw_value" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>VERBATIM: a geohash = 1 row, lat+lon = 2 rows, DMS = 6 rows</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_spatial_component"><part>id_spatial_expression</part><part>ordinal</part></key>
-  <comment>Decision 15: one row per contributing source field; accuracy/speed get their structured L1 residence here, canonical numbers at L2</comment>
+<table x="320" y="763" name="Spatial Component">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid5(id_spatial_expression, ordinal)</comment>
+</row>
+<row name="id_spatial_expression" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Spatial Expression" row="id" />
+</row>
+<row name="ordinal" null="0" autoincrement="0">
+<datatype>INTEGER</datatype>
+</row>
+<row name="part" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>PRESET field names (decision 23): raw_position | latitude | longitude | altitude_m | horizontal_accuracy_m | vertical_accuracy_m | horizontal_speed_kmh | vertical_speed_kmh | horizontal_speed_accuracy_kmh | vertical_speed_accuracy_kmh | heading_deg | heading_accuracy_deg | beam_azimuth_deg | beam_width_deg | zone | easting | northing. Anything accepted; standard names export-projected</comment>
+</row>
+<row name="source_field" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>which source column it came from - and, since roles were dropped, what tells a reader WHAT this value is (ZENTRYDATE vs ZEXITDATE)</comment>
+</row>
+<row name="raw_value" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>VERBATIM: a geohash = 1 row, lat+lon = 2 rows, DMS = 6 rows</comment>
+</row>
+<row name="unit" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>the source unit the preset declared for THIS value (unit: m/s). Per component, not per run: two presets may declare different units for one part</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_spatial_component">
+<part>id_spatial_expression</part>
+<part>ordinal</part>
+</key>
+<comment>Decision 15: one row per contributing source field; accuracy/speed get their structured L1 residence here, canonical numbers at L2</comment>
 </table>
-
-<table x="708" y="603" name="Temporal Expression">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="kind" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>instant | interval | open bound</comment></row>
-  <row name="referential" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>format / reference system: unix_epoch_s | apple_cfabsolute | iso8601 | excel_serial | local_string | ...</comment></row>
-  <row name="temporal_source" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>clock mechanism: NTP | internal_clock | ...</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <comment>HEADER only (decision 15): the raw values live in Temporal Component rows; temporal_role + stated_offset are per component (decision 25); granularity dropped - fuzziness lives in the raw value + the integration method</comment>
+<table x="860" y="647" name="Temporal Expression">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+</row>
+<row name="kind" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>instant | interval | open bound</comment>
+</row>
+<row name="referential" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>format / reference system: unix_epoch_s | apple_cfabsolute | iso8601 | excel_serial | local_string | ...</comment>
+</row>
+<row name="temporal_source" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>clock mechanism: NTP | internal_clock | ...</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<comment>HEADER only (decision 15): the raw values live in Temporal Component rows; stated_offset is per component; granularity dropped - fuzziness lives in the raw value + the integration method</comment>
 </table>
-
-<table x="950" y="811" name="Temporal Component">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid5(id_temporal_expression, ordinal)</comment></row>
-  <row name="id_temporal_expression" null="0" autoincrement="0"><datatype>TEXT</datatype><relation table="Temporal Expression" row="id" /></row>
-  <row name="ordinal" null="0" autoincrement="0"><datatype>INTEGER</datatype></row>
-  <row name="part" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>PRESET field names (decision 23): lower | upper | duration (+ lower_date/lower_time-style splits). Anything accepted; standard names export-projected</comment></row>
-  <row name="temporal_role" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>decision 25: THIS bound's part in the activity: start | end | booking | check_in | check_out | last_seen | ... (a visit: lower=check_in, upper=check_out)</comment></row>
-  <row name="stated_offset" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>decision 25 + R13: the offset the source stated for THIS bound, verbatim TEXT ('+01:00', 'CEST'); NULL = none stated. Decision 9's dual offsets, per bound</comment></row>
-  <row name="source_field" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="raw_value" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>VERBATIM: date col + time col stay two rows; the integration combines them (datetime_combine method)</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_temporal_component"><part>id_temporal_expression</part><part>ordinal</part></key>
+<table x="861" y="781" name="Temporal Component">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid5(id_temporal_expression, ordinal)</comment>
+</row>
+<row name="id_temporal_expression" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Temporal Expression" row="id" />
+</row>
+<row name="ordinal" null="0" autoincrement="0">
+<datatype>INTEGER</datatype>
+</row>
+<row name="part" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>PRESET field names (decision 23): lower | upper | duration (+ lower_date/lower_time-style splits). Anything accepted; standard names export-projected</comment>
+</row>
+<row name="stated_offset" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>decision 25 + R13: the offset the source stated for THIS bound, verbatim TEXT ('+01:00', 'CEST'); NULL = none stated. Decision 9's dual offsets, per bound</comment>
+</row>
+<row name="source_field" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="raw_value" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>VERBATIM: date col + time col stay two rows; the integration combines them (datetime_combine method)</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_temporal_component">
+<part>id_temporal_expression</part>
+<part>ordinal</part>
+</key>
 </table>
-
-<table x="8" y="662" name="Spatial Integration">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="id_spatial_expression" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>derived FROM; UNIQUE = one integration in v1, plural possible later</comment><relation table="Spatial Expression" row="id" /></row>
-  <row name="latitude_wgs84" null="1" autoincrement="0"><datatype>REAL</datatype></row>
-  <row name="longitude_wgs84" null="1" autoincrement="0"><datatype>REAL</datatype></row>
-  <row name="method" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>geocoder / cell register / passthrough, with version + reference data</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_spatial_integration"><part>id_spatial_expression</part></key>
+<table x="89" y="826" name="Spatial Integration">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+</row>
+<row name="id_spatial_expression" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Spatial Expression" row="id" />
+<comment>derived FROM; UNIQUE = one integration in v1, plural possible later</comment>
+</row>
+<row name="latitude_wgs84" null="1" autoincrement="0">
+<datatype>REAL</datatype>
+<default>NULL</default></row>
+<row name="longitude_wgs84" null="1" autoincrement="0">
+<datatype>REAL</datatype>
+<default>NULL</default></row>
+<row name="method" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>geocoder / cell register / passthrough, with version + reference data</comment>
+</row>
+<row name="referential" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>the expression's encoding/CRS, carried here so the derived block reads whole - one row shows what the coordinates are, how they were derived and what the source stated them in, with no join back to L1</comment>
+</row>
+<row name="spatial_source" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>the expression's mechanism (GNSS | WiFi | cell | ...), carried here for the same reason. Written once by the integration pass, straight from the expression, so the copy cannot drift</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_spatial_integration">
+<part>id_spatial_expression</part>
+</key>
 </table>
-
-<table x="1017" y="570" name="Timespan Integration">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="id_temporal_expression" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>derived FROM; UNIQUE = one integration in v1</comment><relation table="Temporal Expression" row="id" /></row>
-  <row name="lower_unix_utc_us" null="1" autoincrement="0"><datatype>INTEGER</datatype><comment>canonical UTC microseconds</comment></row>
-  <row name="upper_unix_utc_us" null="1" autoincrement="0"><datatype>INTEGER</datatype></row>
-  <row name="lower_datetime_iso" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>decision 32: ONE offset-tagged LOCAL ISO string (2026-03-14T02:20:31.000000+01:00); trailing ' N/A' when zone unknown; empty when no instant</comment></row>
-  <row name="upper_datetime_iso" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="lower_date" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>local date (decision 32)</comment></row>
-  <row name="upper_date" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="lower_time" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>local time-of-day, microseconds (decision 32)</comment></row>
-  <row name="upper_time" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="utc_offset_hours_lower" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>the APPLIED offset: float, 'N/A' assumed-UTC sentinel, or NULL</comment></row>
-  <row name="utc_offset_hours_upper" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>applied to the upper bound; may differ across DST</comment></row>
-  <row name="lower_accuracy_us" null="1" autoincrement="0"><datatype>INTEGER</datatype><comment>per-bound timing uncertainty (µs): source-stated or the Method's claim</comment></row>
-  <row name="upper_accuracy_us" null="1" autoincrement="0"><datatype>INTEGER</datatype><comment>applied to the upper bound; independent of the lower</comment></row>
-  <row name="method" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>tz rule / epoch decode / assumed-UTC, with version</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_timespan_integration"><part>id_temporal_expression</part></key>
+<table x="1194" y="918" name="Timespan Integration">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+</row>
+<row name="id_temporal_expression" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Temporal Expression" row="id" />
+<comment>derived FROM; UNIQUE = one integration in v1</comment>
+</row>
+<row name="lower_unix_utc_us" null="1" autoincrement="0">
+<datatype>INTEGER</datatype>
+<default>NULL</default><comment>canonical UTC microseconds</comment>
+</row>
+<row name="upper_unix_utc_us" null="1" autoincrement="0">
+<datatype>INTEGER</datatype>
+<default>NULL</default></row>
+<row name="lower_datetime_iso" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>decision 32: ONE offset-tagged LOCAL ISO string (2026-03-14T02:20:31.000000+01:00); trailing ' N/A' when zone unknown; empty when no instant</comment>
+</row>
+<row name="upper_datetime_iso" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="lower_date" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>local date (decision 32)</comment>
+</row>
+<row name="upper_date" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="lower_time" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>local time-of-day, microseconds (decision 32)</comment>
+</row>
+<row name="upper_time" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="utc_offset_hours_lower" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>the APPLIED offset: float, 'N/A' assumed-UTC sentinel, or NULL</comment>
+</row>
+<row name="utc_offset_hours_upper" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>applied to the upper bound; may differ across DST</comment>
+</row>
+<row name="lower_accuracy_us" null="1" autoincrement="0">
+<datatype>INTEGER</datatype>
+<default>NULL</default><comment>per-bound timing uncertainty (µs): source-stated or the Method's claim</comment>
+</row>
+<row name="upper_accuracy_us" null="1" autoincrement="0">
+<datatype>INTEGER</datatype>
+<default>NULL</default><comment>applied to the upper bound; independent of the lower</comment>
+</row>
+<row name="method" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>tz rule / epoch decode / assumed-UTC, with version</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_timespan_integration">
+<part>id_temporal_expression</part>
+</key>
 </table>
-
-<table x="8" y="860" name="Spatial Index">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="id_spatial_integration" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>1:1 with the point; UNIQUE</comment><relation table="Spatial Integration" row="id" /></row>
-  <row name="s2_cell_id" null="0" autoincrement="0"><datatype>INTEGER</datatype><comment>decision 31: signed-int64 LEAF S2 cell, NON-unique (many points per cell), INDEXED. Hierarchy implicit in the id -> range scans; built with s2sphere</comment></row>
-  <row name="s2_level" null="1" autoincrement="0"><datatype>INTEGER</datatype></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <key type="UNIQUE" name="uq_spatial_index"><part>id_spatial_integration</part></key>
-  <key type="INDEX" name="ix_s2_cell"><part>s2_cell_id</part></key>
+<table x="88" y="1024" name="Spatial Index">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+</row>
+<row name="id_spatial_integration" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<relation table="Spatial Integration" row="id" />
+<comment>1:1 with the point; UNIQUE</comment>
+</row>
+<row name="s2_cell_id" null="0" autoincrement="0">
+<datatype>INTEGER</datatype>
+<comment>decision 31: signed-int64 LEAF S2 cell, NON-unique (many points per cell), INDEXED. Hierarchy implicit in the id -&gt; range scans; built with s2sphere</comment>
+</row>
+<row name="s2_level" null="1" autoincrement="0">
+<datatype>INTEGER</datatype>
+<default>NULL</default></row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<key type="UNIQUE" name="uq_spatial_index">
+<part>id_spatial_integration</part>
+</key>
+<key type="INDEX" name="ix_s2_cell">
+<part>s2_cell_id</part>
+</key>
 </table>
-
-<table x="240" y="20" name="Edit log">
-  <row name="id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>uuid4 - an audit event (decision 34)</comment></row>
-  <row name="ordinal" null="0" autoincrement="0"><datatype>INTEGER</datatype><comment>decision 41: monotonic UNIQUE journal position - inverse replay in reverse order = full rewind; a rewind appends inverse entries, never erases</comment></row>
-  <row name="table_name" null="0" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="row_id" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>the edited row's id (soft reference across tables)</comment></row>
-  <row name="column" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="old_value" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="new_value" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="edit_kind" null="0" autoincrement="0"><datatype>TEXT</datatype><comment>update | new_row | empty_row - evidence rows only new_row/empty_row (decision 34)</comment></row>
-  <row name="edited_by" null="1" autoincrement="0"><datatype>TEXT</datatype></row>
-  <row name="edited_at" null="1" autoincrement="0"><datatype>TEXT</datatype><comment>ISO-8601 UTC</comment></row>
-  <key type="PRIMARY" name=""><part>id</part></key>
-  <comment>Decision 34: manual-edit audit for the edit panel; L0/L1 evidence never updated in place (new-row only); integration/analysis mutable in place</comment>
+<table x="34" y="311" name="Edit log">
+<row name="id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>uuid4 - an audit event (decision 34)</comment>
+</row>
+<row name="ordinal" null="0" autoincrement="0">
+<datatype>INTEGER</datatype>
+<comment>decision 41: monotonic UNIQUE journal position - inverse replay in reverse order = full rewind; a rewind appends inverse entries, never erases</comment>
+</row>
+<row name="table_name" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+</row>
+<row name="row_id" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>the edited row's id (soft reference across tables)</comment>
+</row>
+<row name="column" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="old_value" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="new_value" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="edit_kind" null="0" autoincrement="0">
+<datatype>TEXT</datatype>
+<comment>update | new_row | empty_row - evidence rows only new_row/empty_row (decision 34)</comment>
+</row>
+<row name="edited_by" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default></row>
+<row name="edited_at" null="1" autoincrement="0">
+<datatype>TEXT</datatype>
+<default>NULL</default><comment>ISO-8601 UTC</comment>
+</row>
+<key type="PRIMARY" name="">
+<part>id</part>
+</key>
+<comment>Decision 34: manual-edit audit for the edit panel; L0/L1 evidence never updated in place (new-row only); integration/analysis mutable in place</comment>
 </table>
 </sql>

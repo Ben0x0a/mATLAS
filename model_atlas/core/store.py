@@ -130,7 +130,7 @@ def _bind(value: Any) -> Any:
     token the schema's CHECK constraints and the demo store — everything else (str, int,
     float, None) binds unchanged. WHY normalise here rather than trust str-Enum's str
     identity: it keeps the STORED form the bare vocabulary token in one place, so a future
-    non-str Enum could not silently store a ``repr`` like ``"EntityRole.CALLER"``.
+    non-str Enum could not silently store a ``repr`` like ``"ActivityRole.CALLER"``.
     """
     if isinstance(value, Enum):
         return value.value

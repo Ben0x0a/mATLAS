@@ -3,11 +3,12 @@
 Defines:    ``verbalize(row) -> str`` — renders one flat-view row (the flat-view
             column contract) as a single sentence assembled from the ``phrase``
             fragments declared in ``model_atlas.core.vocabularies``. The owner's
-            target shape (run_db_schema.md): *"Entity <identifier>
-            (referring <concerns>) was <entity_position_link phrase> at <place>
-            <spatial_temporal_link phrase> and <entity_time_link phrase> from
-            <lower> to <upper>"* — or *"at <instant>"* when the timespan is an
-            instant.
+            target shape, one clause per corner plus the attribution: *"The device
+            <identifier> (referring <concerns>; the caller) <entity_link phrase>
+            <bearer>, <spatial_link phrase> <place>, <occupancy phrase> <timespan>,
+            <attestation phrase>."* — e.g. *"The device +41791234567 (the caller) was
+            served by 228-01-2042-77341, near 46.205, 6.138, continuously during the
+            interval from A to B, as recorded by a system."*
 Used by:    consumers wired later (the bonus CSV column, the GUI
             panels — one function, called everywhere); tests.core.test_verbalize.
 Depends on: ``model_atlas.core.vocabularies`` (the ``phrase`` fragments — declared
@@ -28,11 +29,13 @@ where the code enforces them):
   <upper>". Each bound prefers the integrated offset-tagged ISO string (its
   ``N/A`` assumed-UTC sentinel stays visible), then the verbatim
   raw, then the canonical epoch microseconds.
-- **Negation reads as negation**: the fragments already encode it
-  (``never_during_interval`` -> "was never present during"); the assembler never
-  softens a phrase. ``references`` -> "referred to" (never presence);
-  ``claimed_at`` -> "was claimed to be at" (a claim); ``unknown`` members carry
-  their own honest fragments.
+- **Negation reads as negation**: the fragments encode it (``absent`` -> "not at"),
+  and the assembler never softens a phrase. ``references`` -> "referring to" (never
+  presence); ``unknown`` members carry their own honest fragments rather than being
+  omitted, so an undetermined relation is SAID rather than silently reading as presence.
+- **Attribution never becomes weight**: the trailing ``attestation`` clause names the KIND
+  of party that asserts ("as stated by a person"), never how much the claim is worth —
+  that is a court question the model does not answer.
 - **No invented facts**: an empty spatial corner is SAID ("with no recorded
   position"), an empty temporal corner likewise ("with no recorded time"); the
   ``(referring <concerns>)`` clause is omitted when concerns is NULL; a purely
@@ -40,12 +43,11 @@ where the code enforces them):
 - **Deterministic**: a pure function of the row's values — the same row always
   yields the same sentence, byte for byte.
 
-Sentence shape (why the commas around ``and <entity_time_link phrase>``): the
-owner's template chains the S-T fragment ("continuously during") and the E-T
-fragment ("acted at") in front of ONE shared timespan. Setting the two fragments
-off with commas makes that shared-object reading explicit — *"was within range of
-<place> continuously during, and acted at, the interval from <lower> to
-<upper>"* — so every fragment lands verbatim and the sentence stays parseable.
+Sentence shape (why the spatial fragment carries no verb): ``spatial_link``'s fragments are
+BARE relational phrases ("at", "near", "not at"). When a bearer is named the entity-link
+clause supplies the verb ("was served by <bearer>, near <place>"); when the entity holds its
+own position there is no bearer clause and the sentence supplies it ("was at <place>"). A
+fragment carrying its own verb would produce "was served by X, was near Y".
 """
 from __future__ import annotations
 
@@ -117,9 +119,9 @@ def _subject(row: Mapping[str, Any] | pd.Series) -> str:
     concerns = _cell(row, "concerns")
     if concerns is not None:
         qualifiers.append(f"referring {concerns}")
-    role = _cell(row, "entity_role")
+    role = _cell(row, "activity_role")
     if role is not None:
-        qualifiers.append(V.EntityRole(role).phrase)
+        qualifiers.append(V.ActivityRole(role).phrase)
     if qualifiers:
         head += " (" + "; ".join(qualifiers) + ")"
     return head
@@ -198,48 +200,57 @@ def verbalize(row: Mapping[str, Any] | pd.Series) -> str:
     subject = _subject(row)
     place = _place(row)
     timespan = _timespan(row)
-    position_phrase = _link_phrase(row, "entity_position_link", V.EntityPositionLink)
-    time_phrase = _link_phrase(row, "entity_time_link", V.EntityTimeLink)
-    spatial_temporal_phrase = _link_phrase(
-        row, "spatial_temporal_link", V.SpatialTemporalLink)
+    entity_phrase = _link_phrase(row, "entity_link", V.EntityLink)
+    spatial_phrase = _link_phrase(row, "spatial_link", V.SpatialLink)
+    occupancy_phrase = _link_phrase(row, "occupancy", V.Occupancy)
+    attestation_phrase = _link_phrase(row, "attestation", V.Attestation)
+
+    # The bearer clause: "was served by <bearer>". Rendered only when a bearer is actually
+    # named AND the verb is not `self` — for `self` the entity holds its own position, so
+    # there is no second party and the spatial fragment carries the verb instead.
+    bearer = _cell(row, "bearer_entity") or _cell(row, "bearer_raw_identifier")
+    bearer_clause: str | None = None
+    if (bearer is not None and entity_phrase is not None
+            and _cell(row, "entity_link") != V.EntityLink.SELF.value):
+        bearer_clause = f"{entity_phrase} {bearer}"
+
+    # The trailing attribution. Self-contained by construction ("as recorded by a system"),
+    # because no column carries the attestor's identity — the model records the KIND of party
+    # that asserts, never who they are and never what the claim is worth.
+    tail_attribution = f", {attestation_phrase}" if attestation_phrase is not None else ""
 
     # Both corners empty: the sentence still exists and SAYS both absences.
     if place is None and timespan is None:
-        return f"{subject}, {NO_POSITION_WORDING} and {NO_TIME_WORDING}."
+        head = f"{subject} {bearer_clause}" if bearer_clause else subject
+        return f"{head}, {NO_POSITION_WORDING} and {NO_TIME_WORDING}{tail_attribution}."
 
-    # No place: the E-S and S-T fragments describe a position that is not there,
-    # so only the said absence and the temporal predicate render (never invented).
+    # No place: the spatial fragment describes a position that is not there, so only the
+    # said absence and the timespan render (never an invented position).
     if place is None:
         body, is_instant = timespan
-        if time_phrase is not None:
-            # The E-T fragments end in their own preposition ("was observed at",
-            # "was never present during"), so the timespan body follows directly.
-            tail = f"{time_phrase} {body}"
-        elif is_instant:
-            tail = f"{V.TemporalKind.INSTANT.phrase} {body}"
-        else:
-            tail = f"during {body}"
-        return f"{subject}, {NO_POSITION_WORDING}, {tail}."
+        head = f"{subject} {bearer_clause}" if bearer_clause else subject
+        connector = occupancy_phrase or (V.TemporalKind.INSTANT.phrase if is_instant
+                                         else "during")
+        return (f"{head}, {NO_POSITION_WORDING}, {connector} "
+                f"{body}{tail_attribution}.")
 
-    spatial = (f"{position_phrase} {place}" if position_phrase is not None
-               else f"{_UNLINKED_POSITION_WORDING} {place}")
+    # The spatial fragment is BARE ("at", "near", "not at"), so the verb comes from the
+    # bearer clause when there is one and from the sentence otherwise.
+    if spatial_phrase is None:
+        spatial = f"{_UNLINKED_POSITION_WORDING} {place}"
+    elif bearer_clause is not None:
+        spatial = f"{bearer_clause}, {spatial_phrase} {place}"
+    else:
+        spatial = f"was {spatial_phrase} {place}"
 
-    # No timespan: the S-T fragment relates the place to an interval that is not
-    # there, and the E-T fragments dangle without a time object — both drop; the
-    # absence is said instead.
+    # No timespan: the occupancy fragment quantifies an interval that is not there, so it
+    # drops; the absence is said instead.
     if timespan is None:
-        return f"{subject} {spatial}, {NO_TIME_WORDING}."
+        return f"{subject} {spatial}, {NO_TIME_WORDING}{tail_attribution}."
 
     body, is_instant = timespan
-    if time_phrase is not None:
-        # The owner's template chains "<st phrase> and <et phrase>" before ONE
-        # shared timespan; the commas make that shared-object reading explicit
-        # ("continuously during, and acted at, the interval from A to B").
-        st_part = f" {spatial_temporal_phrase}" if spatial_temporal_phrase else ""
-        return f"{subject} {spatial}{st_part}, and {time_phrase}, {body}."
-    if spatial_temporal_phrase is not None:
-        # No E-T link: the S-T fragment alone introduces the timespan ("at T",
-        # "continuously during the interval from A to B").
-        return f"{subject} {spatial} {spatial_temporal_phrase} {body}."
-    connector = V.TemporalKind.INSTANT.phrase if is_instant else "during"
-    return f"{subject} {spatial} {connector} {body}."
+    # Occupancy fragments end in their own preposition ("continuously during"), so the
+    # timespan body follows directly. Without one, an instant reads "at T" and an interval
+    # "during the interval from A to B".
+    connector = occupancy_phrase or (V.TemporalKind.INSTANT.phrase if is_instant else "during")
+    return f"{subject} {spatial}, {connector} {body}{tail_attribution}."

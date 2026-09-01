@@ -78,8 +78,8 @@ def _add_point(store: RunStore, line_no: int, source_id: str, preset_id: str,
         output_ordinal=0, entity_id=entity_id,
         content_hash=f"ch-{line_no}", claim_digest=f"cd-{line_no}",
         spatial_expression_id=sx_id, temporal_expression_id=tx_id,
-        entity_role="subject", entity_position_link="at",
-        entity_time_link="observed_at", spatial_temporal_link="instant",
+        activity_role="unknown", spatial_link="at",
+        entity_link="self", occupancy="once",
         source_label=f"src-{line_no}"))
     return observation_id
 

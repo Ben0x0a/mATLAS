@@ -105,7 +105,7 @@ def _txt(part: object) -> str:
     """Render one id/digest part as a stable, SEP-safe token.
 
     HOW: an Enum becomes its ``.value`` (the bare stored token — ``str(member)`` would
-    yield e.g. ``"EntityRole.CALLER"`` on this Python, which the demo never stored), a
+    yield e.g. ``"ActivityRole.CALLER"`` on this Python, which the demo never stored), a
     ``None`` becomes the empty string, everything else its ``str()``; then the two reserved
     control bytes are escaped — ``_ESC``→``_ESC _ESC`` FIRST, then ``SEP``→``_ESC SEP`` —
     so the rendered token can never contain a bare ``SEP``.
@@ -212,13 +212,19 @@ def observation_id(raw_record_id_: str, preset_key: str, output_ordinal: int) ->
 
 
 def entity_id(observation_natural_key: tuple[object, ...]) -> str:
-    """entity: uuid5(observation natural key ⟂ corner tag).
+    """entity: uuid5(observation natural key ⟂ role tag).
 
     The corner tag is the ``entity`` namespace itself (id_for prepends it), so the id is
     ``uuid5(entity ⟂ <observation natural key parts>)``. The observation natural key is
     passed as a tuple of its parts (raw_record_id, output_ordinal, and any further
-    per-corner discriminator the assembler uses) — the assembler owns that shape; this
-    helper only fixes the corner tag."""
+    discriminator the assembler uses) — the assembler owns that shape; this helper only
+    fixes the corner tag.
+
+    An observation now owns TWO entity rows, so the caller MUST append a role part —
+    ``"targeted"`` or ``"bearer"`` — as the last element of the natural key. Without it the
+    two rows of one observation would derive the same uuid5 and collide on the primary key.
+    Both remain per-observation OCCURRENCE rows: no content key, no sharing, no merge, and
+    convergence stays ``GROUP BY (identifier_type, identifier)``."""
     return id_for(ENTITY_NAME, *observation_natural_key)
 
 
@@ -312,7 +318,12 @@ def source_order_json(obj: object) -> str:
 
 @dataclass(frozen=True)
 class SpatialComponentProjection:
-    """One spatial component AS IT ENTERS THE DIGEST: part ⟂ spatial_role ⟂ raw_value.
+    """One spatial component AS IT ENTERS THE DIGEST: part ⟂ unit ⟂ raw_value.
+
+    ``unit`` replaces the former ``spatial_role`` slot. WHY it belongs in the digest: the
+    unit is what makes a raw value mean something — "12.5" is a different speed in m/s and
+    in km/h — so two presets declaring different units for one source value are stating
+    DIFFERENT claims and must not converge on one ``claim_digest``.
 
     ``source_field`` is deliberately ABSENT — a renamed source column must not move a
     digest (normative exclusion). Components are hashed in ``ordinal`` order, so the
@@ -320,31 +331,34 @@ class SpatialComponentProjection:
     """
 
     part: str
-    spatial_role: object | None = None   # SpatialRole enum or its str value, or None
+    unit: str | None = None              # the preset-declared source unit, or None
     raw_value: str | None = None
 
 
 @dataclass(frozen=True)
 class TemporalComponentProjection:
     """One temporal component AS IT ENTERS THE DIGEST:
-    part ⟂ temporal_role ⟂ stated_offset ⟂ raw_value.
+    part ⟂ stated_offset ⟂ raw_value.
 
     ``source_field`` is deliberately ABSENT (normative exclusion). ``stated_offset`` is
     the source's own per-bound offset text, verbatim.
     """
 
     part: str
-    temporal_role: object | None = None   # TemporalRole enum or its str value, or None
     stated_offset: str | None = None
     raw_value: str | None = None
 
 
 @dataclass(frozen=True)
 class EntityProjection:
-    """The entity corner AS IT ENTERS THE DIGEST: identifier ⟂ identifier_type ⟂ type.
+    """One entity row AS IT ENTERS THE DIGEST: identifier ⟂ identifier_type ⟂ type.
 
-    (``entity_role`` is carried on ``ObservationLinks`` — the doc lists it inside the
-    entity block, but it is an observation column; the projection order is preserved by
+    Used for BOTH entity rows an observation owns — the targeted entity and the position
+    bearer — since the digest reads the same three fields from each.
+
+    (``activity_role`` is carried on ``ObservationLinks`` — the doc lists it inside the
+    targeted-entity block, but it is an observation column, and it belongs to the targeted
+    entity alone: a bearer has no part in the activity. The projection order is preserved by
     ``l1_projection`` regardless of which dataclass holds it.) ``concerns`` /
     ``concerns_uid`` / ``raw_identifier`` are deliberately ABSENT (normative exclusions).
     """
@@ -357,7 +371,7 @@ class EntityProjection:
 @dataclass(frozen=True)
 class SpatialProjection:
     """The spatial expression AS IT ENTERS THE DIGEST: referential ⟂ spatial_source ⟂
-    components (each part ⟂ spatial_role ⟂ raw_value, in ordinal order)."""
+    components (each part ⟂ unit ⟂ raw_value, in ordinal order)."""
 
     referential: object                # SpatialReferential enum or its str value
     spatial_source: str | None = None
@@ -368,7 +382,7 @@ class SpatialProjection:
 @dataclass(frozen=True)
 class TemporalProjection:
     """The temporal expression AS IT ENTERS THE DIGEST: kind ⟂ referential ⟂ components
-    (each part ⟂ temporal_role ⟂ stated_offset ⟂ raw_value, in ordinal order)."""
+    (each part ⟂ stated_offset ⟂ raw_value, in ordinal order)."""
 
     kind: object                       # TemporalKind enum or its str value
     referential: object | None = None  # TemporalReferential enum, its str value, or None
@@ -377,16 +391,22 @@ class TemporalProjection:
 
 @dataclass(frozen=True)
 class ObservationLinks:
-    """The four-way triptych columns on the observation, AS THEY ENTER THE DIGEST.
+    """The three corner links + attestation, AS THEY ENTER THE DIGEST.
 
-    The doc's projection order is: entity_role (with the entity block), then the three
-    remaining links after the temporal block. ``l1_projection`` places each correctly.
+    Projection order: ``activity_role`` sits with the targeted-entity block; the three links
+    and ``attestation`` follow the temporal block. ``l1_projection`` places each correctly.
+
+    ``recorded_at`` is deliberately ABSENT: it says when the RECORD was written, not what the
+    record claims, so it is provenance — like paths and source attributes — and a re-export
+    with a new write time must not move a claim's identity. ``attestation`` IS present: it is
+    preset-mapped and part of what is being claimed.
     """
 
-    entity_role: object | None = None            # EntityRole enum or str value
-    entity_position_link: object | None = None   # EntityPositionLink enum or str value
-    entity_time_link: object | None = None       # EntityTimeLink enum or str value
-    spatial_temporal_link: object | None = None  # SpatialTemporalLink enum or str value
+    activity_role: object | None = None   # ActivityRole enum or str value
+    entity_link: object | None = None     # EntityLink enum or str value
+    spatial_link: object | None = None    # SpatialLink enum or str value
+    occupancy: object | None = None       # Occupancy enum or str value
+    attestation: object | None = None     # Attestation enum or str value
 
 
 @dataclass(frozen=True)
@@ -409,6 +429,7 @@ class ActivityProjection:
 def l1_projection(
     *,
     entity: EntityProjection,
+    bearer: EntityProjection | None,
     spatial: SpatialProjection | None,
     temporal: TemporalProjection | None,
     links: ObservationLinks,
@@ -420,24 +441,30 @@ def l1_projection(
     L1 projection"), in the EXACT field order, joined with the unit separator.
 
     Order (verbatim from the doc):
-      entity (identifier ⟂ identifier_type ⟂ type ⟂ entity_role)
+      targeted entity (identifier ⟂ identifier_type ⟂ type ⟂ activity_role)
+      ⟂ bearer (presence ⟂ [identifier ⟂ identifier_type ⟂ type])
       ⟂ spatial expression (presence ⟂ [referential ⟂ spatial_source ⟂ count ⟂
-        components by ordinal, each part ⟂ spatial_role ⟂ raw_value])
+        components by ordinal, each part ⟂ unit ⟂ raw_value])
       ⟂ temporal expression (presence ⟂ [kind ⟂ referential ⟂ count ⟂ components by
-        ordinal, each part ⟂ temporal_role ⟂ stated_offset ⟂ raw_value])
-      ⟂ the three links ⟂ deleted ⟂ multiplicity
+        ordinal, each part ⟂ stated_offset ⟂ raw_value])
+      ⟂ entity_link ⟂ spatial_link ⟂ occupancy ⟂ attestation ⟂ deleted ⟂ multiplicity
       ⟂ activity (presence ⟂ [kind ⟂ canonical context_json])
 
     WHY this framing makes the projection INJECTIVE (no two structurally-different claims
     share an L1 string). Two properties combine:
       1. ``_txt`` escapes ``SEP``, so a bare ``SEP`` is ALWAYS a delimiter — the token
          list is uniquely recoverable from the joined string, never smuggled by a value.
-      2. Every variable-length section is FRAMED. The entity block is a fixed 4 slots and
-         the links+flags block a fixed 5, so their boundaries are positional. Each
+      2. Every variable-length section is FRAMED. The targeted-entity block is a fixed 4
+         slots and the links+flags block a fixed 6, so their boundaries are positional. The
+         BEARER is optional and therefore leads with a presence flag — at most one bearer
+         exists, so a flag suffices and no component-style count is needed; without the flag
+         an absent bearer would render identically to a present one whose three fields are
+         all empty, and two structurally different claims would hash equal. Each
          optional corner leads with a presence flag (``_CORNER_PRESENT``/``_CORNER_ABSENT``)
          at a determined position; a PRESENT spatial/temporal corner then carries an
          explicit component COUNT before its rows, pinning exactly how many
-         3-slot (spatial) / 4-slot (temporal) rows follow — so the next corner's flag
+         3-slot rows follow (spatial: part ⟂ unit ⟂ raw_value; temporal: part ⟂
+         stated_offset ⟂ raw_value) — so the next corner's flag
          position is unambiguous. Hence the token list partitions back into a unique
          structured claim.
     Before this framing, an unframed component could be shifted across the spatial/
@@ -455,13 +482,26 @@ def l1_projection(
     """
     parts: list[str] = []
 
-    # entity corner: identifier ⟂ identifier_type ⟂ type ⟂ entity_role (always 4 slots).
+    # targeted entity: identifier ⟂ identifier_type ⟂ type ⟂ activity_role (always 4 slots).
     parts += [
         _txt(entity.identifier),
         _txt(entity.identifier_type),
         _txt(entity.type),
-        _txt(links.entity_role),
+        _txt(links.activity_role),
     ]
+
+    # bearer: presence ⟂ [identifier ⟂ identifier_type ⟂ type]. Absent whenever the entity
+    # holds its own position (entity_link is `self`), so the flag carries real information
+    # and must be emitted even though the block is only three slots wide.
+    if bearer is None:
+        parts += [_CORNER_ABSENT]
+    else:
+        parts += [
+            _CORNER_PRESENT,
+            _txt(bearer.identifier),
+            _txt(bearer.identifier_type),
+            _txt(bearer.type),
+        ]
 
     # spatial expression: presence ⟂ [referential ⟂ spatial_source ⟂ count ⟂ rows].
     if spatial is None:
@@ -475,7 +515,7 @@ def l1_projection(
             str(len(spatial.components)),
         ]
         for c in spatial.components:   # supplied already in ordinal order
-            parts += [_txt(c.part), _txt(c.spatial_role), _txt(c.raw_value)]
+            parts += [_txt(c.part), _txt(c.unit), _txt(c.raw_value)]
 
     # temporal expression: presence ⟂ [kind ⟂ referential ⟂ count ⟂ rows].
     if temporal is None:
@@ -490,16 +530,16 @@ def l1_projection(
         for c in temporal.components:
             parts += [
                 _txt(c.part),
-                _txt(c.temporal_role),
                 _txt(c.stated_offset),
                 _txt(c.raw_value),
             ]
 
-    # the three links ⟂ deleted ⟂ multiplicity (always 5 slots).
+    # the three corner links ⟂ attestation ⟂ deleted ⟂ multiplicity (always 6 slots).
     parts += [
-        _txt(links.entity_position_link),
-        _txt(links.entity_time_link),
-        _txt(links.spatial_temporal_link),
+        _txt(links.entity_link),
+        _txt(links.spatial_link),
+        _txt(links.occupancy),
+        _txt(links.attestation),
         _txt(deleted),
         _txt(multiplicity),
     ]

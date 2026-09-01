@@ -2,7 +2,7 @@
 
 Defines:    ``analyse`` — reads every observation joined to its entity and its L2
             integrations, applies the UNCHANGED untangle grouping/ranking semantics
-            (``record_type`` main/additional + ``record_rank`` within same-second time
+            (``record_rank_type`` main/additional + ``record_rank`` within same-second time
             groups, ranked by horizontal accuracy then completeness) and writes one
             method-stamped ``analysis`` row per observation — plus ``METHOD_NAME`` /
             ``UNTANGLE_VERSION`` / ``DEFAULT_RESOLUTION_US``.
@@ -88,7 +88,7 @@ _ENTITY = "entity"
 _LOWER_FIELD = "time_lower_source_field"
 _UPPER_FIELD = "time_upper_source_field"
 _HACC = "horizontal_accuracy_m"
-_RECORD_TYPE = "record_type"
+_RECORD_TYPE = "record_rank_type"
 _RECORD_RANK = "record_rank"
 
 # Acquisition tools round timestamps to the second; group at that resolution (1e6 us).
@@ -101,7 +101,7 @@ _COMPLETENESS_COLUMNS: tuple[str, ...] = (
     "latitude_wgs84", "longitude_wgs84", "altitude_m", "raw_position", "position_source",
     "horizontal_accuracy_m", "vertical_accuracy_m", "horizontal_speed_kmh",
     "vertical_speed_kmh", "heading_deg", "heading_accuracy_deg", "beam_azimuth_deg",
-    "beam_width_deg", "entity_position_link", "entity_time_link", "spatial_temporal_link",
+    "beam_width_deg", "entity_link", "spatial_link", "occupancy", "attestation",
 )
 
 # --- the store read: reassemble the old flat columns from their settled homes
@@ -142,9 +142,10 @@ _OBSERVATION_FRAME_SELECT: tuple[tuple[str, str], ...] = (
     ("heading_accuracy_deg", "si.heading_accuracy_deg"),
     ("beam_azimuth_deg", "si.beam_azimuth_deg"),
     ("beam_width_deg", "si.beam_width_deg"),
-    ("entity_position_link", "a.entity_position_link"),
-    ("entity_time_link", "a.entity_time_link"),
-    ("spatial_temporal_link", "a.spatial_temporal_link"),
+    ("entity_link", "a.entity_link"),
+    ("spatial_link", "a.spatial_link"),
+    ("occupancy", "a.occupancy"),
+    ("attestation", "a.attestation"),
 )
 
 # LEFT JOINs: a corner-less observation keeps its row (it simply ranks ineligible —
@@ -254,7 +255,7 @@ def analyse(store: RunStore, *, version: str = UNTANGLE_VERSION,
 
     HOW: reassemble the old flat frame from the relational store (one row per
     observation, ingest order), run the unchanged ranking, then write
-    ``(observation_id, untangle/<version>, record_type, record_rank)`` rows through
+    ``(observation_id, untangle/<version>, record_rank, record_rank_type)`` rows through
     the L3 writer. Returns the number of rows written (== the observation count).
     Normally a re-run with a changed ranker ADDS a new method generation beside the
     old one; re-running the SAME version hits ``UNIQUE(observation_id,
@@ -272,7 +273,7 @@ def analyse(store: RunStore, *, version: str = UNTANGLE_VERSION,
     frame = _rank(_load_frame(store.connection), resolution_us=resolution_us)
     written = 0
     ranked = 0
-    for observation_id, record_type, record_rank in frame[
+    for observation_id, record_rank_type, record_rank in frame[
             ["observation_id", _RECORD_TYPE, _RECORD_RANK]].itertuples(index=False):
         # pandas NA -> SQL NULL: an unranked observation keeps its verdict row with a
         # NULL verdict ("examined, no duplicate group"), never a fabricated rank.
@@ -281,7 +282,7 @@ def analyse(store: RunStore, *, version: str = UNTANGLE_VERSION,
             analysis_id=ids.analysis_id(observation_id, method),
             observation_id=observation_id,
             method=method,
-            record_type=None if pd.isna(record_type) else str(record_type),
+            record_rank_type=None if pd.isna(record_rank_type) else str(record_rank_type),
             record_rank=rank_value,
         ))
         written += 1

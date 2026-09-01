@@ -10,7 +10,8 @@ CREATE TABLE case_metadata (
     case_number TEXT NOT NULL,
     title TEXT,
     description TEXT,
-    created_at TEXT
+    created_at TEXT,
+    created_by TEXT
 );
 
 CREATE TABLE run (
@@ -125,9 +126,9 @@ CREATE TABLE spatial_component (
     spatial_expression_id TEXT NOT NULL REFERENCES spatial_expression(spatial_expression_id),
     ordinal INTEGER NOT NULL,
     part TEXT NOT NULL,
-    spatial_role TEXT CHECK (spatial_role IN ('vicinity', 'entry', 'exit', 'origin', 'destination', 'waypoint', 'unknown') OR spatial_role IS NULL),
     source_field TEXT,
     raw_value TEXT,
+    unit TEXT,
     UNIQUE (spatial_expression_id, ordinal)
 );
 
@@ -143,7 +144,6 @@ CREATE TABLE temporal_component (
     temporal_expression_id TEXT NOT NULL REFERENCES temporal_expression(temporal_expression_id),
     ordinal INTEGER NOT NULL,
     part TEXT NOT NULL,
-    temporal_role TEXT CHECK (temporal_role IN ('start', 'end', 'booking', 'check_in', 'check_out', 'last_seen', 'unknown') OR temporal_role IS NULL),
     stated_offset TEXT,
     source_field TEXT,
     raw_value TEXT,
@@ -158,14 +158,17 @@ CREATE TABLE observation (
     entity_id TEXT NOT NULL UNIQUE REFERENCES entity(entity_id),
     content_hash TEXT NOT NULL,
     claim_digest TEXT NOT NULL,
+    bearer_entity_id TEXT UNIQUE REFERENCES entity(entity_id),
     entity_origin TEXT CHECK (entity_origin IN ('preset_mapped', 'operator_param') OR entity_origin IS NULL),
     activity_id TEXT REFERENCES activity(activity_id),
     spatial_expression_id TEXT UNIQUE REFERENCES spatial_expression(spatial_expression_id),
     temporal_expression_id TEXT UNIQUE REFERENCES temporal_expression(temporal_expression_id),
-    entity_role TEXT CHECK (entity_role IN ('subject', 'caller', 'callee', 'sender', 'recipient', 'reporter', 'owner', 'unknown') OR entity_role IS NULL),
-    entity_position_link TEXT CHECK (entity_position_link IN ('at', 'within_range_of', 'at_fixed_detector', 'references', 'claimed_at', 'inferred', 'unknown') OR entity_position_link IS NULL),
-    entity_time_link TEXT CHECK (entity_time_link IN ('observed_at', 'event_at', 'recorded_at', 'reported_for', 'intended_for', 'never_during_interval', 'unknown') OR entity_time_link IS NULL),
-    spatial_temporal_link TEXT CHECK (spatial_temporal_link IN ('instant', 'continuous_during_interval', 'once_during_interval', 'sporadic_during_interval', 'never_during_interval', 'unknown_during_interval') OR spatial_temporal_link IS NULL),
+    activity_role TEXT CHECK (activity_role IN ('caller', 'callee', 'sender', 'recipient', 'unknown') OR activity_role IS NULL),
+    entity_link TEXT CHECK (entity_link IN ('self', 'served_by', 'seen_by', 'used_at', 'stayed_at', 'searched_for', 'shared', 'cached', 'unknown') OR entity_link IS NULL),
+    spatial_link TEXT CHECK (spatial_link IN ('at', 'within', 'near', 'references', 'absent', 'unknown') OR spatial_link IS NULL),
+    occupancy TEXT CHECK (occupancy IN ('continuous', 'once', 'sporadic', 'unknown') OR occupancy IS NULL),
+    attestation TEXT CHECK (attestation IN ('instrument', 'system_record', 'person', 'third_party_register', 'unknown') OR attestation IS NULL),
+    recorded_at TEXT,
     deleted TEXT CHECK (deleted IN ('live', 'intact', 'deleted', 'recovered', 'unknown') OR deleted IS NULL),
     multiplicity INTEGER,
     source_label TEXT,
@@ -184,6 +187,8 @@ CREATE TABLE spatial_integration (
     spatial_integration_id TEXT PRIMARY KEY NOT NULL,
     spatial_expression_id TEXT NOT NULL UNIQUE REFERENCES spatial_expression(spatial_expression_id),
     method TEXT NOT NULL,
+    referential TEXT,
+    spatial_source TEXT,
     latitude_wgs84 REAL,
     longitude_wgs84 REAL,
     altitude_m REAL,
@@ -230,8 +235,8 @@ CREATE TABLE analysis (
     analysis_id TEXT PRIMARY KEY NOT NULL,
     observation_id TEXT NOT NULL REFERENCES observation(observation_id),
     method TEXT NOT NULL,
-    record_type TEXT,
     record_rank INTEGER,
+    record_rank_type TEXT,
     UNIQUE (observation_id, method)
 );
 

@@ -414,28 +414,48 @@ def _recompute_observation_digests(
 ) -> int:
     """Recompute + UPDATE both digests of the observation referencing ``entity_id``.
 
-    HOW: read the observation (1:1 with its entity — UNIQUE(entity_id) in the schema),
-    re-read every L1 row the normative projection covers, rebuild the projection with
-    the NEW identifier through ``ids.l1_projection`` and both digests through
+    HOW: read the observation (1:1 with its entity — both entity FKs are UNIQUE in the
+    schema), re-read every L1 row the normative projection covers, rebuild the projection
+    with the NEW identifier through ``ids.l1_projection`` and both digests through
     ``ids.digests`` — the same normative recipes the assembler used, so the stored
     digests always equal a fresh recomputation from the rows. Returns the number of
     observations updated (0 when the entity has none — legal on a partial store).
     WHY faithful re-reading matters: a locally re-derived projection that dropped one
     corner or reordered one component would silently forge or split evidence; every
     piece below mirrors ``ingest.assemble._emit_observation`` exactly.
+
+    WHY the lookup matches EITHER FK: an observation owns two entity rows, and normalising
+    the BEARER (an antenna's cell ref, a camera's asset id) moves the digest exactly as
+    normalising the targeted entity does — both sit in the L1 projection. Matching only
+    ``entity_id`` would find nothing for a bearer row and silently skip its digest update,
+    leaving a stored digest that no longer equals a fresh recomputation. That is precisely
+    the drift this function exists to prevent.
     """
     observation = connection.execute(
         "SELECT observation_id, raw_record_id, preset_id, output_ordinal, activity_id, "
-        "spatial_expression_id, temporal_expression_id, entity_role, "
-        "entity_position_link, entity_time_link, spatial_temporal_link, "
-        "deleted, multiplicity FROM observation WHERE entity_id = ?",
-        (entity_id,)).fetchone()
+        "spatial_expression_id, temporal_expression_id, activity_role, "
+        "entity_link, spatial_link, occupancy, attestation, "
+        "deleted, multiplicity, entity_id, bearer_entity_id "
+        "FROM observation WHERE entity_id = ? OR bearer_entity_id = ?",
+        (entity_id, entity_id)).fetchone()
     if observation is None:
         return 0
     (observation_id, raw_record_id, preset_id, output_ordinal, activity_id,
-     spatial_expression_id, temporal_expression_id, entity_role,
-     entity_position_link, entity_time_link, spatial_temporal_link,
-     deleted, multiplicity) = observation
+     spatial_expression_id, temporal_expression_id, activity_role,
+     entity_link, spatial_link, occupancy, attestation,
+     deleted, multiplicity, targeted_entity_id, bearer_entity_id) = observation
+
+    # Both entity rows enter the projection, so BOTH are read from the store — with the
+    # freshly normalised values substituted for whichever row triggered this call.
+    def _entity_projection(row_id: str | None) -> ids.EntityProjection | None:
+        if row_id is None:
+            return None
+        if row_id == entity_id:
+            return ids.EntityProjection(identifier, identifier_type, entity_type)
+        stored = connection.execute(
+            "SELECT identifier, identifier_type, type FROM entity WHERE entity_id = ?",
+            (row_id,)).fetchone()
+        return None if stored is None else ids.EntityProjection(*stored)
 
     # The content_hash prefix inputs: fingerprint ⟂ preset KEY ⟂ line_no.
     line_no, fingerprint_sha256 = connection.execute(
@@ -446,15 +466,20 @@ def _recompute_observation_digests(
     (preset_key,) = connection.execute(
         "SELECT key FROM preset WHERE preset_id = ?", (preset_id,)).fetchone()
 
+    targeted_projection = _entity_projection(targeted_entity_id)
+    assert targeted_projection is not None, (
+        f"observation {observation_id} has no targeted entity row")
     l1 = ids.l1_projection(
-        entity=ids.EntityProjection(identifier, identifier_type, entity_type),
+        entity=targeted_projection,
+        bearer=_entity_projection(bearer_entity_id),
         spatial=_load_spatial_projection(connection, spatial_expression_id),
         temporal=_load_temporal_projection(connection, temporal_expression_id),
         links=ids.ObservationLinks(
-            entity_role=entity_role,
-            entity_position_link=entity_position_link,
-            entity_time_link=entity_time_link,
-            spatial_temporal_link=spatial_temporal_link),
+            activity_role=activity_role,
+            entity_link=entity_link,
+            spatial_link=spatial_link,
+            occupancy=occupancy,
+            attestation=attestation),
         deleted=deleted,
         multiplicity=multiplicity,
         activity=_load_activity_projection(connection, activity_id),
@@ -484,9 +509,9 @@ def _load_spatial_projection(
         "SELECT referential, spatial_source FROM spatial_expression "
         "WHERE spatial_expression_id = ?", (spatial_expression_id,)).fetchone()
     components = tuple(
-        ids.SpatialComponentProjection(part, spatial_role, raw_value)
-        for part, spatial_role, raw_value in connection.execute(
-            "SELECT part, spatial_role, raw_value FROM spatial_component "
+        ids.SpatialComponentProjection(part, unit, raw_value)
+        for part, unit, raw_value in connection.execute(
+            "SELECT part, unit, raw_value FROM spatial_component "
             "WHERE spatial_expression_id = ? ORDER BY ordinal",
             (spatial_expression_id,)))
     return ids.SpatialProjection(referential, spatial_source, components)
@@ -503,9 +528,9 @@ def _load_temporal_projection(
         "SELECT kind, referential FROM temporal_expression "
         "WHERE temporal_expression_id = ?", (temporal_expression_id,)).fetchone()
     components = tuple(
-        ids.TemporalComponentProjection(part, temporal_role, stated_offset, raw_value)
-        for part, temporal_role, stated_offset, raw_value in connection.execute(
-            "SELECT part, temporal_role, stated_offset, raw_value FROM temporal_component "
+        ids.TemporalComponentProjection(part, stated_offset, raw_value)
+        for part, stated_offset, raw_value in connection.execute(
+            "SELECT part, stated_offset, raw_value FROM temporal_component "
             "WHERE temporal_expression_id = ? ORDER BY ordinal",
             (temporal_expression_id,)))
     return ids.TemporalProjection(kind, referential, components)

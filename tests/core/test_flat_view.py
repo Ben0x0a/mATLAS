@@ -4,12 +4,12 @@ Defines:    the column-contract test (the projected frame carries exactly the
             docs/csv_migration.md columns, in order, against the worked-example demo
             DB), the one-row-per-observation grain test (28 rows, corner-less observations
             kept with empty cells), the unquoted-numeric rendering test, the derived
-            ``locates`` test (single source of truth = the vocabulary enum), and the
+            ``is_presence`` test (single source of truth = the vocabulary enum), and the
             ``orig_<col>`` passthrough tests (first-appearance order, verbatim values,
             trailing-``_`` collision disambiguation).
 Used by:    the verification gate (pytest tests/core/test_flat_view.py).
 Depends on: ``model_atlas.core.flat_view`` (under test), ``model_atlas.core.vocabularies``
-            (the ``EntityPositionLink.locates`` derivation the projection must agree
+            (the ``SpatialLink.is_presence`` derivation the projection must agree
             with), pandas, and the worked-example demo DB
             ``docs/examples/matlas_example.sqlite`` (28 observations, one positionless
             nav-origin leg).
@@ -44,21 +44,22 @@ _EXPECTED_CANONICAL = (
     "latitude_wgs84", "latitude_source_field",
     "longitude_wgs84", "longitude_source_field",
     "altitude_m",
-    "spatial_role",           # old position_type (F3 merge)
     "raw_position",
     "spatial_source",         # old position_source (the mechanism)
     "horizontal_accuracy_m", "vertical_accuracy_m",
     "horizontal_speed_kmh", "vertical_speed_kmh",
     "horizontal_speed_accuracy_kmh", "vertical_speed_accuracy_kmh",
     "heading_deg", "heading_accuracy_deg", "beam_azimuth_deg", "beam_width_deg",
-    "entity_position_link", "entity_time_link", "spatial_temporal_link",
+    "entity_link", "spatial_link", "occupancy", "attestation", "recorded_at",
     "raw_source_path", "input_file_path", "input_record_id", "source_record_uid",
     "row_uid", "preset_id", "preset_name", "source_label", "source_tier", "deleted",
-    "record_type", "record_rank",
+    "record_rank", "record_rank_type",
     # -- new columns (csv_migration.md "New columns" order) ------------------------
     "case_number", "content_uid", "claim_digest",
-    "raw_identifier", "identifier_type", "entity_role", "concerns_origin",
-    "spatial_referential", "locates", "spatial_method", "temporal_method",
+    "raw_identifier", "identifier_type", "activity_role", "concerns_origin",
+    "spatial_referential", "bearer_entity", "bearer_raw_identifier",
+    "bearer_identifier_type", "bearer_entity_type", "is_presence",
+    "spatial_method", "temporal_method",
     "time_lower_stated_offset", "time_upper_stated_offset",
     "time_lower_datetime_iso", "time_upper_datetime_iso",
     "time_lower_date", "time_upper_date", "time_lower_time", "time_upper_time",
@@ -176,20 +177,21 @@ def test_numeric_cells_render_unquoted(frame: pd.DataFrame) -> None:
     buffer = io.StringIO()
     frame.to_csv(buffer, index=False, sep=";", quoting=csv.QUOTE_NONNUMERIC)
     rendered = buffer.getvalue()
-    assert ";46.205;" in rendered          # CELL_A latitude, unquoted float
+    assert ";46.203;" in rendered          # a GNSS fix latitude, unquoted float
     assert ';"N/A";' in rendered           # assumed-UTC applied offset, quoted text
-    assert '"46.205"' not in rendered
+    assert '"46.203"' not in rendered
 
 
 # --- derived locates ----------------------------------------------------------
 
 def test_locates_derived_from_the_vocabulary(frame: pd.DataFrame) -> None:
-    # Single source of truth (decision 11): each row's locates must equal the enum's own
-    # derivation of its entity_position_link — no second mapping may exist to disagree.
-    for link, locates in zip(frame["entity_position_link"], frame["locates"]):
-        assert locates == V.EntityPositionLink(link).locates.value
+    # Single source of truth: each row's is_presence must equal the enum's own
+    # derivation of its spatial_link — no second mapping may exist to disagree.
+    for link, is_presence in zip(frame["spatial_link"], frame["is_presence"]):
+        assert is_presence == V.SpatialLink(link).is_presence
     # The demo exercises self / infrastructure / referenced.
-    assert {"self", "infrastructure", "referenced"} <= set(frame["locates"])
+    # Both outcomes must actually occur in the demo, or the test proves nothing.
+    assert {True, False} <= set(frame["is_presence"])
 
 
 # --- the orig_ passthrough ------------------------------------------------------

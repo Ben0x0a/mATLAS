@@ -36,7 +36,7 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | longitude_wgs84 | = | spatial_integration.longitude_wgs84 | canonical L2 column (kept); L1 part is the datum-agnostic `longitude` |
 | longitude_source_field | → | spatial_component(part=longitude).source_field | L1 part is datum-agnostic |
 | altitude_m | = | spatial_integration.altitude_m | |
-| position_type | → | spatial_component.spatial_role | its semantics were always the place's role (origin/destination/…) |
+| position_type | ⌫ | — | **removed** (2026-08-30): the role was a preset-author assertion, not the source's words. `*_source_field` names the column the value came from, which carries the same meaning objectively |
 | raw_position | → | spatial_component(part=raw_position).raw_value | verbatim composite |
 | position_source | → | spatial_expression.spatial_source | mechanism (GNSS/WiFi/cell), symmetric with temporal_source |
 | horizontal_accuracy_m | = | spatial_integration.horizontal_accuracy_m | |
@@ -49,9 +49,11 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | heading_accuracy_deg | = | spatial_integration.heading_accuracy_deg | |
 | beam_azimuth_deg | = | spatial_integration.beam_azimuth_deg | |
 | beam_width_deg | = | spatial_integration.beam_width_deg | |
-| entity_position_link | = | observation.entity_position_link | |
-| entity_time_link | = | observation.entity_time_link | |
-| spatial_temporal_link | = | observation.spatial_temporal_link | |
+| entity_link | → | observation.entity_link | ONE link per corner. *Through what interaction* do we know this position: self \| served_by \| seen_by \| used_at \| stayed_at \| searched_for \| shared \| cached \| unknown |
+| spatial_link | → | observation.spatial_link | *How closely* the geometry binds the entity: at \| within \| near \| references \| absent \| unknown. The three negatives are distinct — `references` is interest without presence, `absent` is asserted non-presence, `unknown` is no claim either way |
+| occupancy | → | observation.occupancy | *How much of the interval*: continuous (□) \| once (◇) \| sporadic (◇) \| unknown. No `instant` member — an instant is the degenerate interval where □ ≡ ◇ |
+| attestation | → | observation.attestation | *Who asserts* — instrument \| system_record \| person \| third_party_register \| unknown. Never a weight: credibility and admissibility are court questions |
+| recorded_at | → | observation.recorded_at | when the RECORD was written, distinct from when the phenomenon happened. Feeds neither digest |
 | raw_source_path | → | source.data_source (fallback: source.input_file_path!inner_path) | the input-source vs data-source split |
 | input_file_path | = | source.input_file_path | |
 | input_record_id | = | raw_record.input_record_id | |
@@ -62,8 +64,8 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | source_label | = | observation.source_label | the one per-claim provenance field |
 | source_tier | → | source.source_tier | source grain |
 | deleted | = | observation.deleted | the source's own deletion claim (L1) |
-| record_type | → | analysis(current method).record_type | analysis layer |
-| record_rank | → | analysis(current method).record_rank | |
+| record_type | → | analysis(current method).**record_rank_type** | analysis layer; **renamed** — it labels the rank (main/additional), which a bare `record_type` did not convey |
+| record_rank | → | analysis(current method).record_rank | now emitted **before** `record_rank_type`, so the rank reads before its label |
 
 ## New columns (＋)
 
@@ -74,10 +76,14 @@ current ranking method). The `orig_<col>` verbatim passthrough is re-emitted fro
 | claim_digest | observation.claim_digest | file-independent digest — possible-same-evidence finding |
 | raw_identifier | entity.raw_identifier | the identifier as written |
 | identifier_type | entity.identifier_type | which normalization applied |
-| entity_role | observation.entity_role | the entity's part in the activity |
+| activity_role | observation.activity_role | the TARGETED entity's part in the activity (caller \| callee \| sender \| recipient \| unknown). `subject` is gone — it is now the plain meaning of the entity column |
 | concerns_origin | entity.concerns_origin | who attributed `concerns` (operator vs preset) |
 | spatial_referential | spatial_expression.referential | encoding/CRS: epsg:4326 / geohash / address / cell_ref / … (mandatory) |
-| locates | derived from entity_position_link | self / infrastructure / referenced (mandatory; derived) |
+| bearer_entity | entity.identifier (via observation.bearer_entity_id) | the POSITION BEARER's normalised identifier — the antenna, camera or terminal whose position the row states. Empty when `entity_link = self` |
+| bearer_raw_identifier | entity.raw_identifier (bearer) | the bearer's verbatim source text |
+| bearer_identifier_type | entity.identifier_type (bearer) | which normalisation applied to the bearer |
+| bearer_entity_type | entity.type (bearer) | what the bearer is (antenna \| camera \| poi \| …) |
+| is_presence | derived from spatial_link | mandatory; derived. Replaces `locates`: whose position it is is now answered structurally by the bearer columns, so the only thing left to derive is the presence test — `SpatialLink.is_presence`, declared once in the vocabulary |
 | spatial_method | spatial_integration.method | the derivation, mandatory |
 | temporal_method | timespan_integration.method | the derivation, mandatory |
 | time_lower_stated_offset / _upper | temporal_component.stated_offset | what the source stated per bound |

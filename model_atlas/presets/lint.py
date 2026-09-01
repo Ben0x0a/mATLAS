@@ -396,18 +396,33 @@ def _check_observations(spec: PresetSpec, label: str) -> list[LintFinding]:
                 WARNING, "half-coordinate",
                 "only one of latitude/longitude is mapped — a point needs both; map "
                 "the missing one or drop the partial coordinate", label, f"{where}.position"))
-        # An observation's three links are its semantics; a missing one is incomplete.
-        _link_example = {
-            "entity_position": "at", "entity_time": "observed_at", "spatial_temporal": "instant",
-        }
-        for link in ("entity_position_link", "entity_time_link", "spatial_temporal_link"):
-            if link not in fields:
-                edge = link.replace("_link", "")
+        # An observation's three corner links are its semantics; a missing one leaves that
+        # corner's meaning undefined. Keyed by the `links:` YAML key, with the column each
+        # maps to (LINK_FIELDS) — so the message names what the author actually writes.
+        _link_example = {"entity": "self", "spatial": "at", "temporal": "once"}
+        for key, column in LINK_FIELDS.items():
+            if column not in fields:
                 out.append(LintFinding(
                     WARNING, "missing-link",
-                    f"observation declares no {edge} link — that edge's meaning is undefined; add it "
-                    f"under links (e.g. {edge}: {_link_example[edge]}) so the row is interpretable",
-                    label, f"{where}.links"))
+                    f"observation declares no {key} link — that corner's meaning is undefined; "
+                    f"add it under links (e.g. {key}: {_link_example[key]}) so the row is "
+                    "interpretable", label, f"{where}.links"))
+        # A bearer without the verb that licenses it, or a verb that needs one without it.
+        # The invariant is EntityLink.needs_bearer: a bearer row exists iff the link is not
+        # `self`. Ingest enforces it; saying so here catches the preset that would produce
+        # a row asserting a position whose owner it never names.
+        # ``fields`` is the set of mapped model-field NAMES, so the link's VALUE is read
+        # from the template's field specs rather than from the set.
+        entity_link = next(
+            (f.ref.arg for f in tmpl.fields
+             if f.model_field == "entity_link" and f.ref.kind == "const"), None)
+        bearer_mapped = any(f.startswith("bearer_") for f in fields)
+        if entity_link == V.EntityLink.SELF.value and bearer_mapped:
+            out.append(LintFinding(
+                WARNING, "bearer-without-verb",
+                "entity link is `self`, so the entity holds its own position and no bearer "
+                "is written — the mapped bearer_* fields will be silently dropped",
+                label, f"{where}.links"))
         # A naive strptime parsed as UTC is a silent trap for non-UTC exports.
         for time in tmpl.temporal:
             if time.format and time.zone is None and "%z" not in time.format:
@@ -513,7 +528,6 @@ def _check_multi_role(spec: PresetSpec, label: str) -> list[LintFinding]:
 _FREE_TEXT_VOCABULARIES: dict[str, frozenset[str]] = {
     "entity_type": frozenset(e.value for e in V.EntityType),
     "identifier_type": frozenset(e.value for e in V.IdentifierType),
-    "position_type": frozenset(e.value for e in V.SpatialRole),
     "spatial_referential": frozenset(e.value for e in V.SpatialReferential),
 }
 
@@ -607,13 +621,6 @@ def _check_zone_and_duration_shape(spec: PresetSpec, label: str) -> list[LintFin
                                    "bound resolves its own offset"))
             if time.duration_unit is None:
                 continue
-            roles = {f.model_field for f in time.overrides}
-            if "temporal_role_upper" not in roles:
-                out.append(LintFinding(
-                    ADVICE, "duration-no-role",
-                    f"{DURATION_BOUND_NAME} states the end as an elapsed span but the bound "
-                    f"carries no role", label, where,
-                    suggestion="temporal_role_upper: const(end)"))
             hint = _unit_hint_from_name(time.upper.arg if time.upper is not None else None)
             if hint is not None and hint != time.duration_unit:
                 out.append(LintFinding(

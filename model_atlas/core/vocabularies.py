@@ -1,12 +1,12 @@
 """The single vocabulary + family declaration for the 21-table run database.
 
-Defines:    every controlled-vocabulary enum (the four link/role vocabularies, the
-            corner referentials/kinds, the identifier/entity/activity/edit
-            vocabularies), the two derived views (``Genesis``, ``Locates``), the
-            component ``part`` vocabularies + ``is_standard_part`` predicate, the
-            phrase fragments used by the verbalizer, one frozen dataclass per
-            table, and the ``column_cast`` / ``CANONICAL_UNIT`` / ``unit_factor``
-            helpers describing the integration columns.
+Defines:    every controlled-vocabulary enum (the three corner links + ``Attestation``,
+            ``ActivityRole``, the corner referentials/kinds, the
+            identifier/entity/activity/edit vocabularies), the component ``part``
+            vocabularies + ``is_standard_part`` predicate, the phrase fragments used by
+            the verbalizer, one frozen dataclass per table, and the ``column_cast`` /
+            ``CANONICAL_UNIT`` / ``unit_factor`` helpers describing the integration
+            columns.
 Used by:    the schema builder (DDL + CHECKs derive one-directionally from these
             enums), the assembly/ingest engine (casts + unit conversion), the flat
             CSV projection, and the verbalizer (reads the ``phrase`` fragments).
@@ -21,10 +21,20 @@ doc's older "Proposed families.py" code block wherever they disagree — so role
 
 Derivation discipline (why so many enums but no free strings on typed columns): an
 invalid vocabulary value is caught the moment a preset is parsed or the DDL CHECK is
-built, never written silently into the run DB. ``Genesis`` and ``Locates`` are the
-two exceptions to "declared once, stored once": they are DERIVED views of an edge
-(a deterministic function of ``EntityTimeLink`` / ``EntityPositionLink``), so they
-can never contradict the edge they derive from and are never stored.
+built, never written silently into the run DB.
+
+ONE AXIS PER FIELD. The former ``EntityPositionLink`` carried four independent axes at once
+— geometric coupling, mechanism, stance and epistemics — so every write discarded three of
+them, and the derived views ``Genesis`` / ``Locates`` existed only to project one axis back
+out of that conflation, lossily (``at`` and ``claimed_at`` both rendered ``self``). Both
+views are deleted here along with the enums that needed them. What replaces them is one
+stored link per corner, each answering exactly one question, plus ``Attestation`` at
+statement level: the one axis that is genuinely orthogonal to all three and therefore could
+never be folded in (the 2026-07-11 decision that tried).
+
+The two derivations that remain (``EntityLink.needs_bearer``, ``SpatialLink.is_presence``)
+are the honest kind: each reads a SINGLE orthogonal field, so neither can lose information
+the way the deleted views did.
 """
 from __future__ import annotations
 
@@ -32,63 +42,58 @@ from dataclasses import dataclass
 from enum import Enum
 
 
-# --- Derived views (never stored) -----------------------------------------
-# Genesis and Locates are functions of their edge, so a stored copy could drift out
-# of sync with the edge; keeping them derived makes that contradiction impossible.
-
-class Genesis(str, Enum):
-    """Derived view of the entity-time edge: how the trace came to exist."""
-
-    PRESENCE = "presence"
-    ACTION = "action"
-    SYSTEM = "system"
-    REPORTED = "reported"
-    PLANNED = "planned"
-    NEGATED = "negated"   # the exclusion/alibi edge (never_during_interval)
-    UNKNOWN = "unknown"
+# --- The three corner links + the statement-level attestation ---------------
+# ONE stored link per corner, each answering ONE question and deliberately NOT answering the
+# other two — the boundaries are what stop the axes re-conflating. The former
+# ``EntityPositionLink`` mixed geometric coupling, mechanism, stance and epistemics into a
+# single enum, so every write discarded an axis; ``Genesis`` / ``Locates`` then existed only
+# to project one axis back out of that conflation, and did so lossily (``at`` and
+# ``claimed_at`` both rendered ``self``). Both derived views are gone with the enum that
+# needed them.
+#
+# Each phrased member declares a British-English ``phrase`` fragment beside its value: the
+# verbalizer assembles one deterministic sentence from these fragments, so a member's wording
+# is declared here once and derived nowhere else.
 
 
-class Locates(str, Enum):
-    """Derived view of the entity-position edge: whose position the place carries.
+class EntityLink(str, Enum):
+    """Entity corner — *through what interaction do we know this entity's position?*
 
-    at/claimed_at -> self, within_range_of/at_fixed_detector ->
-    infrastructure, references -> referenced, inferred/unknown -> unknown.
+    The relation between the observation's TARGETED entity and its position BEARER (the
+    entity whose position the spatial corner actually states). ``SELF`` means the two are the
+    same, so ``observation.bearer_entity_id`` is NULL; every other member requires a bearer.
+
+    Does NOT answer: where (the spatial corner's content), how closely the geometry binds
+    (``SpatialLink``), when (the temporal corner), or who asserts it (``Attestation``).
+
+    That a member reads as both *what happened* (``used_at``, ``stayed_at``) and *how we
+    know* is not a conflation: in forensic data the interaction IS the epistemic route — the
+    trace exists because the interaction happened. It is also why the verb alone decides
+    whether there is a spatial claim at all: ``CACHED`` leaves none.
+
+    SELECTION RULE: use the verb the source ATTESTS, never one inferred. If a source cannot
+    distinguish ``served_by`` from ``cached``, the answer is ``UNKNOWN`` — never a guess.
+
+    EXTENSIBILITY: reviewed-extensible, not frozen. The 2026-08-30 removal of
+    spatial_role/temporal_role is the precedent (two shipped presets needed values the CHECK
+    rejected). The verb differs from those roles — it is attested by the record's nature
+    rather than asserted by the preset author — but additions must still be reviewed, because
+    the spatial claim depends on this value.
     """
 
-    SELF = "self"
-    INFRASTRUCTURE = "infrastructure"
-    REFERENCED = "referenced"
-    UNKNOWN = "unknown"
+    SELF = "self", "was at"                        # the entity's own stated position
+    SERVED_BY = "served_by", "was served by"       # network infrastructure served it
+    SEEN_BY = "seen_by", "was seen by"             # a sensor OR an observer registered it
+    USED_AT = "used_at", "was used at"             # ATM, POS terminal, badge reader
+    STAYED_AT = "stayed_at", "stayed at"           # hotel, hospital, custody register
+    SEARCHED_FOR = "searched_for", "searched for"  # the entity's OWN interest in a place
+    SHARED = "shared", "shared"                    # a place sent to or from the entity
+    CACHED = "cached", "cached"                    # stored as data; no attested contact
+    UNKNOWN = "unknown", "was linked to"           # interaction not determinable
 
-
-# --- The four link / role vocabularies (live on the observation) -------------
-# Each phrased member declares a British-English ``phrase`` fragment beside its
-# value: the verbalizer assembles one deterministic sentence from
-# these fragments, so a member's wording is declared here once and derived nowhere
-# else. Negation members must read as negation, REFERENCES as a reference (never
-# presence), CLAIMED_AT as a claim.
-
-class EntityTimeLink(str, Enum):
-    """Entity-time (E-T) edge: what the clock measured about the entity.
-
-    Carries a ``phrase`` fragment and derives ``genesis`` (never stored).
-    ``NEVER_DURING_INTERVAL`` is the negation/alibi member on this edge (open item 1
-    of run_db_schema.md — negation beyond the S-T link — and the shape the
-    worked-example demo stores on ``observation.entity_time_link``).
-    """
-
-    OBSERVED_AT = "observed_at", "was observed at"        # a sensor registered the entity
-    EVENT_AT = "event_at", "acted at"                     # the entity caused an event
-    RECORDED_AT = "recorded_at", "had a record written at"  # the system wrote the row (may lag)
-    REPORTED_FOR = "reported_for", "was reported to be at"  # a recalled/declared time
-    INTENDED_FOR = "intended_for", "was planned for"      # a future/planned time
-    NEVER_DURING_INTERVAL = "never_during_interval", "was never present during"  # alibi / exclusion
-    UNKNOWN = "unknown", "was at an unknown time"
-
-    def __new__(cls, value: str, phrase: str) -> "EntityTimeLink":
-        # HOW: a str-Enum member is its own string value; we attach ``phrase`` as an
-        # extra attribute so ``member.value`` stays the bare stored token and
-        # ``member.phrase`` is the verbaliser fragment.
+    def __new__(cls, value: str, phrase: str) -> "EntityLink":
+        # HOW: a str-Enum member is its own string value; ``phrase`` is attached as an extra
+        # attribute so ``member.value`` stays the bare stored token.
         member = str.__new__(cls, value)
         member._value_ = value
         member._phrase = phrase
@@ -99,27 +104,53 @@ class EntityTimeLink(str, Enum):
         return self._phrase
 
     @property
-    def genesis(self) -> Genesis:
-        # Genesis is never stored: it is a deterministic function of the E-T edge, so
-        # it can never contradict the edge it derives from.
-        return _ETLINK_GENESIS[self]
+    def needs_bearer(self) -> bool:
+        """True when the observation MUST carry a ``bearer_entity_id``.
+
+        The bearer invariant in ONE place: a bearer exists iff the link is not ``SELF``, so
+        the column and the link can never contradict. Unlike the deleted ``Genesis`` /
+        ``Locates``, this derives from an ORTHOGONAL field rather than a conflated one, so it
+        loses nothing on the way.
+        """
+        return self is not EntityLink.SELF
 
 
-class EntityPositionLink(str, Enum):
-    """Entity-position (E-S) edge: whose location this is / how it is bound.
+class SpatialLink(str, Enum):
+    """Spatial corner — *how closely does the geometry bind the entity?*
 
-    Carries a ``phrase`` fragment and derives ``locates`` (never stored).
+    Polarity and tightness of the targeted entity's relation to the geometry.
+
+    Does NOT answer: the geometry's SHAPE (point / disc / wedge / region — a property of the
+    spatial expression), the MEASUREMENT ERROR
+    (``spatial_integration.horizontal_accuracy_m``), or whether the relation held for the
+    whole interval (``Occupancy``).
+
+    NOT derivable from ``EntityLink``: the same verb yields different relations depending on
+    the geometry's granularity — ``self`` + a GNSS fix is ``AT`` a point, ``self`` + an IP
+    geolocation is ``WITHIN`` a city polygon; ``used_at`` an ATM is ``AT``, ``used_at`` a
+    card record naming only "SHELL FRANCE" is ``WITHIN``. Hence stored, never computed.
+
+    THE THREE NEGATIVES ARE NOT INTERCHANGEABLE, and separating them is the point:
+    ``REFERENCES`` = no presence claim but a deliberate connection (the entity was interested
+    in the place); ``ABSENT`` = a positive claim of NON-presence (an alibi); ``UNKNOWN`` = no
+    claim either way, which must be SURFACED for review, never silently dropped.
+
+    Maps onto RCC-8 for query-time reasoning: AT ~ equal/inside, WITHIN ~ proper part,
+    NEAR ~ externally connected, ABSENT ~ disconnected.
     """
 
-    AT = "at", "was at"                                   # the entity's own measured position
-    WITHIN_RANGE_OF = "within_range_of", "was within range of"  # inside a covering object's range
-    AT_FIXED_DETECTOR = "at_fixed_detector", "was detected at"  # passed a fixed sensor
-    REFERENCES = "references", "referred to"             # pointed at the place, not present
-    CLAIMED_AT = "claimed_at", "was claimed to be at"    # declared by testimony/message
-    INFERRED = "inferred", "was inferred to be at"       # analytically derived
-    UNKNOWN = "unknown", "was at an unknown place"
+    # The fragments are BARE RELATIONAL phrases, carrying no verb of their own: the sentence
+    # supplies "was" when the entity holds its own position, and the entity-link clause
+    # supplies it otherwise ("was served by <bearer>, near <place>"). A phrase that embedded
+    # its own verb would read as "was served by X, was near Y".
+    AT = "at", "at"                             # the geometry's extent IS the claim's extent
+    WITHIN = "within", "somewhere within"       # inside a region larger than the entity
+    NEAR = "near", "near"                       # close to, not necessarily inside
+    REFERENCES = "references", "referring to"   # pointed at, not occupied
+    ABSENT = "absent", "not at"                 # asserted NOT there (alibi / exclusion)
+    UNKNOWN = "unknown", "in an undetermined relation to"
 
-    def __new__(cls, value: str, phrase: str) -> "EntityPositionLink":
+    def __new__(cls, value: str, phrase: str) -> "SpatialLink":
         member = str.__new__(cls, value)
         member._value_ = value
         member._phrase = phrase
@@ -130,26 +161,49 @@ class EntityPositionLink(str, Enum):
         return self._phrase
 
     @property
-    def locates(self) -> Locates:
-        # Derived, never stored: a derived view can never contradict its edge.
-        return _EPLINK_LOCATES[self]
+    def is_presence(self) -> bool:
+        """True when this link asserts the entity was actually there.
+
+        The ONE presence predicate. It replaces the concomitance engine's three-token test
+        (``entity_position_link = 'references'`` OR ``never_during_interval`` on EITHER the
+        entity-time or the spatial-temporal edge) — negation used to be storable on two enums
+        at once with no rule for disagreement. ``UNKNOWN`` is deliberately NOT presence and
+        NOT an exclusion either: unknown is not non-presence, and dropping unmapped rows
+        would hide evidence.
+        """
+        return self in (SpatialLink.AT, SpatialLink.WITHIN, SpatialLink.NEAR)
 
 
-class SpatialTemporalLink(str, Enum):
-    """Spatial-temporal (S-T) edge: how the position distributes over the interval.
+class Occupancy(str, Enum):
+    """Temporal corner — *how much of the interval does the claim cover?*
 
-    Absorbs the former ``Temporal relation`` field — they are one edge. Carries a
-    ``phrase`` fragment; ``NEVER_DURING_INTERVAL`` reads as an exclusion.
+    A modal quantifier over the stated interval, and the successor to
+    ``SpatialTemporalLink`` — which described the ENTITY's occupancy while being labelled an
+    edge between the space and time corners. ``CONTINUOUS`` is box (always); ``ONCE`` and
+    ``SPORADIC`` are diamond (eventually).
+
+    Does NOT answer: when the interval is (the temporal corner's content), how precisely the
+    bounds are known (``timespan_integration.*_accuracy_us``), or whether the relation holds
+    at all (``SpatialLink``).
+
+    NO ``instant`` member: an instant is the DEGENERATE interval ``lower == upper``, where
+    box and diamond coincide, so the field would carry no information. NO ``never`` member:
+    negation is polarity and lives on ``SpatialLink.ABSENT``. Keeping negation on ONE corner
+    is forced rather than stylistic — modal duality gives NOT-diamond-P == box-NOT-P, so
+    allowing it on both would let one fact be written two ways, which is exactly the bug
+    ``NEVER_DURING_INTERVAL`` caused by existing on two enums at once.
+
+    ``ONCE`` and ``SPORADIC`` are both diamond but differ in the cardinality of witnesses:
+    exactly one versus one-or-more. UNRELATED to ``observation.multiplicity``, which counts
+    aggregate SOURCE RECORDS ("137 calls in March"), not occurrences of presence.
     """
 
-    INSTANT = "instant", "at"
-    CONTINUOUS_DURING_INTERVAL = "continuous_during_interval", "continuously during"
-    ONCE_DURING_INTERVAL = "once_during_interval", "once during"
-    SPORADIC_DURING_INTERVAL = "sporadic_during_interval", "sporadically during"
-    NEVER_DURING_INTERVAL = "never_during_interval", "at no point during"   # an exclusion / alibi
-    UNKNOWN_DURING_INTERVAL = "unknown_during_interval", "at an unknown point during"
+    CONTINUOUS = "continuous", "continuously during"  # box — holds throughout
+    ONCE = "once", "once during"                      # diamond — exactly once, point unknown
+    SPORADIC = "sporadic", "sporadically during"      # diamond — at least once, repeated
+    UNKNOWN = "unknown", "at an undetermined point during"
 
-    def __new__(cls, value: str, phrase: str) -> "SpatialTemporalLink":
+    def __new__(cls, value: str, phrase: str) -> "Occupancy":
         member = str.__new__(cls, value)
         member._value_ = value
         member._phrase = phrase
@@ -160,24 +214,66 @@ class SpatialTemporalLink(str, Enum):
         return self._phrase
 
 
-class EntityRole(str, Enum):
-    """The entity's part in the activity — the 4th member of the link triptych.
+class Attestation(str, Enum):
+    """Statement level — *who asserts this?* — never a corner, and never a weight.
 
-    Carries a ``phrase`` fragment: a noun phrase naming the part played.
-    Consolidates the worked-examples ⊕ additions (subject, caller, callee, sender,
-    recipient, reporter…).
+    What KIND of party put this claim into the record. A fact observable in the source, not
+    a judgement: evidential weight, credibility and admissibility are COURT questions and the
+    model must not state them. The intelligence/admiralty grading (source reliability x
+    information credibility) is deliberately NOT adopted for that reason; if ever wanted it
+    belongs to an analyst layer, attributed to whoever graded it, never to ingest.
+
+    It qualifies the WHOLE statement rather than one argument of it — the correct structure
+    for a reified ternary relation: one qualifier per argument, plus qualifiers on the
+    statement. Hence a plain ``observation`` column, not a fourth corner.
+
+    Orthogonal to ``EntityLink``, which is why the 2026-07-11 decision to fold the epistemic
+    qualifier INTO the link vocabularies could never work: ``served_by`` from an operator CDR
+    is a ``SYSTEM_RECORD``; the same ``served_by`` asserted by a witness is a ``PERSON``.
+    One verb, two attestors.
+
+    ``THIRD_PARTY_REGISTER`` names a provenance the model previously had no vocabulary for:
+    a location-cache coordinate comes from neither the source nor our engine but from a
+    commercial database of unknown vintage. ``source.source_tier`` describes OUR processing,
+    not that.
     """
 
-    SUBJECT = "subject", "the subject"
+    # The fragments are SELF-CONTAINED noun phrases, not transitive verbs needing an object:
+    # attestation names the KIND of attestor, and no column carries the attestor's identity,
+    # so "as recorded by a system" renders while a bare "recorded by" would dangle.
+    INSTRUMENT = "instrument", "as measured by an instrument"        # GNSS, ANPR camera
+    SYSTEM_RECORD = "system_record", "as recorded by a system"       # CDR, bank, hotel PMS
+    PERSON = "person", "as stated by a person"                       # witness, alibi
+    THIRD_PARTY_REGISTER = "third_party_register", "as supplied by a third-party register"
+    UNKNOWN = "unknown", "as attested by an unknown party"
+
+    def __new__(cls, value: str, phrase: str) -> "Attestation":
+        member = str.__new__(cls, value)
+        member._value_ = value
+        member._phrase = phrase
+        return member
+
+    @property
+    def phrase(self) -> str:
+        return self._phrase
+
+
+class ActivityRole(str, Enum):
+    """The targeted entity's part in the ACTIVITY — not its part in the placement.
+
+    The successor to ``EntityRole``, minus the three members that were never activity parts:
+    ``subject`` is now the plain meaning of ``observation.entity_id`` (the targeted entity),
+    ``reporter`` is ``Attestation.PERSON``, and ``owner`` is an inter-entity relation
+    belonging to the deferred analyst graph (entity_model.md), not an observation column.
+    """
+
     CALLER = "caller", "the caller"
     CALLEE = "callee", "the callee"
     SENDER = "sender", "the sender"
     RECIPIENT = "recipient", "the recipient"
-    REPORTER = "reporter", "the reporter"
-    OWNER = "owner", "the owner"
     UNKNOWN = "unknown", "an entity"
 
-    def __new__(cls, value: str, phrase: str) -> "EntityRole":
+    def __new__(cls, value: str, phrase: str) -> "ActivityRole":
         member = str.__new__(cls, value)
         member._value_ = value
         member._phrase = phrase
@@ -252,16 +348,6 @@ class SpatialReferential(str, Enum):
     UNKNOWN = "unknown"
 
 
-class SpatialRole(str, Enum):
-    """The place's part in the activity (per component)."""
-
-    VICINITY = "vicinity"
-    ENTRY = "entry"
-    EXIT = "exit"
-    ORIGIN = "origin"
-    DESTINATION = "destination"
-    WAYPOINT = "waypoint"
-    UNKNOWN = "unknown"
 
 
 class TemporalKind(str, Enum):
@@ -272,6 +358,9 @@ class TemporalKind(str, Enum):
     'from <lower> to <upper>'.
     """
 
+    # An INSTANT is the degenerate interval ``lower == upper``, so this member is a
+    # statement about the EXPRESSION's shape (what the source wrote), never about occupancy —
+    # ``Occupancy`` deliberately has no ``instant``, because box and diamond coincide there.
     INSTANT = "instant", "at"
     INTERVAL = "interval", "from"
     OPEN_LOWER = "open_lower", "until"
@@ -303,20 +392,6 @@ class TemporalReferential(str, Enum):
     UNKNOWN = "unknown"
 
 
-class TemporalRole(str, Enum):
-    """The bound's part in the activity (per component).
-
-    Each bound carries its own role: a visit's lower is ``check_in``, its upper
-    ``check_out``.
-    """
-
-    START = "start"
-    END = "end"
-    BOOKING = "booking"
-    CHECK_IN = "check_in"
-    CHECK_OUT = "check_out"
-    LAST_SEEN = "last_seen"
-    UNKNOWN = "unknown"
 
 
 class ActivityKind(str, Enum):
@@ -394,8 +469,8 @@ class RecordType(str, Enum):
     """Legacy derived rank label (main vs additional).
 
     Kept for continuity; note the analysis table stores a free, method-defined
-    ``record_type`` label in the run schema, so ``Analysis.record_type`` is typed as
-    plain text, not this enum.
+    ``record_rank_type`` label in the run schema, so ``Analysis.record_rank_type`` is
+    typed as plain text, not this enum.
     """
 
     MAIN = "main"
@@ -428,29 +503,6 @@ class Origin(str, Enum):
 
 # RelationType / RelationOrigin: DEFERRED with the analyst graph (entity_model.md).
 # MentionRole: removed with observation_mention.
-
-
-# --- Derivation tables for the two derived views --------------------------
-
-_ETLINK_GENESIS: dict[EntityTimeLink, Genesis] = {
-    EntityTimeLink.OBSERVED_AT: Genesis.PRESENCE,
-    EntityTimeLink.EVENT_AT: Genesis.ACTION,
-    EntityTimeLink.RECORDED_AT: Genesis.SYSTEM,
-    EntityTimeLink.REPORTED_FOR: Genesis.REPORTED,
-    EntityTimeLink.INTENDED_FOR: Genesis.PLANNED,
-    EntityTimeLink.NEVER_DURING_INTERVAL: Genesis.NEGATED,
-    EntityTimeLink.UNKNOWN: Genesis.UNKNOWN,
-}
-
-_EPLINK_LOCATES: dict[EntityPositionLink, Locates] = {
-    EntityPositionLink.AT: Locates.SELF,
-    EntityPositionLink.CLAIMED_AT: Locates.SELF,
-    EntityPositionLink.WITHIN_RANGE_OF: Locates.INFRASTRUCTURE,
-    EntityPositionLink.AT_FIXED_DETECTOR: Locates.INFRASTRUCTURE,
-    EntityPositionLink.REFERENCES: Locates.REFERENCED,
-    EntityPositionLink.INFERRED: Locates.UNKNOWN,
-    EntityPositionLink.UNKNOWN: Locates.UNKNOWN,
-}
 
 
 # --- Component `part` vocabularies -----------------------------------------
@@ -526,6 +578,7 @@ class CaseMetadata:
     title: str | None = None
     description: str | None = None
     created_at: str | None = None
+    created_by: str | None = None   # who opened the case; the run's own operator is run.examiner
 
 
 @dataclass(frozen=True)
@@ -670,17 +723,21 @@ class Entity:
 class SpatialComponent:
     """table: spatial_component — one verbatim row per source field.
 
-    ``part`` uses the preset target-field names; ``spatial_role`` is
-    per-component.
+    ``part`` uses the preset target-field names; ``unit`` is the source unit the preset
+    declared for this value.
     """
 
     spatial_component_id: str   # uuid5(spatial_expression_id ⟂ ordinal)
     spatial_expression_id: str  # FK -> spatial_expression
     ordinal: int
     part: str                   # from the part vocabulary; any value accepted
-    spatial_role: SpatialRole | None = None
     source_field: str | None = None
     raw_value: str | None = None   # VERBATIM
+    # The source unit the preset DECLARED for this value (``unit: m/s``). Stored per
+    # component, not per run: the same part may be declared in different units by two
+    # presets, and a run-level map silently let the last one win. raw_value + unit +
+    # the canonical L2 column is a complete, checkable conversion.
+    unit: str | None = None
 
 
 @dataclass(frozen=True)
@@ -688,8 +745,7 @@ class SpatialExpression:
     """table: spatial_expression — HEADER only.
 
     ``referential`` = encoding/CRS; ``spatial_source`` = the mechanism (GNSS, WiFi,
-    cell…). The values live in ``spatial_component`` rows; ``spatial_role`` moved to
-    the component. ``referential`` is the SOLE carrier of the datum: the ``latitude`` /
+    cell…). The values live in ``spatial_component`` rows. ``referential`` is the SOLE carrier of the datum: the ``latitude`` /
     ``longitude`` component parts are datum-agnostic (the source's words), and only an
     ``epsg:4326`` referential lets L2 adopt them as canonical WGS84 — the CRS adoption is
     the interpretation, never pre-stated by the part name.
@@ -704,16 +760,14 @@ class SpatialExpression:
 class TemporalComponent:
     """table: temporal_component — one verbatim row per source field.
 
-    ``part`` uses the preset field names; ``temporal_role`` and
-    ``stated_offset`` (the offset the source stated for THIS bound, verbatim TEXT)
-    are per-component.
+    ``part`` uses the preset field names; ``stated_offset`` (the offset the source stated
+    for THIS bound, verbatim TEXT) is per-component.
     """
 
     temporal_component_id: str   # uuid5(temporal_expression_id ⟂ ordinal)
     temporal_expression_id: str  # FK -> temporal_expression
     ordinal: int
     part: str                    # from the part vocabulary; any value accepted
-    temporal_role: TemporalRole | None = None
     stated_offset: str | None = None   # verbatim TEXT
     source_field: str | None = None
     raw_value: str | None = None       # VERBATIM
@@ -723,7 +777,7 @@ class TemporalComponent:
 class TemporalExpression:
     """table: temporal_expression — HEADER only.
 
-    ``temporal_role`` and the stated offsets moved to the component; ``granularity``
+    The stated offsets moved to the component; ``granularity``
     dropped (fuzziness lives in the raw value + integration method).
     """
 
@@ -735,28 +789,53 @@ class TemporalExpression:
 
 @dataclass(frozen=True)
 class Observation:
-    """table: observation — one entity, in one role, at one place/time expression.
+    """table: observation — one targeted entity, at one place/time expression.
 
     ``UNIQUE(raw_record_id, preset_id, output_ordinal)`` — two presets reading one
     record produce distinct observations. Both digests are indexed, repeat legally, and
-    are never keys. The four link/role vocabularies live here.
+    are never keys.
+
+    TWO entity FKs. ``entity_id`` is the TARGETED entity — the one under investigation, and
+    the one the flat CSV names on its line. ``bearer_entity_id`` is the POSITION BEARER — the
+    entity whose position the spatial corner actually states, which for a CDR is the antenna
+    and for an ANPR read the camera. Storage therefore orders by *whose position it is* while
+    the projection orders by *who is under investigation*: the CSV line still names the phone,
+    joining ``entity`` twice, and the antenna survives as a column instead of dissolving into
+    a ``cell_ref`` string.
+
+    ``bearer_entity_id`` is non-NULL **iff** ``entity_link.needs_bearer`` — i.e. iff the link
+    is not ``SELF``. Both directions are malformed otherwise (a ``self`` row carrying a bearer,
+    a ``served_by`` row without one); the invariant is enforced at ingest and by lint, since a
+    CHECK cannot reach across columns of different vocabularies.
+
+    The three corner links (``entity_link`` / ``spatial_link`` / ``occupancy``) and the
+    statement-level ``attestation`` live here.
     """
 
     observation_id: str          # uuid5(raw_record_id ⟂ preset key ⟂ output_ordinal)
     raw_record_id: str         # FK -> raw_record
     preset_id: str             # FK -> preset
     output_ordinal: int
-    entity_id: str             # FK -> entity (owned, UNIQUE)
+    entity_id: str             # FK -> entity: the TARGETED entity (owned, UNIQUE)
     content_hash: str          # scoped to the preset's reading of this file
     claim_digest: str          # preset-free L1 projection
+    # FK -> entity: the POSITION BEARER (owned, UNIQUE). NULL iff entity_link is SELF — the
+    # entity holds its own position, so no second row is minted.
+    bearer_entity_id: str | None = None
     entity_origin: Origin | None = None
     activity_id: str | None = None              # FK -> activity
     spatial_expression_id: str | None = None    # FK (owned, UNIQUE)
     temporal_expression_id: str | None = None   # FK (owned, UNIQUE)
-    entity_role: EntityRole | None = None
-    entity_position_link: EntityPositionLink | None = None
-    entity_time_link: EntityTimeLink | None = None
-    spatial_temporal_link: SpatialTemporalLink | None = None
+    activity_role: ActivityRole | None = None   # the targeted entity's part in the activity
+    entity_link: EntityLink | None = None       # targeted -> bearer: how we know
+    spatial_link: SpatialLink | None = None     # targeted -> geometry: how close
+    occupancy: Occupancy | None = None          # over the interval: how much of it
+    attestation: Attestation | None = None      # who asserts the whole statement
+    # When the RECORD was written, as distinct from when the phenomenon happened (the temporal
+    # corner). Days apart on a card transaction: authorisation vs settlement posting. Provenance
+    # about the record, so — like paths and source attributes — it feeds NEITHER digest: a
+    # re-export with a new write time must not move a claim's identity.
+    recorded_at: str | None = None
     deleted: RecordState | None = None          # the app's own flag
     multiplicity: int | None = None             # NULL = 1
     source_label: str | None = None             # the one per-claim provenance field
@@ -787,6 +866,13 @@ class SpatialIntegration:
     spatial_integration_id: str   # uuid5(spatial_expression_id ⟂ method)
     spatial_expression_id: str    # FK -> spatial_expression (UNIQUE in v1)
     method: str                   # rule + version + reference data
+    # The expression's encoding and mechanism, carried here so the derived block reads
+    # whole: an examiner looking at ONE row sees what the coordinates are, how they were
+    # derived (method), what the source stated them in (referential) and how the device
+    # obtained them (spatial_source) — without joining back to L1. Written once, by the
+    # integration pass, straight from the expression, so the copy cannot drift.
+    referential: str | None = None
+    spatial_source: str | None = None
     latitude_wgs84: float | None = None
     longitude_wgs84: float | None = None
     altitude_m: float | None = None
@@ -855,7 +941,7 @@ class TimespanIntegration:
 class Analysis:
     """table: analysis — the generic, method-attributed verdict table.
 
-    Re-running a changed ranker ADDS rows, never mutates. ``record_type`` is a free,
+    Re-running a changed ranker ADDS rows, never mutates. ``record_rank_type`` is a free,
     method-defined label in the run schema (the demo stores gps_fix / cdr_leg /
     anpr_read), so it is plain text here, not ``RecordType``.
     """
@@ -863,8 +949,10 @@ class Analysis:
     analysis_id: str      # uuid5(observation_id ⟂ method)
     observation_id: str     # FK -> observation
     method: str
-    record_type: str | None = None
     record_rank: int | None = None
+    # The label qualifying the rank (main | additional). Named for what it qualifies —
+    # a bare ``record_rank_type`` read as "what kind of record is this", which it never was.
+    record_rank_type: str | None = None
 
 
 @dataclass(frozen=True)

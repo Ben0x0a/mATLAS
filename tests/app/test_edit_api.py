@@ -85,14 +85,15 @@ def _build_persisted_db(target: Path) -> dict[str, str]:
             lower_unix_utc_us=1_700_000_000_000_000))
 
         l1 = ids.l1_projection(
-            entity=ids.EntityProjection(identifier=None,
+            bearer=None,
+        entity=ids.EntityProjection(identifier=None,
                                         identifier_type=V.IdentifierType.NONE,
                                         type=V.EntityType.DEVICE),
             spatial=ids.SpatialProjection(
                 referential=V.SpatialReferential.EPSG_4326, spatial_source="GNSS",
                 components=(ids.SpatialComponentProjection(
                     part="latitude", raw_value="46.193000"),)),
-            temporal=None, links=ids.ObservationLinks(entity_role=V.EntityRole.SUBJECT),
+            temporal=None, links=ids.ObservationLinks(activity_role=V.ActivityRole.UNKNOWN),
             deleted=None, multiplicity=None, activity=None)
         content_hash, claim_digest = ids.digests(
             fingerprint_sha256="fp-1", preset_key="gps", line_no=line_no,
@@ -103,7 +104,7 @@ def _build_persisted_db(target: Path) -> dict[str, str]:
             output_ordinal=output_ordinal, entity_id=entity_id,
             content_hash=content_hash, claim_digest=claim_digest,
             entity_origin=V.Origin.PRESET_MAPPED, spatial_expression_id=sx_id,
-            temporal_expression_id=tx_id, entity_role=V.EntityRole.SUBJECT))
+            temporal_expression_id=tx_id, activity_role=V.ActivityRole.UNKNOWN))
 
         # An analysis verdict, so the editable-table tests can exercise analysis'
         # UNIQUE(observation_id, method) — the composite natural key with a non-FK discriminator.
@@ -111,7 +112,7 @@ def _build_persisted_db(target: Path) -> dict[str, str]:
         an_id = ids.analysis_id(observation_id, an_method)
         store.write_analysis(V.Analysis(
             analysis_id=an_id, observation_id=observation_id, method=an_method,
-            record_type="gps_fix", record_rank=1))
+            record_rank_type="gps_fix", record_rank=1))
         store.persist(target)
     return {"entity_id": entity_id, "spatial_integration_id": si_id,
             "spatial_expression_id": sx_id, "timespan_integration_id": ti_id,

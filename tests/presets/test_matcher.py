@@ -49,7 +49,7 @@ common: {entity: const(device)}
 observations:
   - position: {latitude: field(lat), longitude: field(lon)}
     time: {instant: field(ts), epoch: unix_s}
-    links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
+    links: {entity: self, spatial: at, temporal: once}
 """
 
 _CSV_B = _CSV_A.replace("id: a, name: A", "id: b, name: B").replace(
@@ -101,7 +101,7 @@ common: {entity: const(device)}
 observations:
   - position: {latitude: 'field("ZLAT*")', longitude: field(ZLONGITUDE)}
     time: {instant: field(ZTIMESTAMP), epoch: unix_s}
-    links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
+    links: {entity: self, spatial: at, temporal: once}
 """
 
 
@@ -131,7 +131,7 @@ common: {entity: const(device)}
 observations:
   - position: {latitude: field(lat), longitude: field(lon)}
     time: {instant: field(ts), epoch: unix_s}
-    links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
+    links: {entity: self, spatial: at, temporal: once}
 """
 
 
@@ -169,7 +169,7 @@ common: {entity: const(device)}
 observations:
   - position: {latitude: field(lat), longitude: field(lon)}
     time: {instant: field(ts), epoch: unix_s}
-    links: {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
+    links: {entity: self, spatial: at, temporal: once}
 """
 
 

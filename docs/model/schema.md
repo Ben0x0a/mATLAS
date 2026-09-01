@@ -83,7 +83,7 @@ method-stamped. The flat CSV is a projection over this spine.
 
 | table | columns | keys / notes |
 | --- | --- | --- |
-| case_metadata | case_id, case_number, title, description, created_at | **The root** — uuid4 PK; exactly ONE row per run-DB file (one case per database). `case_number` is the user-facing identifier. Hierarchy: case → run → source → raw_record → observation. Physical name `case_metadata` (owner ruling 2026-07-14: `CASE` is an SQL keyword; columns keep the `case_` prefix) |
+| case_metadata | case_id, case_number, title, description, created_at, created_by | **The root** — uuid4 PK; exactly ONE row per run-DB file (one case per database). `case_number` is the user-facing identifier. Hierarchy: case → run → source → raw_record → observation. Physical name `case_metadata` (owner ruling 2026-07-14: `CASE` is an SQL keyword; columns keep the `case_` prefix) |
 | run | run_id, case_id FK NOT NULL, input_path, started_at, finished_at, tool_version, settings_json, examiner | PK run_id (**uuid4** — the only non-deterministic id; feeds no child id); `case_id` FK; input_path = the operator's `--input` root; **settings_json is normatively COMPLETE**: every operator argument and option, canonical JSON — the run is reproducible from its row; selected presets via `run_preset`; examiner optional |
 | matlas_meta | schema_version, families_version (one row) + `PRAGMA user_version` + SQLite `application_id` | versioning and the self-ingestion stamp: discovery refuses/flags stamped artefacts |
 | archive | archive_id, path, cd_sha256 | **One row per container path** — id from the **path only**, UNIQUE(path), `cd_sha256` a plain INDEXED column. "Same archive bytes twice" (two identical-bytes exhibits, or across runs) is a **query/finding** (`GROUP BY cd_sha256`). `cd_sha256` **reuses `model_atlas/sqlite/integrity.py` (`fingerprint_zip` / `zip_resume_key`)** — no new hashing |
@@ -120,20 +120,45 @@ structured `data_source` is source-grain only.
 | --- | --- | --- |
 | activity | activity_id, kind, context_json | one real-world happening. **context_json**: preset-mapped, semi-structured activity context — the callee, the caller's IMEI, the recipients list — canonical JSON, inside the L1 digest projection, projected to the flat counterpart/facets columns. **Bonus table**: it only groups the legs of one record; everything exploitable reads from entity/links/roles, and no mandatory CSV column sources from it |
 | activity_record | activity_record_id, activity_id FK NOT NULL, raw_record_id FK NOT NULL | UNIQUE(activity_id, raw_record_id). **The activity↔record binding is a link table, not a column.** The activity↔record binding is a link table, not a column — ingest writes exactly one row per activity (its own record; the mis-attachment guard becomes an ingest invariant + lint); an *analysis* act may later attach further records to the same activity ("both operators' records describe this call"), which replaces the deferred activity_link table with something simpler |
-| observation | observation_id, raw_record_id FK NOT NULL, **preset_id FK NOT NULL**, entity_id FK NOT NULL, entity_origin, activity_id FK NULL, spatial_expression_id FK NULL, temporal_expression_id FK NULL, entity_role, entity_position_link, entity_time_link, spatial_temporal_link, deleted, multiplicity (NULL = 1), source_label, input_record_id, source_record_uid, content_hash, claim_digest | `input_record_id` **locates** one source record and `source_record_uid` **groups** the rows it fanned out into — both preset-resolved, so both live here and not on the preset-free L0 `raw_record`; neither feeds a digest. **UNIQUE(raw_record_id, preset_id, output_ordinal)** — two presets reading the same record produce distinct observations; UNIQUE on each corner FK (owned corners) and on entity_id; both digests indexed, repeat legally, never keys. linked_entity dropped — entity.concerns; data_source/source_tier at source grain; source_label = the one per-claim provenance field |
+| observation | observation_id, raw_record_id FK NOT NULL, **preset_id FK NOT NULL**, entity_id FK NOT NULL, **bearer_entity_id FK NULL**, entity_origin, activity_id FK NULL, spatial_expression_id FK NULL, temporal_expression_id FK NULL, activity_role, entity_link, spatial_link, occupancy, attestation, recorded_at, deleted, multiplicity (NULL = 1), source_label, input_record_id, source_record_uid, content_hash, claim_digest | `input_record_id` **locates** one source record and `source_record_uid` **groups** the rows it fanned out into — both preset-resolved, so both live here and not on the preset-free L0 `raw_record`; neither feeds a digest. **UNIQUE(raw_record_id, preset_id, output_ordinal)** — two presets reading the same record produce distinct observations; UNIQUE on each corner FK (owned corners) and on entity_id; both digests indexed, repeat legally, never keys. linked_entity dropped — entity.concerns; data_source/source_tier at source grain; source_label = the one per-claim provenance field. **TWO entity FKs**: `entity_id` is the TARGETED entity (the one under investigation, and the one the flat CSV names on its line); `bearer_entity_id` is the POSITION BEARER — the entity whose position the spatial corner actually states (a CDR's antenna, an ANPR's camera, an ATM's terminal). Both UNIQUE (owned rows). `bearer_entity_id` is non-NULL **iff** `entity_link != 'self'` (`EntityLink.needs_bearer`) — an ingest invariant + lint, since a CHECK cannot reach across columns. Storage therefore orders by *whose position it is* while the flat projection orders by *who is under investigation*, joining `entity` twice. `recorded_at` = when the RECORD was written, distinct from when the phenomenon happened (days apart on a card authorisation vs settlement); provenance, so it feeds NEITHER digest |
 | entity | entity_id, identifier, raw_identifier, identifier_type, type, concerns, concerns_origin, concerns_uid | **One lean row**: `identifier` = **normalized at ingest** (E.164, lowercase email, …; NULL for a purely typed mention); `raw_identifier` = **as written in the source, verbatim**; `identifier_type` names which normalization applied (msisdn \| imei \| email \| plate \| account \| other \| none); `type` = what the thing is (device \| person \| vehicle \| camera \| …); `concerns` = the attributed party fixed at parsing (absorbs linked_entity), `concerns_origin` (operator_param \| preset_mapped), `concerns_uid` = digest of the case-folded/stemmed concerns. Occurrence row, no FK, no dedup; convergence = GROUP BY (identifier_type, identifier); attribution grouping = GROUP BY concerns_uid. Normalization + stemming rule-set versions recorded once per run in matlas_meta |
-| spatial_expression | spatial_expression_id, referential, spatial_source | HEADER only: referential = encoding/CRS (epsg:4326 \| geohash \| address \| place_name \| cell_ref \| asset_ref \| region); spatial_source = the mechanism (GNSS \| WiFi \| cell \| …, the position source, symmetric with temporal_source). The values live in component rows; **spatial_role moved to the component**. **referential is the SOLE datum carrier**: the `latitude`/`longitude` parts are datum-agnostic (the source's words), and only an `epsg:4326` referential licenses L2 to adopt them as the canonical `latitude_wgs84`/`longitude_wgs84` columns — the CRS adoption is the L2 interpretation, never baked into the L1 part name |
-| spatial_component | spatial_component_id, spatial_expression_id FK, ordinal, part, spatial_role, source_field, raw_value | UNIQUE(spatial_expression_id, ordinal). One row per source field, verbatim. **`part` uses the PRESET target-field names**: raw_position (composite) \| latitude \| longitude \| altitude_m \| horizontal_accuracy_m \| vertical_accuracy_m \| horizontal_speed_kmh \| vertical_speed_kmh \| horizontal_speed_accuracy_kmh \| vertical_speed_accuracy_kmh \| heading_deg \| heading_accuracy_deg \| beam_azimuth_deg \| beam_width_deg (+ zone/easting/northing for gridded CRS). Any part value is accepted; only standard names are export-projected. **spatial_role per component**: vicinity \| entry \| exit \| origin \| destination \| waypoint — a value-group can carry its own role. A 1-field geohash is 1 row; lat+lon columns are 2; DMS is 6 |
-| temporal_expression | temporal_expression_id, kind, referential, temporal_source | HEADER only; referential: unix_epoch_s \| apple_cfabsolute \| iso8601 \| excel_serial \| local_string \| …; temporal_source = clock mechanism. **temporal_role and the stated offsets moved to the component; granularity dropped |
-| temporal_component | temporal_component_id, temporal_expression_id FK, ordinal, part, temporal_role, stated_offset, source_field, raw_value | UNIQUE(temporal_expression_id, ordinal). **`part` uses the PRESET field names**: lower \| upper \| duration (+ lower_date/lower_time-style splits when a bound spans columns). **Per-component**: `temporal_role` (start \| end \| booking \| check_in \| check_out \| last_seen — each bound carries its own role: a visit's lower is check_in, its upper check_out) and `stated_offset` (the offset the source stated for THIS bound, verbatim TEXT; the dual offsets are now per-bound columns, not parts). A date column + time column stay two verbatim rows; the integration combines them (datetime_combine) |
+| spatial_expression | spatial_expression_id, referential, spatial_source | HEADER only: referential = encoding/CRS (epsg:4326 \| geohash \| address \| place_name \| cell_ref \| asset_ref \| region); spatial_source = the mechanism (GNSS \| WiFi \| cell \| …, the position source, symmetric with temporal_source). The values live in component rows. **referential is the SOLE datum carrier**: the `latitude`/`longitude` parts are datum-agnostic (the source's words), and only an `epsg:4326` referential licenses L2 to adopt them as the canonical `latitude_wgs84`/`longitude_wgs84` columns — the CRS adoption is the L2 interpretation, never baked into the L1 part name |
+| spatial_component | spatial_component_id, spatial_expression_id FK, ordinal, part, source_field, raw_value, unit | UNIQUE(spatial_expression_id, ordinal). One row per source field, verbatim. **`part` uses the PRESET target-field names**: raw_position (composite) \| latitude \| longitude \| altitude_m \| horizontal_accuracy_m \| vertical_accuracy_m \| horizontal_speed_kmh \| vertical_speed_kmh \| horizontal_speed_accuracy_kmh \| vertical_speed_accuracy_kmh \| heading_deg \| heading_accuracy_deg \| beam_azimuth_deg \| beam_width_deg (+ zone/easting/northing for gridded CRS). Any part value is accepted; only standard names are export-projected. **`unit`** is the source unit the preset declared for THIS value (`unit: m/s`) — per component, not per run, so two presets declaring different units for one part cannot collide. A 1-field geohash is 1 row; lat+lon columns are 2; DMS is 6 |
+| temporal_expression | temporal_expression_id, kind, referential, temporal_source | HEADER only; referential: unix_epoch_s \| apple_cfabsolute \| iso8601 \| excel_serial \| local_string \| …; temporal_source = clock mechanism. **The stated offsets moved to the component; granularity dropped |
+| temporal_component | temporal_component_id, temporal_expression_id FK, ordinal, part, stated_offset, source_field, raw_value | UNIQUE(temporal_expression_id, ordinal). **`part` uses the PRESET field names**: lower \| upper \| duration (+ lower_date/lower_time-style splits when a bound spans columns). **Per-component**: `stated_offset` (the offset the source stated for THIS bound, verbatim TEXT; the dual offsets are now per-bound columns, not parts). A date column + time column stay two verbatim rows; the integration combines them (datetime_combine) |
 
-**The four link vocabularies** live on the observation and absorb epistemic status
-(`REPORTED_FOR`, `CLAIMED_AT`, `NEVER_DURING_INTERVAL` are already members):
-`entity_role` (caller, callee, sender, recipient, reporter, subject…) — the entity's
-part in the activity; the three triangle links as today. `spatial_role` / `temporal_role`
-(origin, destination, vicinity, entry… / start, end, booking, check_in…) sit on the
-expressions — owned 1:1, so equivalent to observation columns, and each corner stays
-self-describing.
+**The three corner links + `attestation`** live on the observation. Each answers ONE
+question and deliberately not the other two — the boundaries are what stop the axes
+re-conflating:
+
+| column | question | values |
+| --- | --- | --- |
+| `entity_link` | *through what interaction do we know this position?* | self \| served_by \| seen_by \| used_at \| stayed_at \| searched_for \| shared \| cached \| unknown |
+| `spatial_link` | *how closely does the geometry bind the entity?* | at \| within \| near \| references \| absent \| unknown |
+| `occupancy` | *how much of the interval does it cover?* | continuous (□) \| once (◇) \| sporadic (◇) \| unknown |
+| `attestation` | *who asserts this?* (statement level, never a weight) | instrument \| system_record \| person \| third_party_register \| unknown |
+
+`activity_role` (caller, callee, sender, recipient) is the TARGETED entity's part in the
+activity — `subject` is gone, being now the plain meaning of `entity_id`; `reporter` became
+`attestation = person`; `owner` went to the deferred relation graph.
+
+`occupancy` has no `instant` member (an instant is the degenerate interval `lower == upper`,
+where □ ≡ ◇) and no `never` member (negation is polarity, and lives on
+`spatial_link = absent`). Keeping negation on ONE corner is forced by modal duality
+(¬◇P ≡ □¬P): the old model stored `never_during_interval` on `entity_time_link` AND
+`spatial_temporal_link` at once, with no rule for disagreement.
+
+`Genesis` and `Locates` are **deleted**. They existed only to project one axis back out of
+the conflated `EntityTimeLink`/`EntityPositionLink`, and did so lossily (`at` and
+`claimed_at` both rendered `self`, erasing the very distinction `claimed_at` carried). The
+two derivations that remain — `EntityLink.needs_bearer` and `SpatialLink.is_presence` — each
+read a single orthogonal field, so neither can lose information the same way.
+
+**The spatial and temporal *roles* are gone** (owner ruling 2026-08-30): they recorded the preset author's opinion of
+what a value meant (origin, check_in…), not the source's words, and no closed vocabulary
+could cover real sources — two shipped presets already needed `visit` and `record`, which
+the CHECK constraint rejected. `source_field` — the column the value came from — carries
+that meaning objectively.
 
 ### Layer 2 — integration (derived, private, method-stamped)
 
@@ -146,7 +171,7 @@ paths / tier / preset / data_source on `source`, input_record_id on `raw_record`
 
 | table | columns | keys / notes |
 | --- | --- | --- |
-| spatial_integration | spatial_integration_id, spatial_expression_id FK, method, latitude_wgs84, longitude_wgs84, altitude_m, horizontal/vertical_accuracy_m, the 4 speed columns, heading_deg, heading_accuracy_deg, beam_azimuth_deg, beam_width_deg | UNIQUE(spatial_expression_id) in v1 (drop the UNIQUE to allow candidates later); the unit conversion IS the interpretation, raws survive in raw_json. This is the complete derived-spatial block |
+| spatial_integration | spatial_integration_id, spatial_expression_id FK, method, referential, spatial_source, latitude_wgs84, longitude_wgs84, altitude_m, horizontal/vertical_accuracy_m, the 4 speed columns, heading_deg, heading_accuracy_deg, beam_azimuth_deg, beam_width_deg | UNIQUE(spatial_expression_id) in v1 (drop the UNIQUE to allow candidates later); the unit conversion IS the interpretation, raws survive in raw_json. **`referential` and `spatial_source` are copied from the expression** so the derived block reads whole: one row states what the coordinates are, how they were derived (`method`), what the source expressed them in and how the device obtained them — without a join back to L1. Written once, by the integration pass, so the copy cannot drift. The flat CSV still reads both from the EXPRESSION, because an expression the engine cannot integrate has no row here and must not lose its referential. This is the complete derived-spatial block |
 | spatial_index | spatial_index_id, spatial_integration_id FK UNIQUE, s2_cell_id, s2_level | **S2 index**: one row per point (per spatial_integration); `s2_cell_id` = the signed-int64 **leaf** S2 cell (deliberately **non-unique** — many points share a cell), INDEXED. Hierarchy is implicit in the id (ancestors = bit-truncations; descendants = a contiguous `[range_min, range_max]`), so concomitance queries do `WHERE s2_cell_id BETWEEN ? AND ?` on the index — no parent/child table. Built with `s2sphere` (`CellId.from_lat_lng`); level-walking lives in the concomitance engine. Optional precomputed ancestor-level columns (e.g. `s2_cell_l12`) can be added later for SQL binning, no redesign |
 | timespan_integration | timespan_integration_id, temporal_expression_id FK, method, lower_unix_utc_us, upper_unix_utc_us, lower_datetime_iso, upper_datetime_iso, lower_date, upper_date, lower_time, upper_time, utc_offset_hours_lower, utc_offset_hours_upper, lower_accuracy_us, upper_accuracy_us | UNIQUE(temporal_expression_id); applied offsets per bound incl. the `N/A` assumed-UTC sentinel. `*_accuracy_us` = the per-bound timing uncertainty (whole µs), split like the offsets — a source-stated value or the Method's own claim, empty when neither. **Convenience projections**: `*_unix_utc_us` = canonical UTC µs; `*_datetime_iso` = ONE offset-tagged **local** ISO string (`…+01:00`; when zone unknown render the assumed clock with a loud trailing ` N/A`; empty when there is no instant); `*_date` / `*_time` = the local date / time-of-day (µs). Derived from unix µs + applied offset. Empty = no value; ` N/A` = value, zone unknown (kept distinct) |
 
@@ -171,7 +196,7 @@ where it stands. L3 carries no measurements at all.
 
 | table | columns | keys / notes |
 | --- | --- | --- |
-| analysis | analysis_id, observation_id FK, method, record_type, record_rank | UNIQUE(observation_id, method): the generic, method-attributed verdict table. Re-running a changed ranker ADDS rows, never mutates; the CSV projects the current method's verdict |
+| analysis | analysis_id, observation_id FK, method, record_rank, record_rank_type | UNIQUE(observation_id, method): the generic, method-attributed verdict table. Re-running a changed ranker ADDS rows, never mutates; the CSV projects the current method's verdict |
 | edit_log | edit_id, ordinal, table_name, row_id, column, old_value, new_value, edit_kind, edited_by, edited_at | **Manual-edit audit**, for the edit panel. `edit_kind` ∈ update \| new_row \| empty_row. **Evidence protection**: L0/L1 rows (case/run/source/raw_record/observation/entity/expressions/components) are NEVER updated in place — only `new_row` (mint a new occurrence, keep the original) or `empty_row`; integration/analysis rows may `update` in place. Every action logs one row here; the edit API in `model_atlas` enforces the protection, not the UI. **Full rewind**: `ordinal` is a monotonic UNIQUE journal position; `update` logs per-column old→new, `new_row`/`empty_row` log the FULL row snapshot (canonical JSON in new_value) — applying inverses in reverse ordinal order restores any earlier state; a rewind appends inverse entries, never erases the journal |
 
 **Deferred out of v1**: `resolved_entity`, `entity_relation`,
@@ -217,12 +242,21 @@ the deferred analyst graph.
 
 **The normative L1 projection** — the
 exact field list both digests hash, in order:
-entity (identifier ⟂ identifier_type ⟂ type ⟂ entity_role) ⟂ spatial expression
+targeted entity (identifier ⟂ identifier_type ⟂ type ⟂ activity_role)
+⟂ bearer (presence-flag ⟂ [identifier ⟂ identifier_type ⟂ type])
+⟂ spatial expression
 (presence-flag ⟂ [referential ⟂ spatial_source ⟂ component-count ⟂ components ordered
-by ordinal, each as part ⟂ spatial_role ⟂ raw_value]) ⟂ temporal expression
+by ordinal, each as part ⟂ unit ⟂ raw_value]) ⟂ temporal expression
 (presence-flag ⟂ [kind ⟂ referential ⟂ component-count ⟂ components likewise, each as
-part ⟂ temporal_role ⟂ stated_offset ⟂ raw_value]) ⟂ the three links ⟂ deleted ⟂
-multiplicity ⟂ activity (presence-flag ⟂ [kind ⟂ canonical context_json]).
+part ⟂ stated_offset ⟂ raw_value]) ⟂ entity_link ⟂ spatial_link ⟂ occupancy ⟂ attestation
+⟂ deleted ⟂ multiplicity ⟂ activity (presence-flag ⟂ [kind ⟂ canonical context_json]).
+The bearer is optional, so — like the spatial and temporal corners — it leads with a
+presence flag; at most one bearer exists, so a flag suffices and no component-style count is
+needed. Without it an absent bearer would render identically to a present one whose three
+fields are all empty, and two structurally different claims would hash equal.
+`recorded_at` is EXCLUDED (provenance about the record: a re-export with a new write time
+must not move a claim's identity); `attestation` is INCLUDED (preset-mapped, part of what is
+claimed).
 (data_source is source-grain — and therefore outside the claim-level digests, like
 every other source attribute.)
 

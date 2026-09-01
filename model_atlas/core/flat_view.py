@@ -5,13 +5,13 @@ Defines:    ``CANONICAL_COLUMNS`` (the ordered flat-CSV column contract encoded 
             (assembles the per-run SELECT — canonical block first, then the exploded
             ``orig_<col>`` passthrough), and ``build_flat_view`` (runs it against a
             read-only connection and returns the flat pandas frame with numeric dtypes
-            restored and the derived ``locates`` filled).
+            restored and the derived ``is_presence`` filled).
 Used by:    the CSV exporter and any read-only consumer wanting the flat view;
             tests.core.test_flat_view. NB: this is the CSV-column "flat view", distinct
             from ids.py's ``l1_projection`` (the digest input) and the future road
             geometry "projection" — the three no longer share the one word.
-Depends on: ``model_atlas.core.vocabularies`` (``EntityPositionLink.locates`` — the single
-            source of the ``locates`` derivation), ``pandas`` (the frame + numeric
+Depends on: ``model_atlas.core.vocabularies`` (``SpatialLink.is_presence`` — the single
+            source of the ``is_presence`` derivation), ``pandas`` (the frame + numeric
             re-coercion the old frame builder did), and the standard library
             (``sqlite3``, ``json``).
 
@@ -37,15 +37,16 @@ column list)
 - Order = the migration's "Every old column, mapped" block first (for reviewer
   diffing), then the "New columns" block, then ``orig_<col>`` (its regeneration
   procedure).
-- ``position_type`` -> ``spatial_role`` and ``position_source`` -> ``spatial_source``
+- ``position_source`` -> ``spatial_source`` (``position_type``/``spatial_role`` are gone:
+  the role was a preset-author assertion, and ``*_source_field`` carries the meaning)
   (cross-check row 42: the settled model's names; the old headers are
   retired).
 - ``utc_offset_hours`` -> ``utc_offset_hours_lower`` / ``_upper``.
 - ``deleted`` sources from ``observation.deleted`` (the app's own flag, migration row 65);
   the separate ``recovery_state`` new column sources from
   ``raw_record.recovery_state``.
-- ``locates`` is SELECTed as a ``NULL`` placeholder and filled in Python from
-  ``EntityPositionLink(...).locates`` — the mapping is declared once in vocabularies,
+- ``is_presence`` is SELECTed as a ``NULL`` placeholder and filled in Python from
+  ``SpatialLink(...).is_presence`` — the predicate is declared once in vocabularies,
   so it is never re-encoded as a SQL ``CASE``.
 - ``counterpart`` / ``facets`` / ``context`` are OPTIONAL bonus columns:
   best-effort ``json_extract`` over ``activity.context_json``. No MANDATORY column
@@ -104,14 +105,6 @@ def _spatial_part(part: str, column: str) -> str:
             f"AND sc.part = '{part}' ORDER BY sc.ordinal LIMIT 1)")
 
 
-# The place's role (old ``position_type``): the first non-null component role by
-# ordinal — carried on the raw_position component for cell/camera/address, absent (NULL)
-# for a bare lat/lon fix, exactly as the old single position_type column behaved.
-_SPATIAL_ROLE = (
-    "(SELECT sc.spatial_role FROM spatial_component sc "
-    "WHERE sc.spatial_expression_id = a.spatial_expression_id "
-    "AND sc.spatial_role IS NOT NULL ORDER BY sc.ordinal LIMIT 1)")
-
 # raw_source_path: the data-source where the data originally lived, falling
 # back to the chain-inclusive input source path (``input_file_path!inner_path``).
 _RAW_SOURCE_PATH = (
@@ -148,7 +141,6 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("longitude_wgs84", "si.longitude_wgs84"),
     ("longitude_source_field", _spatial_part("longitude", "source_field")),
     ("altitude_m", "si.altitude_m"),
-    ("spatial_role", _SPATIAL_ROLE),                    # old position_type
     ("raw_position", _spatial_part("raw_position", "raw_value")),
     ("spatial_source", "sx.spatial_source"),            # old position_source
     ("horizontal_accuracy_m", "si.horizontal_accuracy_m"),
@@ -161,9 +153,11 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("heading_accuracy_deg", "si.heading_accuracy_deg"),
     ("beam_azimuth_deg", "si.beam_azimuth_deg"),
     ("beam_width_deg", "si.beam_width_deg"),
-    ("entity_position_link", "a.entity_position_link"),
-    ("entity_time_link", "a.entity_time_link"),
-    ("spatial_temporal_link", "a.spatial_temporal_link"),
+    ("entity_link", "a.entity_link"),
+    ("spatial_link", "a.spatial_link"),
+    ("occupancy", "a.occupancy"),
+    ("attestation", "a.attestation"),
+    ("recorded_at", "a.recorded_at"),
     ("raw_source_path", _RAW_SOURCE_PATH),
     ("input_file_path", "s.input_file_path"),
     ("input_record_id", "a.input_record_id"),
@@ -177,18 +171,27 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("source_label", "a.source_label"),
     ("source_tier", "s.source_tier"),
     ("deleted", "a.deleted"),                           # the app's own flag
-    ("record_type", "an.record_type"),
     ("record_rank", "an.record_rank"),
+    ("record_rank_type", "an.record_rank_type"),
     # -- Block 2: new columns (csv_migration.md order) -------------------------
     ("case_number", "c.case_number"),
     ("content_uid", "a.content_hash"),
     ("claim_digest", "a.claim_digest"),
     ("raw_identifier", "e.raw_identifier"),
     ("identifier_type", "e.identifier_type"),
-    ("entity_role", "a.entity_role"),
+    ("activity_role", "a.activity_role"),
     ("concerns_origin", "e.concerns_origin"),
     ("spatial_referential", "sx.referential"),
-    ("locates", "NULL"),                                # derived in Python
+    # The position BEARER, projected from the SECOND entity join. This is the accepted
+    # storage/projection inversion made concrete: storage orders by whose position it is, so
+    # a CDR row stores the antenna, while the line still names the phone and the antenna
+    # arrives as columns instead of dissolving into a cell_ref string. Empty when the entity
+    # holds its own position (entity_link = self).
+    ("bearer_entity", "be.identifier"),
+    ("bearer_raw_identifier", "be.raw_identifier"),
+    ("bearer_identifier_type", "be.identifier_type"),
+    ("bearer_entity_type", "be.type"),
+    ("is_presence", "NULL"),                            # derived in Python
     ("spatial_method", "si.method"),
     ("temporal_method", "ti.method"),
     ("time_lower_stated_offset", _temporal_part("lower", "stated_offset")),
@@ -247,6 +250,7 @@ JOIN source s ON s.source_id = r.source_id
 JOIN run rn ON rn.run_id = s.run_id
 JOIN case_metadata c ON c.case_id = rn.case_id
 JOIN entity e ON e.entity_id = a.entity_id
+LEFT JOIN entity be ON be.entity_id = a.bearer_entity_id
 JOIN preset p ON p.preset_id = a.preset_id
 LEFT JOIN spatial_expression sx ON sx.spatial_expression_id = a.spatial_expression_id
 LEFT JOIN spatial_integration si ON si.spatial_expression_id = a.spatial_expression_id
@@ -398,7 +402,7 @@ def build_flat_view(
 
     HOW: resolve the current ranking method, build the generated SELECT, read it into a
     frame, restore the numeric-union TEXT columns to a numeric dtype (so they render
-    unquoted), and fill the derived ``locates`` from ``EntityPositionLink`` — never from a
+    unquoted), and fill the derived ``is_presence`` from ``SpatialLink`` — never from a
     SQL mapping (the vocabulary is the single source of truth). Corner-less
     observations keep their row with empty coordinate/time cells (LEFT JOINs), never dropped.
     """
@@ -426,7 +430,7 @@ def build_flat_view(
     }, columns=column_names)
     for column in _NUMERIC_TEXT_COLUMNS:
         _restore_numeric_dtype(frame, column)
-    _fill_locates(frame)
+    _fill_is_presence(frame)
     return frame
 
 
@@ -464,16 +468,23 @@ def _restore_numeric_dtype(frame: pd.DataFrame, column: str) -> None:
     ]
 
 
-def _fill_locates(frame: pd.DataFrame) -> None:
-    """Fill ``locates`` from ``entity_position_link`` via the vocabulary enum.
+def _fill_is_presence(frame: pd.DataFrame) -> None:
+    """Fill ``is_presence`` from ``spatial_link`` via the vocabulary predicate.
 
-    WHY in Python and not SQL: ``Locates`` is a DERIVED view of the entity-spatial edge,
-    declared once as ``EntityPositionLink.locates``; re-encoding the mapping as a SQL CASE
-    would be a second source that could silently drift from the enum. An unmapped edge
-    (NULL) stays empty; any stored value is a valid closed-vocabulary member (DB CHECK), so
-    a lookup failure would be a real derivation bug and is allowed to surface.
+    The successor to the derived ``locates`` column, and a narrower claim. ``locates`` asked
+    *whose* position this was, which the bearer columns now answer structurally — no
+    derivation needed. What a query still needs derived is the presence test, and that is
+    exactly the distinction the three negatives exist to preserve: ``references`` (interest,
+    no presence), ``absent`` (asserted non-presence) and ``unknown`` (no claim either way)
+    are all NOT presence but are not each other, and all three stay visible in
+    ``spatial_link`` beside this flag.
+
+    WHY in Python and not SQL: the predicate is declared once as ``SpatialLink.is_presence``;
+    re-encoding it as a SQL CASE would be a second source that could silently drift. An
+    unmapped link (NULL) stays empty — unknown is not non-presence, and a row with no mapped
+    link must never be silently read as an exclusion.
     """
-    frame["locates"] = [
-        None if pd.isna(value) else V.EntityPositionLink(value).locates.value
-        for value in frame["entity_position_link"]
+    frame["is_presence"] = [
+        None if pd.isna(value) else V.SpatialLink(value).is_presence
+        for value in frame["spatial_link"]
     ]

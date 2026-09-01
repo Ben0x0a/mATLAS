@@ -108,7 +108,7 @@ hash, keep it queryable, and never let it be the key.
 | `source` | `source_id` | occurrence | **outer artefact** + inner path + subunit + preset |
 | `source_record` | `source_record_id` | occurrence | `source_id` + `line_no` |
 | `observation` | `observation_id` | occurrence | `source_record_id` + `output_ordinal` |
-| `entity` | `entity_id` | **content** | `entity_label` + `entity_type` |
+| `entity` | `entity_id` | occurrence | observation natural key + **role tag** (`targeted` \| `bearer`) |
 | `position` | `position_id` | occurrence | its own reading (owned via `observation.position_id UNIQUE`) |
 | `timespan` | `timespan_id` | occurrence | its own reading (owned via `observation.timespan_id UNIQUE`) |
 
@@ -116,10 +116,23 @@ hash, keep it queryable, and never let it be the key.
 
 `observation` carries no measurements of its own. It takes one `entity`, one `position`, one
 `timespan`, one `source_record`, and records only the *metadata of the statement*: the three
-link vocabularies (`entity_position_link`, `entity_time_link`, `spatial_temporal_link`),
-`attribution_origin`, `deleted`, and the untangle ranks. The three corners hang **off** the
-observation by foreign key — the symmetric triangle: entity, position, timespan, joined by the
-fact that links them.
+corner links (`entity_link`, `spatial_link`, `occupancy`), the statement-level `attestation`,
+`attribution_origin`, `deleted`, and the untangle ranks. The corners hang **off** the
+observation by foreign key.
+
+**Two entity FKs, and neither is a content key.** An observation owns a *targeted* entity
+(`entity_id`) and, unless `entity_link = self`, a *position bearer* (`bearer_entity_id`).
+Both are per-observation occurrence rows: the same antenna appearing in 500 CDR rows is 500
+entity rows, never one shared row. The id therefore takes a **role tag** as the last part of
+its natural key — `uuid5(observation natural key ⟂ 'targeted' | 'bearer')` — because without
+it the two rows of one observation would derive the same uuid5 and collide on the primary
+key. Convergence remains what it has always been: `GROUP BY (identifier_type, identifier)`.
+The second FK introduces **no content key and no merge**; it only names a second occurrence.
+
+> *Stale elsewhere in this document (independent of the above): the table below still uses
+> the pre-refactor names `position` / `timespan` for what are now `spatial_expression` /
+> `temporal_expression`, and described `entity_id` as content-keyed. `schema.md` is
+> authoritative.*
 
 ### Why the corners point the way they do, and why sharing is impossible
 

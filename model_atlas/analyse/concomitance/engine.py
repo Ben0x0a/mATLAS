@@ -125,12 +125,21 @@ loudly on the unconditional form.
 
 Presence exclusion (the worked examples' Q3/Q4 split)
 -----------------------------------------------------
-"Who was together" is a PRESENCE question, so three link tokens exclude a candidate:
-``entity_position_link = 'references'`` (a pin/search points at a place — the entity
-was never there) and ``never_during_interval`` on EITHER the entity-time or the
-spatial-temporal edge (both read as negation — negation never reads as presence). A
-NULL link is NOT excluded: unknown is not non-presence, and silently dropping unmapped
-rows would hide evidence (process everything by default).
+"Who was together" is a PRESENCE question, and it is now ONE predicate on ONE column:
+``spatial_link``, filtered by the non-presence members of ``SpatialLink.is_presence``.
+
+This used to take three tokens across two enums — ``entity_position_link = 'references'``
+plus ``never_during_interval`` on EITHER the entity-time or the spatial-temporal edge —
+because negation was storable in two places at once with no rule for what a disagreement
+meant. Polarity now lives on the spatial corner alone, so the disagreement cannot arise.
+
+The excluded members are DERIVED from the predicate rather than listed here, so a future
+vocabulary addition cannot silently start counting as presence. They are three distinct
+things and the engine excludes all three for different reasons: ``references`` (a pin or
+search points at a place — the entity was never there), ``absent`` (presence positively
+denied — an alibi) and ``unknown`` (no claim either way, so it cannot support a presence
+finding). A NULL link is still NOT excluded: unmapped is not non-presence, and silently
+dropping unmapped rows would hide evidence (process everything by default).
 
 Same identity: one store excludes, two stores do not (deliberate inversion)
 ---------------------------------------------------------------------------
@@ -201,9 +210,10 @@ _S2_MIN_LEVEL = 0
 _S2_MAX_LEVEL = 30
 
 # --- the presence-exclusion tokens (from the vocabularies, never re-typed) ---
-_REFERENCES_TOKEN = V.EntityPositionLink.REFERENCES.value
-_NEVER_ET_TOKEN = V.EntityTimeLink.NEVER_DURING_INTERVAL.value
-_NEVER_ST_TOKEN = V.SpatialTemporalLink.NEVER_DURING_INTERVAL.value
+# The tokens that are NOT presence, derived from the ONE predicate rather than listed by
+# hand — so a new SpatialLink member cannot silently start counting as presence.
+_NON_PRESENCE_TOKENS: tuple[str, ...] = tuple(
+    link.value for link in V.SpatialLink if not link.is_presence)
 
 # Which vocabulary validates which criterion kind. An identifier is free text by
 # nature and stays unvalidated; the two token kinds must be checked (see _tokens).
@@ -420,12 +430,9 @@ class _Candidate:
 _PRESENCE_WHERE = (
     " WHERE ti.lower_unix_utc_us IS NOT NULL AND ti.upper_unix_utc_us IS NOT NULL"
     " AND si.latitude_wgs84 IS NOT NULL AND si.longitude_wgs84 IS NOT NULL"
-    " AND a.entity_position_link IS NOT ?"
-    " AND a.entity_time_link IS NOT ?"
-    " AND a.spatial_temporal_link IS NOT ?"
+    + "".join(" AND a.spatial_link IS NOT ?" for _ in _NON_PRESENCE_TOKENS)
 )
-_PRESENCE_PARAMS: tuple[str, ...] = (
-    _REFERENCES_TOKEN, _NEVER_ET_TOKEN, _NEVER_ST_TOKEN)
+_PRESENCE_PARAMS: tuple[str, ...] = _NON_PRESENCE_TOKENS
 
 # Every column a _Candidate needs. Selected by the candidate load only; the per-anchor
 # scan selects just the observation_id and looks the rest up in the preloaded dict.

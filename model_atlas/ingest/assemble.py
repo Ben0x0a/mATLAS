@@ -5,7 +5,7 @@ Defines:    ``assemble_source`` (the fan-out engine: one reader record × one ma
             verbatim component rows, and the observation tying them together, written into
             a ``core.store.RunStore``), ``AssembleReport`` (its testable summary, carrying
             the source-grain ``data_source`` for the caller), and the
-            EXTENDED preset field vocabulary (``entity_role``, ``identifier_type``,
+            EXTENDED preset field vocabulary (``activity_role``, ``identifier_type``,
             ``activity_kind``, ``context.<key>``, ``multiplicity``, the two referentials,
             the per-bound temporal role/part names, ``data_source``) that maps the new
             L1 columns the old flat model never had.
@@ -42,9 +42,10 @@ The old→new field mapping (cross-check table of run_db_schema.md)
   normaliser's job: assemble leaves ``identifier`` NULL and ``concerns_uid`` NULL).
 - ``entity_type``       → ``entity.type`` (default ``unknown`` — the column is NOT NULL).
 - ``concerns``     → ``entity.concerns`` (+ ``concerns_origin``).
-- ``position_type``     → the components' ``spatial_role`` (its semantics
-  always were the place's role; the old language carries ONE role per observation, so it
-  is applied to every component of that expression — one value-group per observation).
+- (``position_type`` / ``temporal_role_*`` are GONE: the role they asserted was the preset
+  author's opinion, not the source's words. ``source_field`` — the column the value came
+  from — carries that meaning objectively, without a closed vocabulary nobody could
+  complete. Each spatial component now records its declared ``unit`` instead.)
 - ``position_source``   → ``spatial_expression.spatial_source``.
 - ``temporal_source``   → ``temporal_expression.temporal_source``.
 - ``deleted``           → ``observation.deleted`` (the app's OWN flag, distinct from
@@ -54,7 +55,8 @@ The old→new field mapping (cross-check table of run_db_schema.md)
   emits it per observation — it resolves the value once (first record) and RETURNS it on
   the report so the L0 owner can set it on the ``source`` row. ``data_source`` is the
   preferred new spelling; ``raw_source_path`` is accepted as its legacy alias.
-- the three ``links``   → the observation link columns, joined by the new ``entity_role``.
+- the three ``links``   → the three corner link columns, joined by ``activity_role``
+  and the statement-level ``attestation``.
 - spatial part fields (``raw_position``, ``latitude``, ``longitude``, … ) → one
   ``spatial_component`` row each, VERBATIM ``raw_value`` + the resolved ``source_field``.
 - the time bounds       → ``temporal_component`` rows (parts ``lower``/``upper``, or a
@@ -66,11 +68,11 @@ Extended vocabulary — new L1 columns the old flat model never had. These are o
 ``FieldSpec`` targets resolved through the same machinery (so conditionals
 and templates apply to them for free); the v3 YAML loader ADMITS them all (its
 ``ASSIGNABLE_FIELDS`` gate in ``presets/spec.py`` lists each), so a real YAML preset can map:
-``entity_role``, ``identifier_type``, ``activity_kind`` (its presence in ``common:``
+``activity_role``, ``identifier_type``, ``activity_kind`` (its presence in ``common:``
 creates the record's activity), ``context.<key>`` (gathered into
 ``activity.context_json``), ``multiplicity``, ``spatial_referential`` /
 ``temporal_referential`` (explicit override of the derivations below), and
-``temporal_role_lower`` / ``temporal_role_upper`` / ``temporal_part_lower`` /
+``temporal_part_lower`` /
 ``temporal_part_upper`` (each bound carries its own role/part).
 
 No conversion at L1 (the run_db_schema.md invariant)
@@ -122,15 +124,13 @@ from model_atlas.presets.resolve import (
 # holder by their historic spelling (entity, entity_type, concerns, position_type,
 # position_source, temporal_source, deleted, source_label, the three link columns).
 
-ENTITY_ROLE_NAME = "entity_role"
+ACTIVITY_ROLE_NAME = "activity_role"
 IDENTIFIER_TYPE_NAME = "identifier_type"
 ACTIVITY_KIND_NAME = "activity_kind"
 CONTEXT_PREFIX_NAME = "context."           # context.<key> → activity.context_json[<key>]
 MULTIPLICITY_NAME = "multiplicity"
 SPATIAL_REFERENTIAL_NAME = "spatial_referential"
 TEMPORAL_REFERENTIAL_NAME = "temporal_referential"
-TEMPORAL_ROLE_LOWER_NAME = "temporal_role_lower"
-TEMPORAL_ROLE_UPPER_NAME = "temporal_role_upper"
 TEMPORAL_PART_LOWER_NAME = "temporal_part_lower"
 TEMPORAL_PART_UPPER_NAME = "temporal_part_upper"
 # The part name an elapsed-span upper bound (``duration_sec:``) is written under. MUST match
@@ -147,6 +147,10 @@ TIME_ACCURACY_US_UPPER_NAME = "time_accuracy_us_upper"
 _LOWER_SIDE_NAME = "lower"
 _UPPER_SIDE_NAME = "upper"
 _ACCURACY_PART_SUFFIX = "_accuracy"
+# The entity-id role tags. They are the LAST part of an entity row's natural key, so the
+# targeted row and the bearer row of one observation derive different uuid5 ids.
+_TARGETED_ROLE = "targeted"
+_BEARER_ROLE = "bearer"
 DATA_SOURCE_NAME = "data_source"           # source grain, via the report
 RAW_SOURCE_PATH_NAME = "raw_source_path"   # legacy alias of data_source
 
@@ -154,15 +158,23 @@ RAW_SOURCE_PATH_NAME = "raw_source_path"   # legacy alias of data_source
 _ENTITY_NAME = "entity"
 _ENTITY_TYPE_NAME = "entity_type"
 _CONCERNS_NAME = "concerns"
-_SPATIAL_ROLE_NAME = "position_type"       # position_type IS the spatial role
 _SPATIAL_SOURCE_NAME = "position_source"
 _TEMPORAL_SOURCE_NAME = "temporal_source"
 _DELETED_NAME = "deleted"
 _SOURCE_LABEL_NAME = "source_label"
 _INPUT_RECORD_ID_NAME = "input_record_id"
-_EPL_NAME = "entity_position_link"
-_ETL_NAME = "entity_time_link"
-_STL_NAME = "spatial_temporal_link"
+# The three corner links + the statement-level attestation, and the record's own clock.
+_ENTITY_LINK_NAME = "entity_link"
+_SPATIAL_LINK_NAME = "spatial_link"
+_OCCUPANCY_NAME = "occupancy"
+_ATTESTATION_NAME = "attestation"
+_RECORDED_AT_NAME = "recorded_at"
+# The position BEARER's own mention fields — the entity whose position the spatial corner
+# states (a CDR's antenna, an ANPR's camera). Written as a SECOND entity row, and only when
+# the entity link needs one (i.e. is not `self`).
+_BEARER_ENTITY_NAME = "bearer_entity"
+_BEARER_ENTITY_TYPE_NAME = "bearer_entity_type"
+_BEARER_IDENTIFIER_TYPE_NAME = "bearer_identifier_type"
 
 # Recognised time codec for ISO-8601 strings — the same spelling the old engine used.
 ISO8601_FORMAT = "iso8601"
@@ -444,7 +456,8 @@ def assemble_source(
         # Spatial parts mapped under ``common:`` become COMPONENTS shared by every observation
         # of this record (a ``common:`` coordinate is the record's base place) — resolved
         # once here, not per template.
-        shared_components: list[tuple[str, str | None, str | None]] = []
+        # (part, source_field, raw_value, declared unit)
+        shared_components: list[tuple[str, str | None, str | None, str | None]] = []
         for spec in common_scalar:
             shared[spec.model_field], _ = _resolve_field(
                 spec, row, report.warnings, resolve, file_values, row_env, ctx, preset_values)
@@ -457,7 +470,8 @@ def assemble_source(
                 # spatial_expression rather than vanishing. An absent value is NO row —
                 # nothing invented.
                 if not _is_missing(value):
-                    shared_components.append((spec.model_field, source_col, _text(value)))
+                    shared_components.append(
+                        (spec.model_field, source_col, _text(value), spec.unit))
             else:
                 shared[spec.model_field] = value
         # Run-level entity / concerns OVERRIDE the preset value whenever the operator
@@ -529,13 +543,15 @@ def assemble_source(
             # Spatial component candidates: (part, source_field, raw_value) in ordinal order
             # (it feeds the digest) — the record's shared ``common:`` corners FIRST, then
             # this template's own declaration order after them.
-            components: list[tuple[str, str | None, str | None]] = list(shared_components)
+            components: list[tuple[str, str | None, str | None, str | None]] = list(
+                shared_components)
             for spec in verbatim_specs:
                 value, source_col = _resolve_verbatim(
                     spec, row, resolve, file_values, row_env, ctx, preset_values)
                 if spec.model_field in V.STANDARD_SPATIAL_PARTS:
                     if not _is_missing(value):   # an absent source value is NO row — nothing invented
-                        components.append((spec.model_field, source_col, _text(value)))
+                        components.append(
+                            (spec.model_field, source_col, _text(value), spec.unit))
                 else:
                     holder[spec.model_field] = value
 
@@ -588,7 +604,6 @@ def _write_temporal_component(
     temporal_expression_id: str,
     ordinal: int,
     part: str,
-    temporal_role: str | None,
     stated_offset: str | None,
     source_field: str | None,
     raw_value: str | None,
@@ -599,7 +614,7 @@ def _write_temporal_component(
     and returns the ``TemporalComponentProjection`` the caller appends — in the SAME ordinal
     order — to the expression's projection.
     WHY a shared helper: the bound loop and the per-bound accuracy loop write the identical row
-    shape (only the role/offset/source_field set differs), so routing both through one helper
+    shape (only the offset/source_field set differs), so routing both through one helper
     keeps the written row and its projection in lockstep — any drift between them would move the
     claim_digest.
     """
@@ -608,19 +623,18 @@ def _write_temporal_component(
         temporal_expression_id=temporal_expression_id,
         ordinal=ordinal,
         part=part,
-        temporal_role=temporal_role,
         stated_offset=stated_offset,
         source_field=source_field,
         raw_value=raw_value,
     ))
-    return ids.TemporalComponentProjection(part, temporal_role, stated_offset, raw_value)
+    return ids.TemporalComponentProjection(part, stated_offset, raw_value)
 
 
 def _emit_observation(
     store: RunStore,
     report: AssembleReport,
     flat: dict[str, Any],
-    components: list[tuple[str, str | None, str | None]],
+    components: list[tuple[str, str | None, str | None, str | None]],
     time_spec: TimeSpec,
     *,
     row: dict[str, Any],
@@ -661,7 +675,9 @@ def _emit_observation(
         concerns_origin = None
     else:
         concerns_origin = V.Origin.OPERATOR_PARAM if operator_concerns else V.Origin.PRESET_MAPPED
-    entity_id = ids.entity_id(natural_key)
+    # The role tag is the LAST part of the natural key: an observation owns two entity rows
+    # (targeted + bearer) and without it both would derive the same uuid5 and collide.
+    entity_id = ids.entity_id((*natural_key, _TARGETED_ROLE))
     store.write_entity(V.Entity(
         entity_id=entity_id,
         identifier=None,                 # the entity normaliser fills identifier +
@@ -673,16 +689,43 @@ def _emit_observation(
         concerns_uid=None,
     ))
 
+    # --- the position bearer (a SECOND entity row) ---
+    # Written iff the entity link needs one (EntityLink.needs_bearer, i.e. not `self`). An
+    # unmapped bearer identifier is legitimate — "the antenna" with no id is a purely typed
+    # mention, exactly like an unidentified targeted entity — so the row is minted on the
+    # LINK, never on whether the preset happened to name the bearer. `concerns` is not
+    # carried: it attributes the exhibit to a party, which is about the targeted entity.
+    entity_link = _norm(flat.get(_ENTITY_LINK_NAME))
+    bearer_entity_id: str | None = None
+    bearer_projection: ids.EntityProjection | None = None
+    if entity_link is not None and entity_link != V.EntityLink.SELF.value:
+        bearer_identifier_type = (_norm(flat.get(_BEARER_IDENTIFIER_TYPE_NAME))
+                                  or V.IdentifierType.NONE.value)
+        bearer_entity_type = (_norm(flat.get(_BEARER_ENTITY_TYPE_NAME))
+                              or V.EntityType.UNKNOWN.value)
+        bearer_entity_id = ids.entity_id((*natural_key, _BEARER_ROLE))
+        store.write_entity(V.Entity(
+            entity_id=bearer_entity_id,
+            identifier=None,
+            raw_identifier=_text(flat.get(_BEARER_ENTITY_NAME)),
+            identifier_type=str(bearer_identifier_type),
+            type=str(bearer_entity_type),
+            concerns=None,
+            concerns_origin=None,
+            concerns_uid=None,
+        ))
+        bearer_projection = ids.EntityProjection(
+            None, str(bearer_identifier_type), str(bearer_entity_type))
+
     # --- spatial expression + components ---
     # No component values → no spatial corner: an observation without a place yields empty
     # coordinates by construction, never an invented header row.
     spatial_expression_id: str | None = None
     spatial_projection: ids.SpatialProjection | None = None
     if components:
-        spatial_role = _text(flat.get(_SPATIAL_ROLE_NAME))
         spatial_source = _text(flat.get(_SPATIAL_SOURCE_NAME))
         referential = _spatial_referential(
-            flat, [part for part, _, _ in components], report.warnings)
+            flat, [part for part, _, _, _ in components], report.warnings)
         spatial_expression_id = ids.spatial_expression_id(natural_key)
         store.write_spatial_expression(V.SpatialExpression(
             spatial_expression_id=spatial_expression_id,
@@ -690,18 +733,18 @@ def _emit_observation(
             spatial_source=spatial_source,
         ))
         component_projections: list[ids.SpatialComponentProjection] = []
-        for ordinal, (part, source_field, raw_value) in enumerate(components):
+        for ordinal, (part, source_field, raw_value, unit) in enumerate(components):
             store.write_spatial_component(V.SpatialComponent(
                 spatial_component_id=ids.spatial_component_id(spatial_expression_id, ordinal),
                 spatial_expression_id=spatial_expression_id,
                 ordinal=ordinal,
                 part=part,
-                spatial_role=spatial_role,
                 source_field=source_field,
                 raw_value=raw_value,
+                unit=unit,
             ))
             component_projections.append(
-                ids.SpatialComponentProjection(part, spatial_role, raw_value))
+                ids.SpatialComponentProjection(part, unit, raw_value))
         spatial_projection = ids.SpatialProjection(
             referential, spatial_source, tuple(component_projections))
 
@@ -717,7 +760,7 @@ def _emit_observation(
 
     lower_value, lower_col = _resolve_ref(time_spec.lower, row, resolve, file_values, env, preset_values)
     lower_value = _apply_extract(lower_value, time_spec.lower_extract, ctx)
-    bounds: list[tuple[str, str | None, str | None, str | None]] = []
+    bounds: list[tuple[str, str | None, str | None]] = []
     # Track which SIDES actually produced a bound, so each accuracy component can be gated on
     # ITS OWN bound existing (below) rather than on the total bound count — a malformed
     # interval missing one bound must not orphan or drop the other side's accuracy.
@@ -725,7 +768,7 @@ def _emit_observation(
     have_upper = False
     if have_lower:
         part = _text(flat.get(TEMPORAL_PART_LOWER_NAME)) or "lower"
-        bounds.append((part, _text(flat.get(TEMPORAL_ROLE_LOWER_NAME)), lower_col, _text(lower_value)))
+        bounds.append((part, lower_col, _text(lower_value)))
     if time_spec.kind == "interval":
         upper_value, upper_col = _resolve_ref(time_spec.upper, row, resolve, file_values, env, preset_values)
         upper_value = _apply_extract(upper_value, time_spec.upper_extract, ctx)
@@ -737,7 +780,7 @@ def _emit_observation(
             # An explicit ``temporal_part_upper`` still wins: the preset gets the last word.
             default_part = _DURATION_PART_NAME if time_spec.duration_unit else "upper"
             part = _text(flat.get(TEMPORAL_PART_UPPER_NAME)) or default_part
-            bounds.append((part, _text(flat.get(TEMPORAL_ROLE_UPPER_NAME)), upper_col, _text(upper_value)))
+            bounds.append((part, upper_col, _text(upper_value)))
 
     temporal_expression_id: str | None = None
     temporal_projection: ids.TemporalProjection | None = None
@@ -754,10 +797,10 @@ def _emit_observation(
         ))
         bound_projections: list[ids.TemporalComponentProjection] = []
         ordinal = 0
-        for (part, role, source_field, raw_value) in bounds:
+        for (part, source_field, raw_value) in bounds:
             bound_projections.append(_write_temporal_component(
                 store, temporal_expression_id, ordinal,
-                part, role, stated_offset, source_field, raw_value))
+                part, stated_offset, source_field, raw_value))
             ordinal += 1
         # Source-stated per-bound accuracy: an OPTIONAL verbatim component per side (parallel
         # to the _date/_time split parts), carrying no offset/role/source_field — the raw µs
@@ -776,16 +819,17 @@ def _emit_observation(
             accuracy_part = side + _ACCURACY_PART_SUFFIX
             bound_projections.append(_write_temporal_component(
                 store, temporal_expression_id, ordinal,
-                accuracy_part, None, None, None, accuracy_raw))
+                accuracy_part, None, None, accuracy_raw))
             ordinal += 1
         temporal_projection = ids.TemporalProjection(kind, referential, tuple(bound_projections))
 
     # --- the observation (links + digests via core/ids — never a local recipe) ---
     links = ids.ObservationLinks(
-        entity_role=_norm(flat.get(ENTITY_ROLE_NAME)),
-        entity_position_link=_norm(flat.get(_EPL_NAME)),
-        entity_time_link=_norm(flat.get(_ETL_NAME)),
-        spatial_temporal_link=_norm(flat.get(_STL_NAME)),
+        activity_role=_norm(flat.get(ACTIVITY_ROLE_NAME)),
+        entity_link=entity_link,
+        spatial_link=_norm(flat.get(_SPATIAL_LINK_NAME)),
+        occupancy=_norm(flat.get(_OCCUPANCY_NAME)),
+        attestation=_norm(flat.get(_ATTESTATION_NAME)),
     )
     deleted = _norm(flat.get(_DELETED_NAME))
     multiplicity_value = _norm(flat.get(MULTIPLICITY_NAME))
@@ -797,6 +841,7 @@ def _emit_observation(
 
     l1 = ids.l1_projection(
         entity=ids.EntityProjection(None, str(identifier_type), str(entity_type)),
+        bearer=bearer_projection,
         spatial=spatial_projection,
         temporal=temporal_projection,
         links=links,
@@ -820,14 +865,17 @@ def _emit_observation(
         entity_id=entity_id,
         content_hash=content_hash,
         claim_digest=claim_digest,
+        bearer_entity_id=bearer_entity_id,
         entity_origin=entity_origin,
         activity_id=activity_id,
         spatial_expression_id=spatial_expression_id,
         temporal_expression_id=temporal_expression_id,
-        entity_role=links.entity_role,
-        entity_position_link=links.entity_position_link,
-        entity_time_link=links.entity_time_link,
-        spatial_temporal_link=links.spatial_temporal_link,
+        activity_role=links.activity_role,
+        entity_link=links.entity_link,
+        spatial_link=links.spatial_link,
+        occupancy=links.occupancy,
+        attestation=links.attestation,
+        recorded_at=_text(flat.get(_RECORDED_AT_NAME)),
         deleted=deleted,
         multiplicity=multiplicity,
         source_label=_text(flat.get(_SOURCE_LABEL_NAME)),

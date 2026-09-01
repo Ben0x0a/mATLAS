@@ -109,6 +109,10 @@ class SpatialExpressionInput:
     referential: str
     # mutable default — shared across instances if = {} were used
     part_values: dict[str, str] = field(default_factory=dict)
+    # Kept LAST so the positional (id, referential, part_values) form callers already use
+    # keeps working — inserting it before ``part_values`` silently rebound every such call,
+    # which made four "must raise" tests stop raising rather than fail loudly.
+    spatial_source: str | None = None
 
 
 # The parts the v1 Methods interpret. The two angles are DATUM-AGNOSTIC L1 parts
@@ -338,6 +342,8 @@ def integrate_expression(
             expression.spatial_expression_id, method_string),
         spatial_expression_id=expression.spatial_expression_id,
         method=method_string,
+        referential=expression.referential,
+        spatial_source=expression.spatial_source,
         **columns,
     )
 
@@ -412,9 +418,11 @@ def _load_expressions(connection: sqlite3.Connection) -> list[SpatialExpressionI
     on an existing ``spatial_integration`` row (same rule as the temporal pass).
     """
     expressions = {
-        row[0]: SpatialExpressionInput(spatial_expression_id=row[0], referential=row[1])
+        row[0]: SpatialExpressionInput(
+            spatial_expression_id=row[0], referential=row[1], spatial_source=row[2])
         for row in connection.execute(
-            "SELECT spatial_expression_id, referential FROM spatial_expression "
+            "SELECT spatial_expression_id, referential, spatial_source "
+            "FROM spatial_expression "
             "WHERE spatial_expression_id NOT IN "
             "(SELECT spatial_expression_id FROM spatial_integration) "
             "ORDER BY spatial_expression_id")

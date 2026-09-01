@@ -46,9 +46,9 @@ from model_atlas.core import vocabularies as V
 # self-ingestion stamp: discovery reads it to refuse/flag a mATLAS run DB fed back
 # in as evidence. The value 0x6D41_744C spells the ASCII bytes "mAtL" (mATLAS) — an
 # arbitrary but memorable, documented constant, chosen once and never reused elsewhere.
-SCHEMA_VERSION = "1"
-FAMILIES_VERSION = "1"
-USER_VERSION = 1
+SCHEMA_VERSION = "2"
+FAMILIES_VERSION = "2"
+USER_VERSION = 2
 APPLICATION_ID = 0x6D41_744C  # b"mAtL" — the mATLAS run-DB self-ingestion stamp
 
 # The normalisation / stemming rule-set versions recorded once per run.
@@ -214,14 +214,21 @@ def _table_specs() -> "list[dict[str, Any]]":
          "fks": {"raw_record_id": ("raw_record", "raw_record_id"),
                  "preset_id": ("preset", "preset_id"),
                  "entity_id": ("entity", "entity_id"),
+                 # The SECOND entity FK: the position bearer. Same target table as
+                 # entity_id — storage orders by whose position it is, the projection by
+                 # who is under investigation, so the flat view joins `entity` twice.
+                 "bearer_entity_id": ("entity", "entity_id"),
                  "activity_id": ("activity", "activity_id"),
                  "spatial_expression_id":
                  ("spatial_expression", "spatial_expression_id"),
                  "temporal_expression_id":
                  ("temporal_expression", "temporal_expression_id")},
-         # The owned corners + the entity are 1:1 with the observation (§2 guard: two
-         # observations may never share a corner row or an entity row).
-         "unique_cols": ["entity_id", "spatial_expression_id", "temporal_expression_id"],
+         # The owned corners + BOTH entity rows are 1:1 with the observation (§2 guard: two
+         # observations may never share a corner row or an entity row). bearer_entity_id is
+         # NOT in not_null: it is NULL exactly when entity_link is `self`, i.e. when the
+         # targeted entity holds its own position (EntityLink.needs_bearer).
+         "unique_cols": ["entity_id", "bearer_entity_id",
+                         "spatial_expression_id", "temporal_expression_id"],
          "unique": [("raw_record_id", "preset_id", "output_ordinal")],
          "indexes": [("ix_observation_ch", ("content_hash",)),
                      ("ix_observation_cd", ("claim_digest",)),

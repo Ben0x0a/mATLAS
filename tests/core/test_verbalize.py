@@ -44,10 +44,14 @@ _SKELETON: dict[str, Any] = {
     "entity": "+41790000000",
     "entity_type": "device",
     "concerns": None,
-    "entity_role": "subject",
-    "entity_position_link": "at",
-    "entity_time_link": "observed_at",
-    "spatial_temporal_link": "continuous_during_interval",
+    "activity_role": "unknown",
+    # A bearer is present so the ENTITY-corner verb has an object to render against; the
+    # `self` member deliberately suppresses the clause, which is itself part of the shape.
+    "entity_link": "served_by",
+    "bearer_entity": "228-01-2042-70110",
+    "spatial_link": "at",
+    "attestation": "system_record",
+    "occupancy": "continuous",
     "latitude_wgs84": 46.2,
     "longitude_wgs84": 6.15,
     "raw_position": "Somewhere",
@@ -82,8 +86,8 @@ def test_golden_instant_gps_fix_typed_mention(frame: pd.DataFrame) -> None:
     # bounds render as an instant; the assumed-UTC " N/A" sentinel stays visible.
     row = frame.iloc[0]
     assert verbalize.verbalize(row) == (
-        "The device (the subject) was at 46.193, 6.129 at, "
-        "and was observed at, 2026-03-13T19:00:00 N/A."
+        "The device (an entity) was at 46.193, 6.129, "
+        "once during 2026-03-13T19:00:00 N/A, as measured by an instrument."
     )
 
 
@@ -93,9 +97,10 @@ def test_golden_cdr_interval_cell_ref(frame: pd.DataFrame) -> None:
     row = _one_row(frame, (frame["source_label"] == "CDR op-A")
                    & (frame["time_lower_datetime_iso"] == "2026-03-13T18:40:12+01:00"))
     assert verbalize.verbalize(row) == (
-        "Entity +41791234567 (the caller) was within range of "
-        "228-01-2042-70110 (46.228, 6.152) continuously during, and acted at, "
-        "the interval from 2026-03-13T18:40:12+01:00 to 2026-03-13T18:45:24+01:00."
+        "Entity +41791234567 (the caller) was served by 228-01-2042-70110, "
+        "near 228-01-2042-70110, continuously during the interval from "
+        "2026-03-13T18:40:12+01:00 to 2026-03-13T18:45:24+01:00, "
+        "as recorded by a system."
     )
 
 
@@ -104,10 +109,10 @@ def test_golden_concerns_clause(frame: pd.DataFrame) -> None:
     # as a claim (claimed_at / reported_for fragments).
     row = _one_row(frame, frame["preset_id"] == "police_reg")
     assert verbalize.verbalize(row) == (
-        "Entity GE-2026-04412 (referring GE-2026-04412; the subject) was claimed "
-        "to be at Rue du Stand 15, Geneve (46.203, 6.14) continuously during, "
-        "and was reported to be at, the interval from 2026-03-14T02:30:00+01:00 "
-        "to 2026-03-14T02:45:00+01:00."
+        "Entity GE-2026-04412 (referring GE-2026-04412; an entity) was at "
+        "Rue du Stand 15, Geneve, continuously during the interval from "
+        "2026-03-14T02:30:00+01:00 to 2026-03-14T02:45:00+01:00, "
+        "as recorded by a system."
     )
 
 
@@ -115,8 +120,9 @@ def test_golden_references_pin(frame: pd.DataFrame) -> None:
     # A shared chat pin: the place is REFERRED TO, never a presence.
     row = _one_row(frame, frame["source_label"] == "chat pin")
     assert verbalize.verbalize(row) == (
-        "Entity +41791234567 (the sender) referred to 46.203, 6.14 at, "
-        "and acted at, 2026-03-14T01:11:20 N/A."
+        "Entity +41791234567 (the sender) shared scene-pin, "
+        "referring to 46.203, 6.14, once during 2026-03-14T01:11:20 N/A, "
+        "as recorded by a system."
     )
 
 
@@ -126,17 +132,18 @@ def test_golden_unintegrated_place_falls_back_to_raw(frame: pd.DataFrame) -> Non
     row = _one_row(frame, (frame["preset_id"] == "nav_generic")
                    & (frame["raw_position"] == "Home"))
     assert verbalize.verbalize(row) == (
-        "Entity jdoe@gmail.com (the subject) referred to Home at, "
-        "and acted at, 2026-03-13T21:04:09+00:00."
+        "Entity jdoe@gmail.com (an entity) searched for Home, "
+        "referring to Home, once during 2026-03-13T21:04:09+00:00, "
+        "as recorded by a system."
     )
 
 
 def test_golden_alibi_negation(frame: pd.DataFrame) -> None:
     row = _one_row(frame, frame["source_label"] == "alibi")
     assert verbalize.verbalize(row) == (
-        "Entity +41791234567 (the subject) was claimed to be at Home "
-        "(46.193, 6.129) continuously during, and was never present during, "
-        "the interval from 2026-03-14T02:30:00+01:00 to 2026-03-14T02:45:00+01:00."
+        "Entity +41791234567 (an entity) was not at Home, "
+        "continuously during the interval from 2026-03-14T02:30:00+01:00 "
+        "to 2026-03-14T02:45:00+01:00, as stated by a person."
     )
 
 
@@ -157,13 +164,13 @@ def test_all_demo_rows_render_deterministically(frame: pd.DataFrame) -> None:
 def test_negation_reads_as_explicit_negation(frame: pd.DataFrame) -> None:
     row = _one_row(frame, frame["source_label"] == "alibi")
     sentence = verbalize.verbalize(row)
-    assert "was never present during" in sentence
+    assert "was not at" in sentence
 
 
 def test_references_never_reads_as_presence(frame: pd.DataFrame) -> None:
-    for _, row in frame[frame["entity_position_link"] == "references"].iterrows():
+    for _, row in frame[frame["spatial_link"] == "references"].iterrows():
         sentence = verbalize.verbalize(row)
-        assert "referred to" in sentence
+        assert "referring to" in sentence
         # No presence wording may leak in: the pin points at the place.
         assert "was at" not in sentence
         assert "was present" not in sentence
@@ -173,32 +180,32 @@ def test_instant_renders_at_interval_renders_from_to() -> None:
     instant = dict(_SKELETON,
                    time_upper_datetime_iso=_SKELETON["time_lower_datetime_iso"])
     assert verbalize.verbalize(instant).endswith(
-        ", and was observed at, 2026-03-14T02:00:00+01:00.")
-    assert "from" not in verbalize.verbalize(instant)
+        ", continuously during 2026-03-14T02:00:00+01:00, as recorded by a system.")
     interval = dict(_SKELETON)
     assert ("the interval from 2026-03-14T02:00:00+01:00 to "
-            "2026-03-14T03:00:00+01:00." in verbalize.verbalize(interval))
+            "2026-03-14T03:00:00+01:00" in verbalize.verbalize(interval))
 
 
 def test_lone_bound_renders_as_instant() -> None:
     lone = dict(_SKELETON, time_upper_datetime_iso=None)
     sentence = verbalize.verbalize(lone)
-    assert sentence.endswith(", and was observed at, 2026-03-14T02:00:00+01:00.")
+    assert sentence.endswith(", continuously during 2026-03-14T02:00:00+01:00, as recorded by a system.")
     assert "interval" not in sentence
 
 
 def test_claim_reads_as_claim() -> None:
-    claim = dict(_SKELETON, entity_position_link="claimed_at")
-    assert "was claimed to be at" in verbalize.verbalize(claim)
+    claim = dict(_SKELETON, attestation="person")
+    assert "as stated by a person" in verbalize.verbalize(claim)
 
 
 # --- every phrased member renders distinctly ------------------------------------
 
 @pytest.mark.parametrize("column, vocabulary", [
-    ("entity_position_link", V.EntityPositionLink),
-    ("entity_time_link", V.EntityTimeLink),
-    ("spatial_temporal_link", V.SpatialTemporalLink),
-    ("entity_role", V.EntityRole),
+    ("entity_link", V.EntityLink),
+    ("spatial_link", V.SpatialLink),
+    ("occupancy", V.Occupancy),
+    ("attestation", V.Attestation),
+    ("activity_role", V.ActivityRole),
 ])
 def test_every_member_renders_distinctly(column: str, vocabulary: type) -> None:
     # No two members of a row-driven vocabulary may produce identical sentences on
@@ -214,15 +221,16 @@ def test_every_member_renders_distinctly(column: str, vocabulary: type) -> None:
 
 def test_unknown_members_degrade_gracefully() -> None:
     row = dict(_SKELETON,
-               entity_position_link="unknown",
-               entity_time_link="unknown",
-               spatial_temporal_link="unknown_during_interval",
-               entity_role="unknown")
+               spatial_link="unknown",
+               attestation="unknown",
+               occupancy="unknown",
+               activity_role="unknown")
     sentence = verbalize.verbalize(row)
-    # The unknown fragments state uncertainty; nothing crashes, nothing invents.
-    assert "was at an unknown place" in sentence
-    assert "was at an unknown time" in sentence
-    assert "at an unknown point during" in sentence
+    # The unknown fragments STATE the uncertainty; nothing crashes, nothing invents, and
+    # an undetermined relation never quietly reads as presence.
+    assert "in an undetermined relation to" in sentence
+    assert "at an undetermined point during" in sentence
+    assert "as attested by an unknown party" in sentence
     assert "(an entity)" in sentence
 
 
@@ -232,9 +240,10 @@ def test_positionless_observation_says_the_absence() -> None:
     row = dict(_SKELETON, latitude_wgs84=None, longitude_wgs84=None,
                raw_position=None)
     assert verbalize.verbalize(row) == (
-        "Entity +41790000000 (the subject), with no recorded position, "
-        "was observed at the interval from 2026-03-14T02:00:00+01:00 "
-        "to 2026-03-14T03:00:00+01:00."
+        "Entity +41790000000 (an entity) was served by 228-01-2042-70110, "
+        "with no recorded position, continuously during the interval from "
+        "2026-03-14T02:00:00+01:00 to 2026-03-14T03:00:00+01:00, "
+        "as recorded by a system."
     )
 
 
@@ -242,8 +251,9 @@ def test_timeless_observation_says_the_absence() -> None:
     row = dict(_SKELETON, time_lower_datetime_iso=None,
                time_upper_datetime_iso=None)
     assert verbalize.verbalize(row) == (
-        "Entity +41790000000 (the subject) was at Somewhere (46.2, 6.15), "
-        "with no recorded time."
+        "Entity +41790000000 (an entity) was served by 228-01-2042-70110, "
+        "at Somewhere (46.2, 6.15), "
+        "with no recorded time, as recorded by a system."
     )
 
 
@@ -257,12 +267,12 @@ def test_both_corners_empty_still_renders() -> None:
 def test_concerns_clause_omitted_when_null() -> None:
     assert "referring" not in verbalize.verbalize(dict(_SKELETON))
     with_concerns = dict(_SKELETON, concerns="Marie Dupont")
-    assert "(referring Marie Dupont; the subject)" in verbalize.verbalize(with_concerns)
+    assert "(referring Marie Dupont; an entity)" in verbalize.verbalize(with_concerns)
 
 
 def test_typed_mention_falls_back_to_entity_type() -> None:
     typed = dict(_SKELETON, entity=None)
-    assert verbalize.verbalize(typed).startswith("The device (the subject)")
+    assert verbalize.verbalize(typed).startswith("The device (an entity)")
     nameless = dict(_SKELETON, entity=None, entity_type=None)
     assert verbalize.verbalize(nameless).startswith("An unknown entity")
 
@@ -270,7 +280,7 @@ def test_typed_mention_falls_back_to_entity_type() -> None:
 def test_unlinked_position_states_the_record_not_a_presence() -> None:
     # An E-S link of NULL must not borrow any presence wording: the neutral glue
     # states that a position was recorded, nothing more.
-    row = dict(_SKELETON, entity_position_link=None)
+    row = dict(_SKELETON, spatial_link=None)
     sentence = verbalize.verbalize(row)
     assert "had a recorded position of Somewhere (46.2, 6.15)" in sentence
     assert "was at" not in sentence

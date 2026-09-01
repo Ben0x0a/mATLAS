@@ -202,13 +202,19 @@ def test_mandatory_r6_columns_present_and_distinguishing() -> None:
         run_relational_pipeline(
             store, _GOLDEN_SRC / "cached.csv", [spec], concerns=_CONCERNS)
         projected = build_flat_view(store.connection)
-    for column in ("spatial_referential", "locates", "spatial_method", "temporal_method"):
+    for column in ("spatial_referential", "is_presence", "spatial_method",
+                   "temporal_method"):
         assert column in projected.columns
     first = projected.iloc[0]
     # A GNSS fix: WGS84 referential, a passthrough spatial method, a tz-localise temporal
     # method, self-location — each concrete, so encodings/derivations stay distinguishable.
     assert first["spatial_referential"] == "epsg:4326"
-    assert first["locates"] == "self"
+    # A device's own GNSS cache: it holds its own position, so `self` leaves no bearer and
+    # the spatial link is a presence claim.
+    assert str(first["is_presence"]) == "True"
+    assert first["entity_link"] == "self"
+    # `self` holds its own position, so there is no bearer row and the column is empty.
+    assert first["bearer_entity"] in (None, "")
     assert first["spatial_method"].startswith("passthrough_wgs84/")
     assert first["temporal_method"].startswith("tz_localize/")
 

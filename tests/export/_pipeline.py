@@ -125,7 +125,7 @@ def _integrate_temporal_for_preset(store: RunStore, spec: PresetSpec) -> None:
         components = rows(
             store,
             "SELECT temporal_component_id, temporal_expression_id, ordinal, part, "
-            "temporal_role, stated_offset, source_field, raw_value FROM temporal_component "
+            "stated_offset, source_field, raw_value FROM temporal_component "
             "WHERE temporal_expression_id = ? ORDER BY ordinal",
             expression["temporal_expression_id"],
         )
@@ -276,11 +276,11 @@ def _write_observation(
         temporal_expression_id=temporal_expression_id, kind=temporal_kind))
     store.write_temporal_component(V.TemporalComponent(
         temporal_component_id=f"tc-{tag}-lower", temporal_expression_id=temporal_expression_id,
-        ordinal=0, part="lower", temporal_role=V.TemporalRole.START,
+        ordinal=0, part="lower",
         source_field=lower_field, raw_value=str(lower_us)))
     store.write_temporal_component(V.TemporalComponent(
         temporal_component_id=f"tc-{tag}-upper", temporal_expression_id=temporal_expression_id,
-        ordinal=1, part="upper", temporal_role=V.TemporalRole.END,
+        ordinal=1, part="upper",
         source_field=upper_field, raw_value=str(upper_us)))
     store.write_timespan_integration(V.TimespanIntegration(
         timespan_integration_id=f"ti-{tag}", temporal_expression_id=temporal_expression_id,
@@ -290,12 +290,14 @@ def _write_observation(
     store.write_observation(V.Observation(
         observation_id=observation_id, raw_record_id=raw_record_id, preset_id=_PRESET_ID,
         output_ordinal=0, entity_id=entity_id, content_hash=f"content-{tag}",
-        claim_digest=f"claim-{tag}", entity_role=V.EntityRole.SUBJECT,
-        entity_position_link=V.EntityPositionLink.AT,
-        entity_time_link=V.EntityTimeLink.OBSERVED_AT,
-        spatial_temporal_link=(
-            V.SpatialTemporalLink.INSTANT if lower_us == upper_us
-            else V.SpatialTemporalLink.CONTINUOUS_DURING_INTERVAL),
+        claim_digest=f"claim-{tag}", activity_role=V.ActivityRole.UNKNOWN,
+        entity_link=V.EntityLink.SELF,
+        spatial_link=V.SpatialLink.AT,
+        attestation=V.Attestation.INSTRUMENT,
+        # A degenerate interval carries no occupancy information (box == diamond there), so a
+        # single fix is ``once`` and a real span is ``continuous``.
+        occupancy=(V.Occupancy.ONCE if lower_us == upper_us
+                   else V.Occupancy.CONTINUOUS),
         spatial_expression_id=spatial_expression_id,
         temporal_expression_id=temporal_expression_id))
 

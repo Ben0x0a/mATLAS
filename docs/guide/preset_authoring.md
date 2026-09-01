@@ -138,9 +138,9 @@ observations:
       epoch:   cocoa
       zone:    const(UTC)
     links:
-      entity_position:  at
-      entity_time:      observed_at
-      spatial_temporal: instant
+      entity:   self
+      spatial:  at
+      temporal: once
 ```
 
 For two times at one place (a visit interval and a created instant), write two observation
@@ -204,9 +204,9 @@ observations:
       epoch:   cocoa
       zone:    const(UTC)
     links:
-      entity_position:  at
-      entity_time:      observed_at
-      spatial_temporal: instant
+      entity:   self
+      spatial:  at
+      temporal: once
 ```
 
 This is based on the mATLAS-presets `ios/ios_routined_cached_locations.yaml` (its
@@ -281,9 +281,9 @@ observations:
       format:  "%d.%m.%Y %H:%M:%S.%f"
       zone:    { from: 'header("Timestamp Date/Time - * (dd.MM.yyyy)")', pipe: "regex(tz, group=z)" }
     links:
-      entity_position:  at
-      entity_time:      observed_at
-      spatial_temporal: instant
+      entity:   self
+      spatial:  at
+      temporal: once
 ```
 
 This is based on the mATLAS-presets `axiom/ios_cached_locations.yaml` (its
@@ -304,7 +304,6 @@ observations:
       longitude:             field(ZLOCATIONLONGITUDE)
       spatial_referential:   const(epsg:4326)
       horizontal_accuracy_m: { from: field(ZLOCATIONHORIZONTALUNCERTAINTY), unit: m }
-      position_type:         const(visit)          # the place's role -> spatial_role
     time:
       interval:                                    # the dwell window (Cocoa epoch -> us)
         lower: field(ZENTRYDATE)
@@ -312,9 +311,9 @@ observations:
       epoch: cocoa
       zone:  const(UTC)
     links:
-      entity_position:  at
-      entity_time:      observed_at
-      spatial_temporal: continuous_during_interval
+      entity:   self
+      spatial:  at
+      temporal: continuous_during_interval
 ```
 
 Adapted from the mATLAS-presets `ios/ios_routined_significant_visits.yaml`.
@@ -342,7 +341,7 @@ observations:
       beam_azimuth_deg:    { from: field(Beam), unit: deg }
       # A zero-length event happened at an instant; anything else spans the call. This has to
       # be the full column name — the `links:` block below takes bare enum tokens only.
-      spatial_temporal_link: if field(Duration) == 0 then const(instant)
+      occupancy: if field(Duration) == 0 then const(instant)
                              else const(once_during_interval)
     time:
       interval:
@@ -350,10 +349,8 @@ observations:
         duration_sec: { from: field(Duration), unit: s }
       format:              "%Y-%m-%d %H:%M:%S"
       zone:                const(Europe/Zurich)   # the source's OWN zone, DST-resolved
-      temporal_role_lower: const(start)
-      temporal_role_upper: const(end)
     links:
-      entity_position: within_range_of
+      spatial: within_range_of
       entity_time:     recorded_at
 ```
 
@@ -417,7 +414,7 @@ first match wins:
 
 ```yaml
 common:
-  spatial_temporal_link: if field(ExitTime) == "NA" then const(instant)
+  occupancy: if field(ExitTime) == "NA" then const(instant)
                          elif field(Confirmed) == "1" then const(continuous_during_interval)
                          else const(once_during_interval)
 ```
@@ -595,7 +592,7 @@ Two groups are worth knowing about:
   under `common:`, an unknown top-level key, a conditional under `links:`, a glob in `name:`.
 - **Checks for silent degradation** — the preset loads and then quietly does less than it
   looks like it does: a `const` on a free-text controlled column (`entity_type`,
-  `identifier_type`, `position_type`, `spatial_referential`) that no vocabulary recognises,
+  `identifier_type`, `spatial_referential`) that no vocabulary recognises,
   coordinates with no `spatial_referential`, `context.<key>` with no `activity_kind`, a fixed
   offset where a zone name belongs, a `duration_sec` whose declared unit contradicts its
   column name.

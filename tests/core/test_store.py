@@ -105,7 +105,7 @@ def _write_gps_observation(store: RunStore, *, source_id: str, preset_id: str,
         V.TemporalComponent(
             temporal_component_id=ids.temporal_component_id(tx_id, 0),
             temporal_expression_id=tx_id, ordinal=0, part="lower",
-            temporal_role=V.TemporalRole.LAST_SEEN, stated_offset="N/A",
+            stated_offset="N/A",
             source_field="ZTIMESTAMP", raw_value="763689600"),
     )
     for component in temporal_components:
@@ -127,8 +127,9 @@ def _write_gps_observation(store: RunStore, *, source_id: str, preset_id: str,
         lower_unix_utc_us=763689600_000_000, upper_unix_utc_us=763689600_000_000))
 
     # The observation itself, after its corners exist (R20). Digests via core.ids.
-    links = ids.ObservationLinks(entity_role=V.EntityRole.SUBJECT)
+    links = ids.ObservationLinks(activity_role=V.ActivityRole.UNKNOWN)
     l1 = ids.l1_projection(
+        bearer=None,
         entity=ids.EntityProjection(identifier=None,
                                     identifier_type=V.IdentifierType.NONE,
                                     type=V.EntityType.DEVICE),
@@ -142,7 +143,7 @@ def _write_gps_observation(store: RunStore, *, source_id: str, preset_id: str,
             referential=V.TemporalReferential.APPLE_CFABSOLUTE,
             components=tuple(
                 ids.TemporalComponentProjection(
-                    part=c.part, temporal_role=c.temporal_role,
+                    part=c.part,
                     stated_offset=c.stated_offset, raw_value=c.raw_value)
                 for c in temporal_components)),
         links=links, deleted=None, multiplicity=None, activity=None)
@@ -155,13 +156,13 @@ def _write_gps_observation(store: RunStore, *, source_id: str, preset_id: str,
         output_ordinal=output_ordinal, entity_id=entity_id, content_hash=content_hash,
         claim_digest=claim_digest, entity_origin=V.Origin.PRESET_MAPPED,
         spatial_expression_id=sx_id, temporal_expression_id=tx_id,
-        entity_role=V.EntityRole.SUBJECT,
-        entity_position_link=V.EntityPositionLink.AT,
-        entity_time_link=V.EntityTimeLink.OBSERVED_AT,
-        spatial_temporal_link=V.SpatialTemporalLink.INSTANT, source_label="iOS cache"))
+        activity_role=V.ActivityRole.UNKNOWN,
+        spatial_link=V.SpatialLink.AT,
+        attestation=V.Attestation.INSTRUMENT,
+        occupancy=V.Occupancy.ONCE, source_label="iOS cache"))
     store.write_analysis(V.Analysis(
         analysis_id=ids.analysis_id(observation_id, "untangle/2.0"),
-        observation_id=observation_id, method="untangle/2.0", record_type="gps_fix",
+        observation_id=observation_id, method="untangle/2.0", record_rank_type="gps_fix",
         record_rank=1))
     return observation_id
 
@@ -190,11 +191,12 @@ def _write_call_with_activity(store: RunStore, *, source_id: str, preset_id: str
         identifier_type=V.IdentifierType.MSISDN, type=V.EntityType.DEVICE))
 
     l1 = ids.l1_projection(
+        bearer=None,
         entity=ids.EntityProjection(identifier="+41791234567",
                                     identifier_type=V.IdentifierType.MSISDN,
                                     type=V.EntityType.DEVICE),
         spatial=None, temporal=None,
-        links=ids.ObservationLinks(entity_role=V.EntityRole.CALLER),
+        links=ids.ObservationLinks(activity_role=V.ActivityRole.CALLER),
         deleted=None, multiplicity=None,
         activity=ids.ActivityProjection(kind=V.ActivityKind.CALL,
                                         context={"callee": "+41762223344"}))
@@ -206,9 +208,9 @@ def _write_call_with_activity(store: RunStore, *, source_id: str, preset_id: str
         observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
         output_ordinal=output_ordinal, entity_id=entity_id, content_hash=content_hash,
         claim_digest=claim_digest, activity_id=activity_id,
-        entity_role=V.EntityRole.CALLER,
-        entity_position_link=V.EntityPositionLink.WITHIN_RANGE_OF,
-        entity_time_link=V.EntityTimeLink.EVENT_AT, source_label="CDR op-A"))
+        activity_role=V.ActivityRole.CALLER,
+        spatial_link=V.SpatialLink.NEAR,
+        attestation=V.Attestation.SYSTEM_RECORD, source_label="CDR op-A"))
     return observation_id
 
 
@@ -227,6 +229,7 @@ def _write_positionless_observation(store: RunStore, *, source_id: str, preset_i
         entity_id=entity_id, identifier=None, raw_identifier="l'homme",
         identifier_type=V.IdentifierType.NONE, type=V.EntityType.PERSON))
     l1 = ids.l1_projection(
+        bearer=None,
         entity=ids.EntityProjection(identifier=None,
                                     identifier_type=V.IdentifierType.NONE,
                                     type=V.EntityType.PERSON),
@@ -569,8 +572,8 @@ def test_operator_input_does_not_mutate_the_digest() -> None:
         entity = ids.EntityProjection(identifier="+41791234567",
                                       identifier_type=V.IdentifierType.MSISDN,
                                       type=V.EntityType.DEVICE)
-        l1 = ids.l1_projection(entity=entity, spatial=None, temporal=None,
-                               links=ids.ObservationLinks(entity_role=V.EntityRole.CALLER),
+        l1 = ids.l1_projection(bearer=None, entity=entity, spatial=None, temporal=None,
+                               links=ids.ObservationLinks(activity_role=V.ActivityRole.CALLER),
                                deleted=None, multiplicity=None, activity=None)
         return ids.digests(fingerprint_sha256="fp", preset_key="k", line_no=1,
                            output_ordinal=0, l1=l1)

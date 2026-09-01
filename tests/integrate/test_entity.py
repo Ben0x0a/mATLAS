@@ -200,7 +200,7 @@ def _write_mention(
             store.write_spatial_component(V.SpatialComponent(
                 spatial_component_id=ids.spatial_component_id(spatial_expression_id, ordinal),
                 spatial_expression_id=spatial_expression_id, ordinal=ordinal,
-                part=part, spatial_role="vicinity",
+                part=part,
                 source_field=source_field, raw_value=raw_value))
         spatial_projection = ids.SpatialProjection(
             "epsg:4326", "gnss",
@@ -214,11 +214,11 @@ def _write_mention(
         store.write_temporal_component(V.TemporalComponent(
             temporal_component_id=ids.temporal_component_id(temporal_expression_id, 0),
             temporal_expression_id=temporal_expression_id, ordinal=0,
-            part="lower", temporal_role="start", stated_offset="+01:00",
+            part="lower", stated_offset="+01:00",
             source_field="ts", raw_value="1700000000"))
         temporal_projection = ids.TemporalProjection(
             "instant", "unix_epoch_s",
-            (ids.TemporalComponentProjection("lower", "start", "+01:00", "1700000000"),))
+            (ids.TemporalComponentProjection("lower", "+01:00", "1700000000"),))
 
         activity_id = ids.activity_id(raw_record_id, 0)
         context = {"callee": "+41791234568"}
@@ -229,9 +229,10 @@ def _write_mention(
             activity_record_id=ids.activity_record_id(activity_id, raw_record_id),
             activity_id=activity_id, raw_record_id=raw_record_id))
         activity_projection = ids.ActivityProjection("call", context)
-        links = ids.ObservationLinks("subject", "at", "observed_at", "instant")
+        links = ids.ObservationLinks("unknown", "self", "at", "once", "instrument")
 
     l1 = ids.l1_projection(
+        bearer=None,
         entity=ids.EntityProjection(None, identifier_type, entity_type),
         spatial=spatial_projection, temporal=temporal_projection,
         links=links, deleted=None, multiplicity=None,
@@ -248,10 +249,11 @@ def _write_mention(
         activity_id=activity_id,
         spatial_expression_id=spatial_expression_id,
         temporal_expression_id=temporal_expression_id,
-        entity_role=links.entity_role,
-        entity_position_link=links.entity_position_link,
-        entity_time_link=links.entity_time_link,
-        spatial_temporal_link=links.spatial_temporal_link))
+        activity_role=links.activity_role,
+        entity_link=links.entity_link,
+        spatial_link=links.spatial_link,
+        attestation=links.attestation,
+        occupancy=links.occupancy))
     return entity_id, observation_id
 
 
@@ -377,15 +379,16 @@ def test_normalised_entity_digests_recomputed_refused_unchanged(store: RunStore)
     assert after_normalised[1] != before_normalised[1]
     # ... and equal a fresh, independent recomputation through the normative recipes.
     expected_l1 = ids.l1_projection(
+        bearer=None,
         entity=ids.EntityProjection("+41791234567", "msisdn", "person"),
         spatial=ids.SpatialProjection(
             "epsg:4326", "gnss",
-            (ids.SpatialComponentProjection("latitude", "vicinity", "46.2030"),
-             ids.SpatialComponentProjection("longitude", "vicinity", "6.1430"))),
+            (ids.SpatialComponentProjection("latitude", None, "46.2030"),
+             ids.SpatialComponentProjection("longitude", None, "6.1430"))),
         temporal=ids.TemporalProjection(
             "instant", "unix_epoch_s",
-            (ids.TemporalComponentProjection("lower", "start", "+01:00", "1700000000"),)),
-        links=ids.ObservationLinks("subject", "at", "observed_at", "instant"),
+            (ids.TemporalComponentProjection("lower", "+01:00", "1700000000"),)),
+        links=ids.ObservationLinks("unknown", "self", "at", "once", "instrument"),
         deleted=None, multiplicity=None,
         activity=ids.ActivityProjection("call", {"callee": "+41791234568"}))
     assert after_normalised == ids.digests(
@@ -414,6 +417,7 @@ def test_recomputation_handles_cornerless_observations(store: RunStore) -> None:
     after = _digests(store, observation_id)
     assert after != before
     expected_l1 = ids.l1_projection(
+        bearer=None,
         entity=ids.EntityProjection("john.doe@example.com", "email", "unknown"),
         spatial=None, temporal=None, links=ids.ObservationLinks(),
         deleted=None, multiplicity=None, activity=None)

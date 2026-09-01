@@ -239,10 +239,11 @@ def _build_run(store: RunStore, *, input_file_path: str,
                                 identifier_type=V.IdentifierType.MSISDN,
                                 type=V.EntityType.DEVICE))
     l1 = ids.l1_projection(
+        bearer=None,
         entity=ids.EntityProjection("+41791234567", V.IdentifierType.MSISDN,
                                     V.EntityType.DEVICE),
         spatial=None, temporal=None,
-        links=ids.ObservationLinks(entity_role=V.EntityRole.CALLER),
+        links=ids.ObservationLinks(activity_role=V.ActivityRole.CALLER),
         deleted=None, multiplicity=None, activity=None)
     content_hash, claim_digest = ids.digests(fingerprint_sha256=fingerprint,
                                              preset_key="cdr_generic", line_no=1,
@@ -251,7 +252,7 @@ def _build_run(store: RunStore, *, input_file_path: str,
         observation_id=ids.observation_id(rr_id, "cdr_generic", 0), raw_record_id=rr_id,
         preset_id=preset_id, output_ordinal=0, entity_id=entity_id,
         content_hash=content_hash, claim_digest=claim_digest,
-        entity_role=V.EntityRole.CALLER))
+        activity_role=V.ActivityRole.CALLER))
     store.write_edit_log(V.EditLog(edit_id=edit_id, ordinal=1,
                                    edit_kind=V.EditKind.UPDATE,
                                    edited_at="2026-03-15T09:00:00Z"))

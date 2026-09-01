@@ -66,9 +66,9 @@ observations:                               # required; non-empty list
       epoch:   cocoa
       zone:    const(UTC)
     links:
-      entity_position:  at
-      entity_time:      observed_at
-      spatial_temporal: instant
+      entity:   self
+      spatial:  at
+      temporal: once
 ```
 
 ## 2. Top-level keys
@@ -189,7 +189,7 @@ of the activity's context object). Mapping any other name is a load-time error
 | `entity` | `entity.raw_identifier` | The identifier as written in the source (verbatim). The normalised `identifier` and `concerns_uid` are filled later by the entity normaliser. |
 | `entity_type` | `entity.type` | Defaults to `unknown` when unmapped. |
 | `concerns` | `entity.concerns` | The attributed party (verbatim). |
-| `entity_role` | `observation.entity_role` | One `EntityRole` member. |
+| `activity_role` | `observation.activity_role` | One `EntityRole` member. |
 | `identifier_type` | `entity.identifier_type` | Names the identifier kind; free text (see `IdentifierType` for the recognised kinds). Defaults to `none`. |
 
 ### 5.2 Temporal (assignable subset)
@@ -202,7 +202,6 @@ These are the extra temporal attributes and per-bound overrides.
 | `utc_offset_hours` | The applied offset (usually set via `time.zone`, not directly). |
 | `temporal_source` | `temporal_expression.temporal_source` (the clock mechanism: NTP, internal_clock…). |
 | `temporal_referential` | `temporal_expression.referential` (explicit override of the derivation from `epoch`/`format`). |
-| `temporal_role_lower` / `temporal_role_upper` | Per-bound `TemporalRole`. |
 | `temporal_part_lower` / `temporal_part_upper` | Per-bound component part name (default `lower` / `upper`; e.g. rename to `duration`). |
 | `time_accuracy_us_lower` / `time_accuracy_us_upper` | Per-bound source-stated timing uncertainty (µs), written verbatim as a `lower_accuracy` / `upper_accuracy` component. |
 
@@ -217,7 +216,6 @@ source's latitude / longitude words". The datum is stated separately via
 | `latitude`, `longitude` | Datum-agnostic angle components. |
 | `altitude_m` | metres |
 | `raw_position` | Composite / free-text position (one component). |
-| `position_type` | The place's role → `spatial_component.spatial_role` (`SpatialRole`). |
 | `position_source` | The mechanism → `spatial_expression.spatial_source` (GNSS, WiFi, cell…). |
 | `horizontal_accuracy_m`, `vertical_accuracy_m` | metres |
 | `horizontal_speed_kmh`, `vertical_speed_kmh` | km/h |
@@ -238,9 +236,9 @@ source's latitude / longitude words". The datum is stated separately via
 
 | Field | Target |
 | --- | --- |
-| `entity_position_link` | `observation.entity_position_link` (`EntityPositionLink`). |
-| `entity_time_link` | `observation.entity_time_link` (`EntityTimeLink`). |
-| `spatial_temporal_link` | `observation.spatial_temporal_link` (`SpatialTemporalLink`). |
+| `entity_link` | `observation.entity_link` (`EntityPositionLink`). |
+| `occupancy` | `observation.occupancy` (`EntityTimeLink`). |
+| `occupancy` | `observation.occupancy` (`SpatialTemporalLink`). |
 
 The short `links:` block (§9) is the ergonomic way to set these three with bare enum
 tokens. Use the full column names here when a link value must come from a conditional or
@@ -265,7 +263,7 @@ These are set by the engine and rejected in a mapping:
 - The `latitude` / `longitude` **source field** — auto-captured on the component from the
   reference itself; never mapped separately.
 - `input_file_path` (the outermost artefact opened), `preset_id`, `preset_name`,
-  `row_uid`, `record_type`, `record_rank`.
+  `row_uid`, `record_rank_type`, `record_rank`.
 - `recovery_state` — captured by every reader and surfaced on the extract, not mappable.
 
 ## 6. `expected_fields`
@@ -364,7 +362,7 @@ conditional chain over the same reference vocabulary. Branches are tested top-to
 and the **first match wins**:
 
 ```yaml
-spatial_temporal_link: if field(ExitTime) == "NA" then const(instant)
+occupancy: if field(ExitTime) == "NA" then const(instant)
                        elif field(Confirmed) == "1" then const(continuous_during_interval)
                        else const(once_during_interval)
 ```
@@ -419,14 +417,14 @@ The observation's three edges, grouped, as bare enum tokens:
 
 ```yaml
 links:
-  entity_position:  at                 # -> entity_position_link
-  entity_time:      observed_at        # -> entity_time_link
-  spatial_temporal: instant            # -> spatial_temporal_link
+  spatial:  at                 # -> entity_link
+  entity:   self        # -> occupancy
+  temporal: once            # -> occupancy
 ```
 
 Each key is optional; each value is validated against its controlled vocabulary at load
 time (§14). Only these three keys are accepted; any other raises. For a value that must
-come from a conditional or a reference, map the full column name (`entity_position_link`,
+come from a conditional or a reference, map the full column name (`entity_link`,
 …) in `common:` or `position:` instead.
 
 ## 10. Pipes
@@ -530,7 +528,6 @@ time:
     duration_sec: { from: field(Duration), unit: s }
   format:              "%Y-%m-%d %H:%M:%S"
   zone:                const(Europe/Zurich)
-  temporal_role_upper: const(end)
 ```
 
 `duration_sec` names its **canonical** unit in the key, exactly like `altitude_m`, and the
@@ -627,28 +624,26 @@ Three columns, three jobs:
 
 The `const` value of a controlled-vocabulary field (or a conditional's `const` result) must
 be a legal member. **Validated at load time** (`_ENUM_FIELDS` in `spec.py`):
-`entity_position_link`, `entity_time_link`, `spatial_temporal_link`, `source_tier`,
+`entity_link`, `occupancy`, `occupancy`, `source_tier`,
 `deleted` (and the header `tier`). The other vocabularies below are typed columns whose
 value is checked by the run-DB CHECK at write time — an illegal token flows as text and is
 rejected **loudly** there (there is no silent drop). `entity_type`, `identifier_type`,
-`position_type` (spatial role) and `spatial_referential` are free-text columns: an
+`spatial_referential` is a free-text column: an
 unrecognised value is simply never normalised / never integrated.
 
 The members (from `core/vocabularies.py`):
 
 | Vocabulary | Field(s) | Members |
 | --- | --- | --- |
-| `EntityPositionLink` | `entity_position` / `entity_position_link` | `at`, `within_range_of`, `at_fixed_detector`, `references`, `claimed_at`, `inferred`, `unknown` |
-| `EntityTimeLink` | `entity_time` / `entity_time_link` | `observed_at`, `event_at`, `recorded_at`, `reported_for`, `intended_for`, `never_during_interval`, `unknown` |
-| `SpatialTemporalLink` | `spatial_temporal` / `spatial_temporal_link` | `instant`, `continuous_during_interval`, `once_during_interval`, `sporadic_during_interval`, `never_during_interval`, `unknown_during_interval` |
-| `EntityRole` | `entity_role` | `subject`, `caller`, `callee`, `sender`, `recipient`, `reporter`, `owner`, `unknown` |
+| `EntityPositionLink` | `spatial` / `entity_link` | `at`, `within_range_of`, `at_fixed_detector`, `references`, `claimed_at`, `inferred`, `unknown` |
+| `EntityTimeLink` | `entity_time` / `occupancy` | `observed_at`, `event_at`, `recorded_at`, `reported_for`, `intended_for`, `never_during_interval`, `unknown` |
+| `SpatialTemporalLink` | `spatial_temporal` / `occupancy` | `instant`, `continuous_during_interval`, `once_during_interval`, `sporadic_during_interval`, `never_during_interval`, `unknown_during_interval` |
+| `EntityRole` | `activity_role` | `subject`, `caller`, `callee`, `sender`, `recipient`, `reporter`, `owner`, `unknown` |
 | `IdentifierType` | `identifier_type` | `msisdn`, `imei`, `imsi`, `email`, `plate`, `account`, `mac`, `ip`, `cell`, `camera`, `case_ref`, `other`, `none` (recognised kinds; the column is free text) |
 | `EntityType` | `entity_type` | `device`, `person`, `vehicle`, `account`, `camera`, `antenna`, `case`, `label`, `event`, `poi`, `unknown` |
 | `SpatialReferential` | `spatial_referential` | `epsg:4326`, `geohash`, `mgrs`, `address`, `place_name`, `cell_ref`, `asset_ref`, `region`, `unknown` |
-| `SpatialRole` | `position_type` | `vicinity`, `entry`, `exit`, `origin`, `destination`, `waypoint`, `unknown` |
 | `TemporalKind` | `time.instant` / `interval` (derived) | `instant`, `interval`, `open_lower`, `open_upper` |
 | `TemporalReferential` | `temporal_referential` | `unix_epoch_s`, `unix_epoch_ms`, `unix_epoch_us`, `apple_cfabsolute`, `webkit`, `filetime`, `excel_serial`, `iso8601`, `local_string`, `unknown` |
-| `TemporalRole` | `temporal_role_lower` / `_upper` | `start`, `end`, `booking`, `check_in`, `check_out`, `last_seen`, `unknown` |
 | `ActivityKind` | `activity_kind` | `call`, `message`, `trip`, `transaction`, `stay`, `observation`, `unknown` |
 | `SourceTier` | `tier` / `source_tier` | `primary`, `secondary`, `unknown` |
 | `RecordState` | `deleted` | `live`, `intact`, `deleted`, `recovered`, `unknown` |

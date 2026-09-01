@@ -240,12 +240,12 @@ def test_operator_input_cannot_reach_a_digest() -> None:
     checks: test_ids.py::test_concerns_and_raw_identifier_are_excluded_by_construction.
     """
     assert list(inspect.signature(ids.l1_projection).parameters) == [
-        "entity", "spatial", "temporal", "links", "deleted", "multiplicity", "activity"]
+        "entity", "bearer", "spatial", "temporal", "links", "deleted", "multiplicity",
+        "activity"]
     assert set(ids.EntityProjection.__dataclass_fields__) == {
         "identifier", "identifier_type", "type"}
     assert set(ids.ObservationLinks.__dataclass_fields__) == {
-        "entity_role", "entity_position_link", "entity_time_link",
-        "spatial_temporal_link"}
+        "activity_role", "entity_link", "spatial_link", "occupancy", "attestation"}
 
 
 # --- row 7 -------------------------------------------------------------------
@@ -259,10 +259,11 @@ def test_a_context_party_cannot_silently_vanish() -> None:
     """
     def _digests(recipients: list[str]) -> tuple[str, str]:
         l1 = ids.l1_projection(
-            entity=ids.EntityProjection("+41791234567", V.IdentifierType.MSISDN,
+            bearer=None,
+        entity=ids.EntityProjection("+41791234567", V.IdentifierType.MSISDN,
                                         V.EntityType.DEVICE),
             spatial=None, temporal=None,
-            links=ids.ObservationLinks(entity_role=V.EntityRole.SENDER),
+            links=ids.ObservationLinks(activity_role=V.ActivityRole.SENDER),
             deleted=None, multiplicity=None,
             activity=ids.ActivityProjection(V.ActivityKind.MESSAGE,
                                             {"recipients": recipients}))
@@ -315,12 +316,15 @@ def test_a_positionless_claim_survives_projection() -> None:
     test_store.py::test_positionless_claim_persists.
     """
     l1 = ids.l1_projection(
+        bearer=None,
         entity=ids.EntityProjection(None, V.IdentifierType.NONE, V.EntityType.PERSON),
         spatial=None, temporal=None, links=ids.ObservationLinks(),
         deleted=None, multiplicity=None, activity=None)
-    # 4 entity slots + 1 spatial flag + 1 temporal flag + 5 links/deleted/multiplicity
-    # + 1 activity flag = 12 slots -> 11 separators.
-    assert l1.count(ids.SEP) == 11
+    # 4 targeted-entity slots + 1 bearer flag + 1 spatial flag + 1 temporal flag
+    # + 6 links/attestation/deleted/multiplicity + 1 activity flag = 14 slots
+    # -> 13 separators. The bearer flag is what keeps an ABSENT bearer distinct from a
+    # present-but-empty one, so it is emitted even when there is no bearer.
+    assert l1.count(ids.SEP) == 13
     content_hash, claim_digest = ids.digests(fingerprint_sha256="fp", preset_key="k",
                                              line_no=1, output_ordinal=0, l1=l1)
     for digest in (content_hash, claim_digest):

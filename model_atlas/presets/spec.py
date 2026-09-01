@@ -31,7 +31,7 @@ v3 layout (readable, examiner-first)::
       - position: {latitude: field(ZLATITUDE), longitude: field(ZLONGITUDE),
                    spatial_referential: const(epsg:4326)}
         time:     {instant: field(ZTIMESTAMP), epoch: cocoa, zone: UTC}
-        links:    {entity_position: at, entity_time: observed_at, spatial_temporal: instant}
+        links:    {entity: self, spatial: at, temporal: once}
 
 A value is ONE explicit reference call (field/header/filename/param/const/format), an
 ``if / elif / else`` conditional chain over such calls, or a mapping
@@ -47,11 +47,13 @@ from typing import Any
 
 from model_atlas.core.vocabularies import (
     CANONICAL_UNIT,
-    EntityPositionLink,
-    EntityTimeLink,
+    ActivityRole,
+    Attestation,
+    EntityLink,
+    Occupancy,
     RecordState,
     SourceTier,
-    SpatialTemporalLink,
+    SpatialLink,
     unit_factor,
 )
 from model_atlas.ingest.pathmatch import validate_selector_path
@@ -70,12 +72,12 @@ from model_atlas.presets.expr import (
 # the engine-owned columns (temporal bounds come from a `time:` block, lat/lon source
 # fields are auto-captured, ``input_file_path`` / ``preset_id`` / ``preset_name`` came
 # from the run + matched preset, ``source_record_uid`` from its top-level key,
-# ``row_uid`` was generated per output row, and record_type/record_rank come from
+# ``row_uid`` was generated per output row, and record_rank_type/record_rank come from
 # untangle). ``raw_source_path`` and ``input_record_id`` stay assignable: a preset maps
 # them (e.g. AXIOM Source / Location) and the engine only fills a default when it does not.
 # Formerly derived from ``model.families.OUTPUT_COLUMNS``; with the flat model
 # retired, the preset language's target vocabulary is declared HERE, once. The extended L1
-# targets (entity_role, activity_kind, context.<key>, ...) that ingest.assemble consumes are
+# targets (activity_role, activity_kind, context.<key>, ...) that ingest.assemble consumes are
 # admitted here too, so a real YAML preset can map them (not only the programmatic tests).
 
 # Keys under this prefix become entries in the activity's context object (one per party /
@@ -93,20 +95,20 @@ DEFAULT_RECORD_UID_TOKEN = "default"
 
 ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
     # entity
-    "entity", "entity_type", "concerns", "entity_role", "identifier_type",
+    "entity", "entity_type", "concerns", "activity_role", "identifier_type",
+    "bearer_entity", "bearer_entity_type", "bearer_identifier_type",
     # temporal (assignable subset). time_accuracy_us_lower / _upper are the source-stated
     # per-bound timing uncertainties (µs) — the temporal analogue of the spatial corner's
-    # accuracy, split per bound like temporal_role_lower/_upper: ingest.assemble writes each
+    # accuracy, split per bound like temporal_part_lower/_upper: ingest.assemble writes each
     # as a verbatim `<side>_accuracy` component and integrate.temporal reads it through to
     # timespan_integration.<side>_accuracy_us, None when unmapped (never invented).
     "utc_offset_hours", "temporal_source", "temporal_referential",
-    "temporal_role_lower", "temporal_role_upper",
     "temporal_part_lower", "temporal_part_upper",
     "time_accuracy_us_lower", "time_accuracy_us_upper",
     # spatial. The two angle targets are DATUM-AGNOSTIC (``latitude`` / ``longitude`` — the
     # source's words); the datum is stated separately via ``spatial_referential`` (e.g.
     # const(epsg:4326)), which is what lets L2 adopt them as the canonical ``*_wgs84`` columns.
-    "latitude", "longitude", "altitude_m", "position_type", "raw_position",
+    "latitude", "longitude", "altitude_m", "raw_position",
     "position_source", "horizontal_accuracy_m", "vertical_accuracy_m",
     "horizontal_speed_kmh", "vertical_speed_kmh", "horizontal_speed_accuracy_kmh",
     "vertical_speed_accuracy_kmh", "heading_deg", "heading_accuracy_deg",
@@ -114,7 +116,7 @@ ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
     # activity
     "activity_kind", "multiplicity",
     # bindings
-    "entity_position_link", "entity_time_link", "spatial_temporal_link",
+    "entity_link", "spatial_link", "occupancy", "attestation", "recorded_at",
     # provenance (assignable subset)
     "raw_source_path", "data_source", "input_record_id", "source_label", "source_tier",
     "deleted",
@@ -128,18 +130,20 @@ def is_assignable(model_field: str) -> bool:
 
 # Fields whose constant value must belong to a controlled vocabulary.
 _ENUM_FIELDS: dict[str, frozenset[str]] = {
-    "entity_position_link": frozenset(e.value for e in EntityPositionLink),
-    "entity_time_link": frozenset(e.value for e in EntityTimeLink),
-    "spatial_temporal_link": frozenset(e.value for e in SpatialTemporalLink),
+    "entity_link": frozenset(e.value for e in EntityLink),
+    "spatial_link": frozenset(e.value for e in SpatialLink),
+    "occupancy": frozenset(e.value for e in Occupancy),
+    "attestation": frozenset(e.value for e in Attestation),
+    "activity_role": frozenset(e.value for e in ActivityRole),
     "source_tier": frozenset(e.value for e in SourceTier),
     "deleted": frozenset(e.value for e in RecordState),
 }
 
-# The three `links:` keys map to these model columns.
+# The three `links:` keys map to these model columns — one per corner.
 LINK_FIELDS: dict[str, str] = {
-    "entity_position": "entity_position_link",
-    "entity_time": "entity_time_link",
-    "spatial_temporal": "spatial_temporal_link",
+    "entity": "entity_link",
+    "spatial": "spatial_link",
+    "temporal": "occupancy",
 }
 
 _TIME_STRUCTURAL_KEYS = frozenset({"instant", "interval", "epoch", "format", "zone"})
@@ -312,9 +316,13 @@ class TimeSpec:
 
 @dataclass(frozen=True)
 class Links:
-    entity_position: str | None = None
-    entity_time: str | None = None
-    spatial_temporal: str | None = None
+    """One link per corner: entity (the interaction), spatial (how close), temporal
+    (how much of the interval). The attribute names match the `links:` YAML keys, and
+    ``LINK_FIELDS`` maps each to its observation column."""
+
+    entity: str | None = None
+    spatial: str | None = None
+    temporal: str | None = None
 
     def as_field_specs(self) -> tuple[FieldSpec, ...]:
         out: list[FieldSpec] = []

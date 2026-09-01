@@ -3,7 +3,7 @@
 Defines:    the pinned-oracle verdict test (the ``_EXPECTED`` tuple was verified
             against the retired ``transforms.rank.untangle`` before the cut-over to the
             relational engine, so the store-read ``analyse`` still answers to the old
-            engine's exact per-observation ``(record_type, record_rank)``), the
+            engine's exact per-observation ``(record_rank_type, record_rank)``), the
             re-run tests (a bumped version ADDS a second row per observation and the
             projection picks the current method's verdict; the SAME version re-run
             RAISES), the analysis id derivation check, and the empty-store no-op.
@@ -46,9 +46,9 @@ def _placement(lower_us: int, hacc: float | None = None, **extra: object) -> dic
         "time_upper_unix_utc_us": lower_us,
         "latitude_wgs84": 46.2,
         "longitude_wgs84": 6.1,
-        "entity_position_link": "at",
-        "entity_time_link": "observed_at",
-        "spatial_temporal_link": "instant",
+        "spatial_link": "at",
+        "attestation": "instrument",
+        "occupancy": "once",
     }
     if hacc is not None:
         spec["horizontal_accuracy_m"] = hacc
@@ -138,9 +138,9 @@ def _write_spec(store: RunStore, *, source_id: str, preset_id: str, preset_key: 
         output_ordinal=0, entity_id=entity_id, content_hash=f"ch-{line_no}",
         claim_digest=f"cd-{line_no}", spatial_expression_id=sx_id,
         temporal_expression_id=tx_id,
-        entity_position_link=spec.get("entity_position_link"),
-        entity_time_link=spec.get("entity_time_link"),
-        spatial_temporal_link=spec.get("spatial_temporal_link")))
+        spatial_link=spec.get("spatial_link"),
+        attestation=spec.get("attestation"),
+        occupancy=spec.get("occupancy")))
     return observation_id
 
 
@@ -168,9 +168,9 @@ def _build_scenario(store: RunStore) -> list[str]:
 
 def _analysis_verdicts(store: RunStore, method: str) -> dict[str, tuple]:
     return {
-        observation_id: (record_type, record_rank)
-        for observation_id, record_type, record_rank in store.connection.execute(
-            "SELECT observation_id, record_type, record_rank FROM analysis "
+        observation_id: (record_rank_type, record_rank)
+        for observation_id, record_rank_type, record_rank in store.connection.execute(
+            "SELECT observation_id, record_rank_type, record_rank FROM analysis "
             "WHERE method = ?", (method,))
     }
 
@@ -219,15 +219,15 @@ def test_bumped_version_adds_rows_and_projection_picks_current() -> None:
         current = flat_view.build_flat_view(
             store.connection, include_source_columns=False).set_index("row_uid")
         r4 = observation_ids[4]
-        assert current.at[r4, "record_type"] == "main"
+        assert current.at[r4, "record_rank_type"] == "main"
         assert int(current.at[r4, "record_rank"]) == 1
         # …while the superseded generation stays readable by pinning its method.
         pinned = flat_view.build_flat_view(
             store.connection, include_source_columns=False,
             ranking_method="untangle/2.0").set_index("row_uid")
-        assert pd.isna(pinned.at[r4, "record_type"])
-        assert current.at[observation_ids[3], "record_type"] == "additional"  # r3 demoted by r4
-        assert pinned.at[observation_ids[3], "record_type"] == "main"
+        assert pd.isna(pinned.at[r4, "record_rank_type"])
+        assert current.at[observation_ids[3], "record_rank_type"] == "additional"  # r3 demoted by r4
+        assert pinned.at[observation_ids[3], "record_rank_type"] == "main"
 
 
 def test_same_version_rerun_raises() -> None:

@@ -105,8 +105,7 @@ class _CaseFixture:
                   lower_accuracy_us: int | None = None,
                   upper_accuracy_us: int | None = None,
                   position_link: str = "at",
-                  time_link: str = "observed_at",
-                  st_link: str = "instant") -> str:
+                  st_link: str = "once") -> str:
         """One placed-and-timed observation; returns its observation_id."""
         self.line_no += 1
         record_id = ids.raw_record_id(self.source_id, self.line_no)
@@ -151,8 +150,8 @@ class _CaseFixture:
             preset_id=self.preset_id, output_ordinal=0, entity_id=entity_id,
             content_hash=f"ch-{self.line_no}", claim_digest=f"cd-{self.line_no}",
             spatial_expression_id=sx_id, temporal_expression_id=tx_id,
-            entity_role="subject", entity_position_link=position_link,
-            entity_time_link=time_link, spatial_temporal_link=st_link,
+            activity_role="unknown", spatial_link=position_link,
+            entity_link="self", occupancy=st_link,
             source_label=f"src-{self.line_no}"))
         return observation_id
 
@@ -220,11 +219,11 @@ JOIN spatial_index six ON six.spatial_integration_id = si.spatial_integration_id
 JOIN timespan_integration ti ON ti.temporal_expression_id = a.temporal_expression_id
 WHERE ti.lower_unix_utc_us IS NOT NULL AND ti.upper_unix_utc_us IS NOT NULL
   AND si.latitude_wgs84 IS NOT NULL AND si.longitude_wgs84 IS NOT NULL
-  AND (a.entity_position_link IS NULL OR a.entity_position_link != 'references')
-  AND (a.entity_time_link IS NULL
-       OR a.entity_time_link != 'never_during_interval')
-  AND (a.spatial_temporal_link IS NULL
-       OR a.spatial_temporal_link != 'never_during_interval')
+  AND (a.spatial_link IS NULL OR a.spatial_link != 'references')
+  AND (a.occupancy IS NULL
+       OR a.occupancy != 'never_during_interval')
+  AND (a.occupancy IS NULL
+       OR a.occupancy != 'never_during_interval')
 """
 
 
@@ -879,14 +878,14 @@ def test_non_presence_links_are_excluded_from_concomitance() -> None:
         # A chat pin REFERRING to the same place at the same time: never presence.
         fixture.add_point(*KNOWN, _minutes(0), _minutes(5),
                           identifier="+41790000003", position_link="references")
-        # An alibi (E-T negation) and an S-T negation: negation never reads as presence.
+        # Negation never reads as presence. It now has ONE home — the spatial link — so
+        # this is a single case rather than the two (E-T and S-T) the old model allowed to
+        # disagree with each other. `unknown` is excluded too, for a different reason: no
+        # claim either way cannot support a presence finding.
         fixture.add_point(*KNOWN, _minutes(0), _minutes(5),
-                          identifier="+41790000004",
-                          time_link="never_during_interval",
-                          st_link="continuous_during_interval")
+                          identifier="+41790000004", position_link="absent")
         fixture.add_point(*KNOWN, _minutes(0), _minutes(5),
-                          identifier="+41790000005",
-                          st_link="never_during_interval")
+                          identifier="+41790000005", position_link="unknown")
         integrate_spatial(store)
 
         summary, rows = _run(store, space_threshold_m=50.0)

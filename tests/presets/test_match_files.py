@@ -27,8 +27,8 @@ def _xml_preset(model: str, *, id_suffix: str = "", longitude=None) -> object:
         "observations": [{
             "position": position,
             "time": {"instant": "field(TimeStamp)"},
-            "links": {"entity_position": "at", "entity_time": "observed_at",
-                      "spatial_temporal": "instant"},
+            "links": {"entity": "self", "spatial": "at",
+                      "temporal": "once"},
         }],
     }
     return preset_spec_from_yaml(yaml.safe_load(yaml.safe_dump(raw)), Path(f"{model}.yaml"))
@@ -69,8 +69,8 @@ def test_namespace_mismatch_excludes_preset(tmp_path: Path) -> None:
         "observations": location.observations and [{
             "position": {"latitude": "field(Position.Latitude)"},
             "time": {"instant": "field(TimeStamp)"},
-            "links": {"entity_position": "at", "entity_time": "observed_at",
-                      "spatial_temporal": "instant"},
+            "links": {"entity": "self", "spatial": "at",
+                      "temporal": "once"},
         }],
     }
     axiom = preset_spec_from_yaml(yaml.safe_load(yaml.safe_dump(raw)), Path("axiom.yaml"))

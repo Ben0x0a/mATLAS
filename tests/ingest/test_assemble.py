@@ -62,11 +62,14 @@ def _f(model_field: str, expr: str, **kwargs) -> FieldSpec:
     return FieldSpec(model_field=model_field, ref=parse_ref(expr), **kwargs)
 
 
-def _links(epl: str, etl: str, stl: str) -> list[FieldSpec]:
+def _links(spatial: str, entity: str, occupancy: str) -> list[FieldSpec]:
+    """One link per corner. The old signature was (entity_position, entity_time,
+    spatial_temporal); the middle slot is now the ENTITY-corner verb, and what used to be
+    the E-T link's epistemic content lives on `attestation`."""
     return [
-        _f("entity_position_link", f"const({epl})"),
-        _f("entity_time_link", f"const({etl})"),
-        _f("spatial_temporal_link", f"const({stl})"),
+        _f("spatial_link", f"const({spatial})"),
+        _f("entity_link", f"const({entity})"),
+        _f("occupancy", f"const({occupancy})"),
     ]
 
 
@@ -154,15 +157,15 @@ def _one(store: RunStore, sql: str, *args) -> dict:
 def _example_anpr():
     spec = _preset("anpr_ch", common=[
         _f("entity", "field(plate)"), _f("entity_type", "const(vehicle)"),
-        _f("identifier_type", "const(plate)"), _f("entity_role", "const(subject)"),
-        _f("position_source", "const(camera)"), _f("position_type", "const(vicinity)"),
+        _f("identifier_type", "const(plate)"), _f("activity_role", "const(unknown)"),
+        _f("position_source", "const(camera)"),
         _f("spatial_referential", "const(cell_ref)"),
         _f("temporal_referential", "const(local_string)"),
-        _f("temporal_source", "const(NTP)"), _f("temporal_role_lower", "const(last_seen)"),
+        _f("temporal_source", "const(NTP)"),
         _f("source_label", "const(ANPR)"),
     ], observations=[ObservationTemplate(
         fields=tuple([_f("raw_position", "field(camera_id)"),
-                      *_links("at_fixed_detector", "observed_at", "instant")]),
+                      *_links("near", "served_by", "once")]),
         temporal=(_time("instant", "field(ts)", fmt="%Y-%m-%d %H:%M:%S",
                         zone="const(+01:00)"),),
     )])
@@ -174,14 +177,13 @@ def _example_anpr():
 def _example_cctv():
     spec = _preset("dvr_generic", common=[
         _f("entity", "field(channel)"), _f("entity_type", "const(camera)"),
-        _f("identifier_type", "const(camera)"), _f("entity_role", "const(subject)"),
-        _f("position_source", "const(manual)"), _f("position_type", "const(vicinity)"),
+        _f("identifier_type", "const(camera)"), _f("activity_role", "const(unknown)"),
+        _f("position_source", "const(manual)"),
         _f("spatial_referential", "const(address)"),
         _f("temporal_source", "const(internal_clock)"),
-        _f("temporal_role_lower", "const(start)"), _f("temporal_role_upper", "const(end)"),
     ], observations=[ObservationTemplate(
         fields=tuple([_f("raw_position", "field(site)"),
-                      *_links("at", "recorded_at", "continuous_during_interval")]),
+                      *_links("at", "self", "continuous")]),
         # no zone: the source stated no offset — stated_offset stays NULL per bound.
         temporal=(_time("interval", "field(start)", "field(end)",
                         fmt="%Y-%m-%d %H:%M:%S"),),
@@ -200,16 +202,15 @@ def _example_witness():
         FieldSpec(model_field="entity", ref=parse_ref("field(statement)"),
                   extract=("homme", "who")),
         _f("identifier_type", "const(none)"), _f("entity_type", "const(person)"),
-        _f("entity_role", "const(reporter)"), _f("concerns", "field(witness)"),
-        _f("position_source", "const(manual)"), _f("position_type", "const(vicinity)"),
+        _f("attestation", "const(person)"), _f("concerns", "field(witness)"),
+        _f("position_source", "const(manual)"),
         _f("spatial_referential", "const(place_name)"),
         _f("temporal_referential", "const(local_string)"),
-        _f("temporal_role_lower", "const(start)"), _f("temporal_role_upper", "const(end)"),
     ], observations=[ObservationTemplate(
         fields=tuple([FieldSpec(model_field="raw_position",
                                 ref=parse_ref("field(statement)"),
                                 extract=("place", "place")),
-                      *_links("claimed_at", "reported_for", "continuous_during_interval")]),
+                      *_links("at", "self", "continuous")]),
         temporal=(_time("interval", "field(statement)", "field(statement)",
                         zone="const(+01:00)"),),
     )], patterns={"homme": "(?P<who>l'homme)", "place": "(?P<place>pres de la gare)"})
@@ -222,12 +223,11 @@ def _cdr_common(role: str, entity_field: str, context: dict[str, str]) -> list[F
     fields = [
         _f("activity_kind", "const(call)"),
         _f("entity", f"field({entity_field})"), _f("identifier_type", "const(msisdn)"),
-        _f("entity_type", "const(device)"), _f("entity_role", f"const({role})"),
-        _f("position_source", "const(cell)"), _f("position_type", "const(vicinity)"),
+        _f("entity_type", "const(device)"), _f("activity_role", f"const({role})"),
+        _f("position_source", "const(cell)"),
         _f("spatial_referential", "const(cell_ref)"),
         _f("temporal_referential", "const(local_string)"),
         _f("temporal_source", "const(NTP)"),
-        _f("temporal_role_lower", "const(start)"), _f("temporal_role_upper", "const(end)"),
         _f("temporal_part_upper", "const(duration)"),
     ]
     fields.extend(_f(f"context.{key}", f"field({source})") for key, source in context.items())
@@ -241,8 +241,7 @@ def _example_cdr_a():
                            _f("source_label", "const(CDR op-A)")],
                    observations=[ObservationTemplate(
                        fields=tuple([_f("raw_position", "field(cell)"),
-                                     *_links("within_range_of", "event_at",
-                                             "continuous_during_interval")]),
+                                     *_links("near", "served_by", "continuous")]),
                        temporal=(_time("interval", "field(start)", "field(duration)",
                                        fmt="%Y-%m-%d %H:%M:%S", zone="const(+01:00)"),),
                    )])
@@ -259,8 +258,7 @@ def _example_cdr_b():
                    common=_cdr_common("callee", "callee", {"counterpart": "caller"}),
                    observations=[ObservationTemplate(
                        fields=tuple([_f("raw_position", "field(cell_b)"),
-                                     *_links("within_range_of", "event_at",
-                                             "continuous_during_interval")]),
+                                     *_links("near", "served_by", "continuous")]),
                        temporal=(_time("interval", "field(start)", "field(duration)",
                                        fmt="%Y-%m-%d %H:%M:%S", zone="const(+01:00)"),),
                    )])
@@ -272,10 +270,9 @@ def _example_cdr_b():
 
 def _example_cache():
     spec = _preset("ios_cache", common=[
-        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+        _f("entity_type", "const(device)"), _f("activity_role", "const(unknown)"),
         _f("position_source", "const(GNSS)"),
         _f("temporal_source", "const(internal_clock)"),
-        _f("temporal_role_lower", "const(last_seen)"),
     ], observations=[ObservationTemplate(
         fields=tuple([
             _f("latitude", "field(ZLATITUDE)"),
@@ -285,7 +282,7 @@ def _example_cache():
             # unit declared for L2's benefit; L1 must keep the VERBATIM m/s text.
             _f("horizontal_speed_kmh", "field(ZSPEED)", unit="m/s"),
             _f("heading_deg", "field(ZCOURSE)"),
-            *_links("at", "observed_at", "instant")]),
+            *_links("at", "self", "once")]),
         temporal=(_time("instant", "field(ZTIMESTAMP)", epoch="cocoa"),),
     )])
     records = _records({"ZCOURSE": "15", "ZHORIZONTALACCURACY": "18",
@@ -296,15 +293,13 @@ def _example_cache():
 
 def _example_visit():
     spec = _preset("ios_visits", common=[
-        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+        _f("entity_type", "const(device)"), _f("activity_role", "const(unknown)"),
         _f("position_source", "const(GNSS)"),
-        _f("temporal_role_lower", "const(check_in)"),
-        _f("temporal_role_upper", "const(check_out)"),
     ], observations=[ObservationTemplate(
         fields=tuple([_f("latitude", "field(ZLAT)"),
                       _f("longitude", "field(ZLON)"),
                       _f("spatial_referential", "const(epsg:4326)"),
-                      *_links("at", "observed_at", "continuous_during_interval")]),
+                      *_links("at", "self", "continuous")]),
         temporal=(_time("interval", "field(ZENTRYDATE)", "field(ZEXITDATE)",
                         epoch="cocoa"),),
     )])
@@ -316,16 +311,15 @@ def _example_visit():
 def _example_robbery():
     spec = _preset("police_reg", common=[
         _f("entity", "field(case)"), _f("identifier_type", "const(case_ref)"),
-        _f("entity_type", "const(event)"), _f("entity_role", "const(subject)"),
+        _f("entity_type", "const(event)"), _f("activity_role", "const(unknown)"),
         # decision 36: identifier == concerns for an event from a structured list.
         _f("concerns", "field(case)"),
-        _f("position_source", "const(manual)"), _f("position_type", "const(vicinity)"),
+        _f("position_source", "const(manual)"),
         _f("spatial_referential", "const(address)"),
         _f("temporal_referential", "const(local_string)"),
-        _f("temporal_role_lower", "const(start)"), _f("temporal_role_upper", "const(end)"),
     ], observations=[ObservationTemplate(
         fields=tuple([_f("raw_position", "field(location)"),
-                      *_links("claimed_at", "reported_for", "continuous_during_interval")]),
+                      *_links("at", "self", "continuous")]),
         temporal=(_time("interval", "field(from)", "field(to)"),),
     )])
     records = _records({"case": "GE-2026-04412", "from": "2026-03-14 02:30",
@@ -335,12 +329,11 @@ def _example_robbery():
 
 
 def _example_route():
-    def leg(place_field: str, role: str, referential: str) -> ObservationTemplate:
+    def leg(place_field: str, referential: str) -> ObservationTemplate:
         return ObservationTemplate(
             fields=tuple([_f("raw_position", f"field({place_field})"),
-                          _f("position_type", f"const({role})"),
                           _f("spatial_referential", f"const({referential})"),
-                          *_links("references", "event_at", "instant")]),
+                          *_links("references", "shared", "once")]),
             temporal=(_time("instant", "field(query_ts)", fmt="iso8601",
                             zone="const(+00:00)"),),
         )
@@ -350,11 +343,11 @@ def _example_route():
         _f("context.origin", "field(origin)"),
         _f("context.destination", "field(destination)"),
         _f("entity", "field(account)"), _f("identifier_type", "const(email)"),
-        _f("entity_type", "const(account)"), _f("entity_role", "const(subject)"),
+        _f("entity_type", "const(account)"), _f("activity_role", "const(unknown)"),
         _f("position_source", "const(manual)"),
-        _f("temporal_source", "const(NTP)"), _f("temporal_role_lower", "const(start)"),
-    ], observations=[leg("destination", "destination", "address"),
-                   leg("origin", "origin", "place_name")])
+        _f("temporal_source", "const(NTP)"),
+    ], observations=[leg("destination", "address"),
+                   leg("origin", "place_name")])
     records = _records({"account": "jdoe@gmail.com",
                         "destination": "Rue du Stand 15, Geneve", "origin": "Home",
                         "query_ts": "2026-03-13T21:04:09Z"})
@@ -366,7 +359,7 @@ def _example_pin():
         _f("activity_kind", "const(message)"),
         _f("context.recipient", "field(recipient)"),
         _f("entity", "field(sender)"), _f("identifier_type", "const(msisdn)"),
-        _f("entity_type", "const(device)"), _f("entity_role", "const(sender)"),
+        _f("entity_type", "const(device)"), _f("activity_role", "const(sender)"),
         _f("position_source", "const(GNSS)"),
         # decision 33: the app's own deleted flag via an if/then conditional (R11).
         _f("deleted", 'if field(is_deleted) == "1" then const(deleted) else const(live)'),
@@ -374,7 +367,7 @@ def _example_pin():
         fields=tuple([_f("latitude", "field(lat)"),
                       _f("longitude", "field(lon)"),
                       _f("spatial_referential", "const(epsg:4326)"),
-                      *_links("references", "event_at", "instant")]),
+                      *_links("references", "shared", "once")]),
         temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
     )])
     records = _records({"caption": "meet me here", "is_deleted": "1",
@@ -421,7 +414,8 @@ def test_worked_example_observation_counts(name: str) -> None:
 def test_anpr_shapes() -> None:
     spec, records, _ = _example_anpr()
     with _assembled(spec, records) as (store, _, _):
-        entity = _one(store, "SELECT * FROM entity")
+        entity = _one(store, "SELECT e.* FROM entity e "
+                      "JOIN observation a ON a.entity_id = e.entity_id")
         assert entity["raw_identifier"] == "GE 123 456"     # verbatim (decision 21)
         assert entity["identifier"] is None                 # T32 normalises later
         assert entity["identifier_type"] == "plate"
@@ -430,21 +424,24 @@ def test_anpr_shapes() -> None:
         sx = _one(store, "SELECT * FROM spatial_expression")
         assert (sx["referential"], sx["spatial_source"]) == ("cell_ref", "camera")
         comp = _one(store, "SELECT * FROM spatial_component")
-        assert (comp["part"], comp["spatial_role"], comp["source_field"], comp["raw_value"]) \
-            == ("raw_position", "vicinity", "camera_id", "CAM-A7-KM12")
+        assert (comp["part"], comp["source_field"], comp["raw_value"]) \
+            == ("raw_position", "camera_id", "CAM-A7-KM12")
 
         tx = _one(store, "SELECT * FROM temporal_expression")
         assert (tx["kind"], tx["referential"], tx["temporal_source"]) \
             == ("instant", "local_string", "NTP")
         bound = _one(store, "SELECT * FROM temporal_component")
-        assert (bound["part"], bound["temporal_role"], bound["stated_offset"],
+        assert (bound["part"], bound["stated_offset"],
                 bound["source_field"], bound["raw_value"]) \
-            == ("lower", "last_seen", "+01:00", "ts", "2026-03-14 02:05:33")
+            == ("lower", "+01:00", "ts", "2026-03-14 02:05:33")
 
         observation = _one(store, "SELECT * FROM observation")
-        assert (observation["entity_role"], observation["entity_position_link"],
-                observation["entity_time_link"], observation["spatial_temporal_link"]) \
-            == ("subject", "at_fixed_detector", "observed_at", "instant")
+        assert (observation["activity_role"], observation["entity_link"],
+                observation["spatial_link"], observation["occupancy"]) \
+            == ("unknown", "served_by", "near", "once")
+        # `served_by` needs a bearer, so a SECOND entity row exists and the observation
+        # points at it — the invariant EntityLink.needs_bearer states.
+        assert observation["bearer_entity_id"] is not None
         assert observation["activity_id"] is None             # nothing to group (D35)
         assert observation["source_label"] == "ANPR"
 
@@ -456,7 +453,7 @@ def test_time_bound_extract_pulls_substring_from_free_text() -> None:
         "witness_time",
         common=[_f("entity", "const(witness)"), _f("identifier_type", "const(none)")],
         observations=[ObservationTemplate(
-            fields=tuple(_links("claimed_at", "observed_at", "instant")),
+            fields=tuple(_links("at", "self", "once")),
             temporal=(TimeSpec(
                 kind="instant",
                 lower=parse_ref("field(statement)"), upper=parse_ref("field(statement)"),
@@ -487,14 +484,14 @@ def test_cdr_activity_context_and_duration_part() -> None:
         assert report.activity_count == 1
 
         bounds = _rows(store, "SELECT * FROM temporal_component ORDER BY ordinal")
-        assert [(b["part"], b["temporal_role"], b["stated_offset"], b["raw_value"])
+        assert [(b["part"], b["stated_offset"], b["raw_value"])
                 for b in bounds] == [
-            ("lower", "start", "+01:00", "2026-03-14 02:20:31"),
-            ("duration", "end", "+01:00", "187"),           # upper renamed (decision 23)
+            ("lower", "+01:00", "2026-03-14 02:20:31"),
+            ("duration", "+01:00", "187"),                  # upper renamed (decision 23)
         ]
         observation = _one(store, "SELECT * FROM observation")
         assert observation["activity_id"] == activity["activity_id"]
-        assert observation["entity_role"] == "caller"
+        assert observation["activity_role"] == "caller"
 
 
 def test_duration_bound_is_written_verbatim_under_the_duration_part() -> None:
@@ -509,9 +506,9 @@ def test_duration_bound_is_written_verbatim_under_the_duration_part() -> None:
                    observations=(replace(spec.observations[0], temporal=(time,)),))
     with _assembled(spec, records) as (store, _, _):
         bounds = _rows(store, "SELECT * FROM temporal_component ORDER BY ordinal")
-        assert [(b["part"], b["temporal_role"], b["raw_value"]) for b in bounds] == [
-            ("lower", "start", "2026-03-14 02:20:31"),
-            ("duration", "end", "187"),          # verbatim seconds, NOT scaled to µs
+        assert [(b["part"], b["raw_value"]) for b in bounds] == [
+            ("lower", "2026-03-14 02:20:31"),
+            ("duration", "187"),                 # verbatim seconds, NOT scaled to µs
         ]
 
 
@@ -563,29 +560,34 @@ def test_cache_components_verbatim_and_derived_referentials() -> None:
             ("horizontal_speed_kmh", "ZSPEED", "1.1"),       # m/s VERBATIM — no unit at L1
             ("heading_deg", "ZCOURSE", "15"),
         ]
-        assert all(c["spatial_role"] is None for c in comps)
         sx = _one(store, "SELECT * FROM spatial_expression")
         assert sx["referential"] == "epsg:4326"              # from the explicit spatial_referential mapping
         tx = _one(store, "SELECT * FROM temporal_expression")
         assert tx["referential"] == "apple_cfabsolute"       # derived from epoch: cocoa
         bound = _one(store, "SELECT * FROM temporal_component")
-        assert (bound["part"], bound["temporal_role"], bound["stated_offset"],
-                bound["raw_value"]) == ("lower", "last_seen", None, "763712700")
-        entity = _one(store, "SELECT * FROM entity")
+        assert (bound["part"], bound["stated_offset"],
+                bound["raw_value"]) == ("lower", None, "763712700")
+        entity = _one(store, "SELECT e.* FROM entity e "
+                      "JOIN observation a ON a.entity_id = e.entity_id")
         # No entity mapping: a purely typed mention — nothing can ever converge on it.
         assert (entity["raw_identifier"], entity["identifier_type"], entity["type"]) \
             == (None, "none", "device")
 
 
-def test_visit_per_bound_roles() -> None:
+def test_visit_bounds_are_identified_by_their_source_field() -> None:
+    """Each bound is told apart by the COLUMN it came from, not by an asserted role.
+
+    A visit's entry and exit used to carry ``check_in`` / ``check_out`` roles the preset
+    author declared. ``ZENTRYDATE`` / ``ZEXITDATE`` say the same thing and are the source's
+    own words, so the role added nothing but an opinion to disagree with.
+    """
     spec, records, _ = _example_visit()
     with _assembled(spec, records) as (store, _, _):
         bounds = _rows(store, "SELECT * FROM temporal_component ORDER BY ordinal")
-        # decision 25: each bound carries its OWN role — check_in / check_out.
-        assert [(b["part"], b["temporal_role"], b["source_field"], b["raw_value"])
+        assert [(b["part"], b["source_field"], b["raw_value"])
                 for b in bounds] == [
-            ("lower", "check_in", "ZENTRYDATE", "763689600"),
-            ("upper", "check_out", "ZEXITDATE", "763702200"),
+            ("lower", "ZENTRYDATE", "763689600"),
+            ("upper", "ZEXITDATE", "763702200"),
         ]
         assert _one(store, "SELECT kind FROM temporal_expression")["kind"] == "interval"
 
@@ -604,8 +606,9 @@ def test_route_two_observations_share_one_activity() -> None:
                       "SELECT sc.* FROM spatial_component sc "
                       "JOIN observation a ON a.spatial_expression_id = sc.spatial_expression_id "
                       "ORDER BY a.output_ordinal")
-        # decision 25: each leg's value-group carries its own spatial_role.
-        assert [(c["spatial_role"], c["raw_value"]) for c in comps] == [
+        # Each leg keeps its OWN value-group; which leg is which is read from the
+        # source field the value came from, not from an asserted role.
+        assert [(c["source_field"], c["raw_value"]) for c in comps] == [
             ("destination", "Rue du Stand 15, Geneve"), ("origin", "Home")]
         referentials = _rows(store,
                              "SELECT sx.referential FROM spatial_expression sx "
@@ -619,7 +622,7 @@ def test_pin_deleted_conditional_and_context() -> None:
     with _assembled(spec, records) as (store, _, _):
         observation = _one(store, "SELECT * FROM observation")
         assert observation["deleted"] == "deleted"             # decision 33 branch matched (R11)
-        assert observation["entity_role"] == "sender"
+        assert observation["activity_role"] == "sender"
         activity = _one(store, "SELECT * FROM activity")
         assert activity["kind"] == "message"
         assert json.loads(activity["context_json"]) == {"recipient": "+41762223344"}
@@ -630,7 +633,8 @@ def test_pin_deleted_conditional_and_context() -> None:
 def test_witness_concerns_and_extracted_raw_identifier() -> None:
     spec, records, _ = _example_witness()
     with _assembled(spec, records) as (store, _, _):
-        entity = _one(store, "SELECT * FROM entity")
+        entity = _one(store, "SELECT e.* FROM entity e "
+                      "JOIN observation a ON a.entity_id = e.entity_id")
         assert entity["raw_identifier"] == "l'homme"         # extract selects source text
         assert entity["identifier"] is None                  # not canonicalisable
         assert entity["concerns"] == "Marie Dupont"          # the witness (decision 17)
@@ -699,7 +703,7 @@ def _recompute_digests(store: RunStore, observation: dict) -> tuple[str, str]:
                              "ORDER BY ordinal", observation["spatial_expression_id"])
         spatial = ids.SpatialProjection(
             sx["referential"], sx["spatial_source"],
-            tuple(ids.SpatialComponentProjection(c["part"], c["spatial_role"], c["raw_value"])
+            tuple(ids.SpatialComponentProjection(c["part"], c["unit"], c["raw_value"])
                   for c in comps))
 
     temporal = None
@@ -710,7 +714,7 @@ def _recompute_digests(store: RunStore, observation: dict) -> tuple[str, str]:
                              "ORDER BY ordinal", observation["temporal_expression_id"])
         temporal = ids.TemporalProjection(
             tx["kind"], tx["referential"],
-            tuple(ids.TemporalComponentProjection(c["part"], c["temporal_role"],
+            tuple(ids.TemporalComponentProjection(c["part"],
                                                   c["stated_offset"], c["raw_value"])
                   for c in comps))
 
@@ -721,11 +725,20 @@ def _recompute_digests(store: RunStore, observation: dict) -> tuple[str, str]:
         context = json.loads(act["context_json"]) if act["context_json"] is not None else None
         activity = ids.ActivityProjection(act["kind"], context)
 
-    links = ids.ObservationLinks(observation["entity_role"], observation["entity_position_link"],
-                               observation["entity_time_link"], observation["spatial_temporal_link"])
-    l1 = ids.l1_projection(entity=entity, spatial=spatial, temporal=temporal, links=links,
-                           deleted=observation["deleted"], multiplicity=observation["multiplicity"],
-                           activity=activity)
+    links = ids.ObservationLinks(
+        observation["activity_role"], observation["entity_link"],
+        observation["spatial_link"], observation["occupancy"], observation["attestation"])
+    # The BEARER is read back from the store like every other corner: the round-trip only
+    # proves the normative recipe was used if it rebuilds BOTH entity rows.
+    bearer = None
+    if observation["bearer_entity_id"] is not None:
+        bearer_row = _one(store, "SELECT * FROM entity WHERE entity_id = ?",
+                          observation["bearer_entity_id"])
+        bearer = ids.EntityProjection(bearer_row["identifier"],
+                                      bearer_row["identifier_type"], bearer_row["type"])
+    l1 = ids.l1_projection(entity=entity, bearer=bearer, spatial=spatial, temporal=temporal,
+                           links=links, deleted=observation["deleted"],
+                           multiplicity=observation["multiplicity"], activity=activity)
     provenance = _one(store,
                       "SELECT s.fingerprint_sha256 AS fp, r.line_no AS line_no FROM raw_record r "
                       "JOIN source s ON s.source_id = r.source_id WHERE r.raw_record_id = ?",
@@ -801,7 +814,8 @@ def test_na_sentinel_flows_to_text_and_unmapped_stays_null() -> None:
 def test_operator_entity_param_overrides_and_sets_origin() -> None:
     spec, records, _ = _example_cache()
     with _assembled(spec, records, entity="+41791234567") as (store, _, _):
-        entity = _one(store, "SELECT * FROM entity")
+        entity = _one(store, "SELECT e.* FROM entity e "
+                      "JOIN observation a ON a.entity_id = e.entity_id")
         assert entity["raw_identifier"] == "+41791234567"
         assert _one(store, "SELECT entity_origin FROM observation")["entity_origin"] \
             == "operator_param"                        # R24: operator input is labelled
@@ -835,11 +849,11 @@ def test_common_mapped_coordinate_produces_a_spatial_corner() -> None:
     # FIX-11 #2: latitude/longitude mapped under common: must emit a spatial COMPONENT shared
     # by the observation, not vanish into `shared` — otherwise the position and its digest are lost.
     spec = _preset("common_coords", common=[
-        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+        _f("entity_type", "const(device)"), _f("activity_role", "const(unknown)"),
         _f("latitude", "field(lat)"), _f("longitude", "field(lon)"),
         _f("spatial_referential", "const(epsg:4326)"),
     ], observations=[ObservationTemplate(
-        fields=tuple(_links("at", "observed_at", "instant")),
+        fields=tuple(_links("at", "self", "once")),
         temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
     )])
     records = _records({"lat": "46.2", "lon": "6.1", "ts": "1773450680"})
@@ -859,9 +873,9 @@ def test_resolver_picks_up_a_field_present_only_in_a_later_record() -> None:
     # (heterogeneous JSON/JSONL) — seeding the resolver from record[0] alone would drop it.
     spec = _preset("hetero", common=[
         _f("entity", "field(imei)"), _f("identifier_type", "const(msisdn)"),
-        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+        _f("entity_type", "const(device)"), _f("activity_role", "const(unknown)"),
     ], observations=[ObservationTemplate(
-        fields=tuple(_links("references", "event_at", "instant")),
+        fields=tuple(_links("references", "shared", "once")),
         temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
     )])
     # 'imei' appears ONLY in the second record.
@@ -893,7 +907,8 @@ def test_empty_operator_entity_blanks_the_value_and_tags_it_consistently() -> No
     # while the origin lied. Now the empty value is applied AND tagged (consistent provenance).
     spec, records, _ = _example_anpr()   # its preset maps entity: field(plate) -> "GE 123 456"
     with _assembled(spec, records, entity="") as (store, _, _):
-        entity = _one(store, "SELECT * FROM entity")
+        entity = _one(store, "SELECT e.* FROM entity e "
+                      "JOIN observation a ON a.entity_id = e.entity_id")
         assert entity["raw_identifier"] == ""            # the operator's blank, not the preset value
         assert _one(store, "SELECT entity_origin FROM observation")["entity_origin"] \
             == "operator_param"
@@ -908,9 +923,9 @@ def _acc_interval_spec_records(with_lower_acc: bool):
     if with_lower_acc:
         fields.insert(0, _f("time_accuracy_us_lower", "field(acc_lo)"))
     spec = _preset("acc_interval", common=[
-        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+        _f("entity_type", "const(device)"), _f("activity_role", "const(unknown)"),
     ], observations=[ObservationTemplate(
-        fields=tuple([*fields, *_links("at", "observed_at", "continuous_during_interval")]),
+        fields=tuple([*fields, *_links("at", "self", "continuous")]),
         temporal=(_time("interval", "field(start)", "field(end)", epoch="unix_s"),),
     )])
     records = _records({"end": "1773450681", "acc_lo": "500000", "acc_hi": "1000000"})
@@ -946,9 +961,9 @@ def _agnostic_coords_preset(key: str, *, with_referential: bool) -> PresetSpec:
     if with_referential:
         position.append(_f("spatial_referential", "const(epsg:4326)"))
     return _preset(key, common=[
-        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+        _f("entity_type", "const(device)"), _f("activity_role", "const(unknown)"),
     ], observations=[ObservationTemplate(
-        fields=tuple([*position, *_links("at", "observed_at", "instant")]),
+        fields=tuple([*position, *_links("at", "self", "once")]),
         temporal=(_time("instant", "field(ts)", epoch="unix_s"),),
     )])
 
@@ -993,10 +1008,10 @@ def test_time_without_epoch_or_format_assumes_unix_us_and_warns() -> None:
     # source that is really seconds / an Apple epoch is not silently mis-scaled. (A time WITH an
     # epoch/format declared emits no such warning — every other timed test above asserts that.)
     spec = _preset("bare_time", common=[
-        _f("entity_type", "const(device)"), _f("entity_role", "const(subject)"),
+        _f("entity_type", "const(device)"), _f("activity_role", "const(unknown)"),
     ], observations=[ObservationTemplate(
         fields=tuple([_f("raw_position", "field(loc)"),
-                      *_links("at", "observed_at", "instant")]),
+                      *_links("at", "self", "once")]),
         temporal=(_time("instant", "field(ts)"),),   # no epoch, no format
     )])
     records = _records({"ts": "1773450680000000", "loc": "Lobby"})

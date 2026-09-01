@@ -56,6 +56,17 @@ exposes two distinct write calls.
 
 `entity_relation` columns: `subject_id`, `object_id`, `relation_type`
 (used_by | subscribed_by | owned_by | **alias_of** | **registered_to** | …),
+
+> **Reconcile with `EntityLink` before this layer ships.** The L1 `entity_link` vocabulary
+> (`served_by`, `seen_by`, `used_at`, `stayed_at`, …) names relations between two entities
+> *within one observation*, and this L3 `relation_type` names relations between two resolved
+> nodes *across* records. They are different scopes and should stay distinct — but they must
+> not drift into two vocabularies for the same idea. The rule: `entity_link` describes what a
+> single record attests about a placement and is fixed at ingest; `relation_type` describes a
+> standing fact with a validity interval and is asserted by an analyst (or by a record whose
+> *content is itself a relation*). A verb that would be true across records belongs here, not
+> there.
+
 `valid_from`, `valid_to` (**INTEGER unix µs** — same type as observation time, so the
 validity-covers-time join actually works), `origin`
 (operator | preset | **evidence**), `asserted_by` (agent string), `asserted_at`,

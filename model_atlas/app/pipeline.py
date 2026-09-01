@@ -345,7 +345,7 @@ def _integrate_temporal_for_preset(store: RunStore, spec: PresetSpec, local_zone
         components = _rows(
             store,
             "SELECT temporal_component_id, temporal_expression_id, ordinal, part, "
-            "temporal_role, stated_offset, source_field, raw_value FROM temporal_component "
+            "stated_offset, source_field, raw_value FROM temporal_component "
             "WHERE temporal_expression_id = ? ORDER BY ordinal",
             expression["temporal_expression_id"],
         )

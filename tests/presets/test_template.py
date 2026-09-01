@@ -143,7 +143,7 @@ observations:
       longitude: field(Lon)
     time:
       instant: field(Created)
-    links: {entity_position: at, entity_time: recorded_at, spatial_temporal: instant}
+    links: {entity: self, spatial: at, temporal: once}
 """
 
 

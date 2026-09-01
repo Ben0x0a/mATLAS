@@ -8,15 +8,41 @@ follows this document. The identity discipline it obeys is
 
 ## The model in one sentence
 
-> **A record claims that one or more participants relate to a place at a time.
-> Every corner is stored in the source's own words; every normalisation the tool
-> performs is attached to the corner, never substituted for it.**
+> **A record says that some entity was somewhere at some time — naming through what
+> interaction we know it, how closely it holds, how much of the interval it covers, and
+> who asserts it. Every corner is stored in the source's own words; every normalisation
+> the tool performs is attached to the corner, never substituted for it.**
 
-The entity–space–time triangle survives as the shape of a claim. What this model fixes
-is the *inside* of each corner: the previous model stored what the source expressed and
-what the tool computed from it in the same slot, with the same identity — so a geocoded
-latitude was indistinguishable from a latitude the source itself stated, and two
-different phones labelled `device` became one entity.
+### Content and link, per corner
+
+Each corner carries two different things, and collapsing them is what made the earlier
+vocabulary resist qualification:
+
+| Corner | Content | Link |
+| --- | --- | --- |
+| **Entity** | **who / what** | **how we know** — through what interaction |
+| **Spatial** | **where** | **how close** — at / within / near / references / absent |
+| **Temporal** | **when** | **how much of it** — □ throughout / ◇ at some point |
+
+Plus one statement-level qualifier: **who says so** (`attestation`) — which qualifies the
+whole statement rather than one argument of it, the correct structure for a reified ternary
+relation.
+
+Note the entity link reads as both *what happened* (`used_at`, `stayed_at`) and *how we
+know*. That is not a conflation: in forensic data the interaction **is** the epistemic route
+— the trace exists because the interaction happened. It is also why the verb alone decides
+whether there is a spatial claim at all (`cached` leaves none).
+
+The entity–space–time triangle survives as the shape of a claim, though "triangle" flatters
+it: the observation is a reified **ternary relation**, and its links are qualifiers of the
+whole statement, not edges between corners. A ternary relation cannot in general be
+decomposed into three binaries without loss, which is why labelling them as edges kept
+producing enums that mixed axes.
+
+What this model fixes is the *inside* of each corner: the previous model stored what the
+source expressed and what the tool computed from it in the same slot, with the same
+identity — so a geocoded latitude was indistinguishable from a latitude the source itself
+stated, and two different phones labelled `device` became one entity.
 
 ## The four layers
 
@@ -31,31 +57,63 @@ different phones labelled `device` became one entity.
 
 A **claim** is extracted from exactly one record. It carries:
 
-- **Participants (1..N), each with a role.** A participant is a **mention**: the
+- **Two entities: the targeted one and the position bearer.** Each is a **mention**: the
   identifier *as written* (`+33612…`, `device`, a name on a booking) plus its kind
-  (msisdn, imei, email, descriptive label, plate, account, …). Roles come from a closed
-  vocabulary: `subject`, `caller`, `callee`, `sender`, `recipient`, `reporter`,
-  `counterpart`, … A mention is an occurrence, not a resolved thing: the model never
-  infers that two equal strings denote the same real-world object — that inference is
-  an explicit Layer-2 act.
+  (msisdn, imei, email, descriptive label, plate, account, …).
+  - the **targeted** entity is the one under investigation — the one the flat CSV names
+    on its line, and the one carrying an `activity_role` (`caller`, `callee`, `sender`,
+    `recipient`);
+  - the **bearer** is the entity whose position the spatial corner actually states: for a
+    CDR the antenna, for an ANPR read the camera, for an ATM withdrawal the terminal. It is
+    absent exactly when the entity holds its own position (`entity_link = self`).
+
+  So **storage orders by whose position it is, while the projection orders by who is under
+  investigation**: the CSV line still names the phone, joining `entity` twice, and the
+  antenna survives as a column instead of dissolving into a `cell_ref` string. This also
+  makes the infrastructure a first-class, convergeable thing — *"which other cards were used
+  at this ATM?"* becomes a `GROUP BY` on a normalised identifier rather than a string match
+  against a raw component value.
+
+  A mention is an occurrence, not a resolved thing: the model never infers that two equal
+  strings denote the same real-world object — that inference is an explicit Layer-2 act.
 - **A place, as expressed.** A **spatial expression** with a *kind*: direct
-  coordinates, address, place name, cell/antenna reference, region, or none. It also
-  carries **whose position it is** (`locates`): `self` (GPS fix — the subject located
-  itself), `infrastructure` (antenna, ANPR camera, merchant terminal — the subject was
-  *near* it), or `referenced` (a shared map pin — nobody was necessarily there).
-  `locates` is *derived* from the entity–position link, never stored, so the two can
-  never contradict (schema.md).
+  coordinates, address, place name, cell/antenna reference, region, or none. Whose position
+  it is no longer needs deriving: the bearer *is* the answer. What the **spatial link**
+  adds is how closely that geometry binds the targeted entity — `at`, `within`, `near`,
+  `references`, `absent`, `unknown`. This is stored, not derived from the interaction verb,
+  because the same verb yields different relations depending on the geometry's granularity:
+  `self` + a GNSS fix is `at` a point, `self` + an IP geolocation is `within` a city
+  polygon; `used_at` an ATM is `at`, `used_at` a card record naming only "SHELL FRANCE" is
+  `within`.
+
+  **The three negatives are distinct and must stay so**: `references` = no presence claim
+  but a deliberate connection (the entity was *interested* in the place — a nav search);
+  `absent` = a positive claim of non-presence (an alibi); `unknown` = no claim either way,
+  which must be *surfaced for review*, never silently dropped.
 - **A time, as expressed.** A **temporal expression**: the raw value(s), the stated
   calendar/offset (or the fact that none was stated), the granularity, and whether it
   is an instant, an interval, or an open bound.
-- **The link vocabularies** (entity–position, entity–time, spatial–temporal) and an
-  **epistemic qualifier**: `measured` | `recorded` | `claimed` | `reported` |
-  `negated`. Metric accuracy is instrument error and cannot express "the witness
-  thinks so"; the qualifier can. *Implementation (owner decision, 2026-07-11):
-  the qualifier is not a separate column — the epistemic and confidence weight is
-  carried inside the link vocabularies themselves (`CLAIMED_AT`, `REPORTED_FOR`,
-  `NEVER_DURING_INTERVAL`, …), completed as new source types require
-  (see schema.md).*
+- **The three corner links** (`entity_link`, `spatial_link`, `occupancy`) and, at statement
+  level, **`attestation`**.
+
+  *Superseded (owner decision, 2026-07-11, reversed): that decision folded the epistemic
+  qualifier INTO the link vocabularies rather than giving it a column. It could not work,
+  because the axis is orthogonal to all three links — `served_by` from an operator CDR is a
+  `system_record`, the same `served_by` asserted by a witness is a `person`. One verb, two
+  attestors. Folding it multiplied enum members and still lost combinations, and the derived
+  views `Genesis`/`Locates` then existed only to project one axis back out of the resulting
+  conflation, lossily. Both views are deleted.*
+
+  **`attestation` records who asserts, never what it is worth**: `instrument` |
+  `system_record` | `person` | `third_party_register` | `unknown`. Evidential weight,
+  credibility and admissibility are **court questions and the model must not state them**.
+  The intelligence/admiralty grading (source reliability × information credibility) is
+  deliberately not adopted for the same reason; if ever wanted it belongs to an analyst
+  layer, attributed to whoever graded it, never to ingest.
+
+  `third_party_register` names a provenance the model previously had no vocabulary for: a
+  location-cache coordinate comes from neither the source nor our engine but from a
+  commercial database of unknown vintage. `source_tier` describes *our* processing, not that.
 
 ### Layer 2 — Interpretation (derived, attached, re-runnable)
 
@@ -112,7 +170,7 @@ own line only when the record gives it its own placement; every other party the
 record names attaches to an existing line as a *context mention* and appears as a
 column, never a row.
 
-- a GPS fix → one line (subject = the device, locates = self);
+- a GPS fix → one line (targeted = the device, `entity_link = self`, no bearer);
 - a one-legged CDR → **one line** (caller at antenna X; the callee and the caller's
   IMEI are context mentions — counterpart and facet columns, **no invented
   position**);
@@ -120,9 +178,10 @@ column, never a row.
   own position; two *different records* of one call (two operators) are linked later
   by an explicit `activity_link` analysis act — v1 records them as two activities and
   promises no automatic pairing;
-- an ANPR read / witness statement / police register entry → one line (the detector
-  and the reporter are context; a register's event reference IS the entity itself —
-  type `event`, identifier == concerns);
+- an ANPR read → one line (targeted = the plate, **bearer = the camera**, which now has a
+  real row instead of being dissolved into an asset reference); a witness statement → one
+  line with `attestation = person`; a police register entry → one line whose event reference
+  IS the entity itself (type `event`, identifier == concerns);
 - a claim with no placement at all (a login) → a line without coordinates, never
   dropped.
 
@@ -147,15 +206,59 @@ activity — a leg's counterpart is the other observation sharing its `activity_
 | Witness statements | reporter role, unresolved mention ("him"), fuzzy place/time, `reported`/`negated` |
 | Chat shared locations / check-ins | `referenced` position — coordinates nobody was at; sender/recipient roles |
 
+## The model's own acceptance test
+
+A revision of this model is judged on four conditions. They are stated here so a future
+change is argued against them rather than against taste:
+
+1. **Can it encode all the location data we can think of?**
+2. **Does it encode it well** — are the key characteristics kept?
+3. **Can it be reasoned on** — tested the practical way: *from a database export, is
+   everything needed to do the job there?* Not whether a module happens to exist.
+4. **Is the information source explicit** — is what came from the source distinguishable
+   from what the engine derived?
+
+Condition 2 is the one that bites. It is not satisfied by losing nuance gracefully; it is
+violated outright when the model *manufactures* a claim. The worked case: a prefetched
+location-cache row (a device holding an almanac tile it was told about, not one it saw)
+must not assert device presence. `entity_link = cached` with `spatial_link = unknown` is
+what makes that expressible — the device is a participant with no positional claim, and any
+"plausibly within range" inference becomes an explicit, attributed, deletable analysis act.
+
+### Direction: the two corner algebras
+
+Time and space get matching treatment, one stored quantifier plus one derived relation
+family:
+
+| | Stored | Derived at query time |
+| --- | --- | --- |
+| **Temporal** | interval `[lower, upper]` + `occupancy` (□/◇) | **Allen's interval algebra**, the 13 relations |
+| **Spatial** | region (point / disc / wedge / polygon) + `spatial_link` | **RCC-8** / DE-9IM |
+
+Neither relation family is ever stored — both are computable from the bounds and the
+geometry. Note the model is already half-way to regions without saying so: `beam_azimuth_deg`
+and `beam_width_deg` are wedge parameters, while `spatial_integration` stores only a point
+plus `horizontal_accuracy_m`, i.e. a disc. A cell sector is a wedge, not a disc. **Region
+geometry is a later pass**; the vocabulary is only kept from precluding it.
+
 ## Documented v1 choices (limitations, not model changes)
 
 1. **One preferred interpretation per expression** is materialised; the model allows
    plural, v1 stores the chosen one (with its method) and may add alternatives later.
 2. **WGS84 latitude/longitude** is the chosen geometry form for all spatial kinds.
 3. **UTC microseconds** is the chosen temporal position form.
-4. Closed vocabularies (expression kinds, roles, locates, epistemic qualifiers) are
+4. Closed vocabularies (expression kinds, the three corner links, attestation) are
    enumerated at implementation in `core/vocabularies.py`, which stays the single declaration.
-5. **Negative claims** are representable (`negated`) but no v1 source produces them.
+   `EntityLink` is deliberately **reviewed-extensible** rather than frozen: the 2026-08-30
+   removal of `spatial_role`/`temporal_role` is the precedent — two shipped presets needed
+   values the CHECK rejected.
+5. **Negative claims** are representable as `spatial_link = absent`, and polarity lives on
+   the spatial corner *only*. This is forced, not stylistic: modal duality gives
+   ¬◇P ≡ □¬P, so allowing negation on both the spatial and temporal corners would let one
+   fact be written two ways — which is exactly the bug `never_during_interval` caused by
+   existing on two enums at once with no rule for disagreement. The cross-product then
+   yields four distinct statements where there was one lumped token, including
+   `absent` + ◇ ("left at some point"), which the previous model could not express.
 6. **Event grouping** is defined now, populated when a multi-leg source (CDR) ships.
 7. **Identity resolution** ships with one cheap deterministic method (identifier-kind
    mentions with equal kind+value resolve to one identity); descriptive labels are

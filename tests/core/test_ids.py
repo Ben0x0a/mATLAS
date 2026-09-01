@@ -32,7 +32,7 @@ def _entity(identifier="+41791234567", id_type="msisdn", etype="device"):
 def _spatial(raw="228-01-2042-77341"):
     return ids.SpatialProjection(
         "cell_ref", "cell",
-        (ids.SpatialComponentProjection("raw_position", "vicinity", raw),),
+        (ids.SpatialComponentProjection("raw_position", None, raw),),
     )
 
 
@@ -40,25 +40,31 @@ def _temporal():
     return ids.TemporalProjection(
         "interval", "local_string",
         (
-            ids.TemporalComponentProjection("lower", "start", "+01:00", "2026-03-14 02:20:31"),
-            ids.TemporalComponentProjection("duration", "end", "+01:00", "187"),
+            ids.TemporalComponentProjection("lower", "+01:00", "2026-03-14 02:20:31"),
+            ids.TemporalComponentProjection("duration", "+01:00", "187"),
         ),
     )
 
 
 def _links():
-    return ids.ObservationLinks("caller", "within_range_of", "event_at",
-                              "continuous_during_interval")
+    return ids.ObservationLinks("caller", "served_by", "near", "continuous",
+                                "system_record")
+
+
+def _bearer():
+    """A position bearer — the antenna a CDR leg's phone was served by."""
+    return ids.EntityProjection("228-01-2042-77341", "cell", "antenna")
 
 
 # Sentinel so a test can pass an EXPLICIT None corner (distinct from "use the default").
 _DEFAULT = object()
 
 
-def _l1(*, entity=None, spatial=_DEFAULT, temporal=_DEFAULT, links=None, deleted=None,
-        multiplicity=None, activity=None):
+def _l1(*, entity=None, bearer=_DEFAULT, spatial=_DEFAULT, temporal=_DEFAULT, links=None,
+        deleted=None, multiplicity=None, activity=None):
     return ids.l1_projection(
         entity=entity or _entity(),
+        bearer=_bearer() if bearer is _DEFAULT else bearer,
         spatial=_spatial() if spatial is _DEFAULT else spatial,
         temporal=_temporal() if temporal is _DEFAULT else temporal,
         links=links or _links(),
@@ -244,13 +250,13 @@ def test_embedded_separator_in_a_value_cannot_forge_a_collision():
     smuggled = ids.SpatialProjection(
         "cell_ref", "cell",
         (ids.SpatialComponentProjection(
-            "raw_position", "vicinity", f"v1{ids.SEP}p2{ids.SEP}r2{ids.SEP}v2"),),
+            "raw_position", None, f"v1{ids.SEP}p2{ids.SEP}m/s{ids.SEP}v2"),),
     )
     genuine = ids.SpatialProjection(
         "cell_ref", "cell",
         (
-            ids.SpatialComponentProjection("raw_position", "vicinity", "v1"),
-            ids.SpatialComponentProjection("p2", "r2", "v2"),
+            ids.SpatialComponentProjection("raw_position", None, "v1"),
+            ids.SpatialComponentProjection("p2", "m/s", "v2"),
         ),
     )
     assert _l1(spatial=smuggled) != _l1(spatial=genuine)
@@ -286,7 +292,7 @@ def _rebuild_from_db(cx: sqlite3.Connection, observation_row: sqlite3.Row):
                          "ORDER BY ordinal", (a["spatial_expression_id"],)).fetchall()
         spatial = ids.SpatialProjection(
             sx["referential"], sx["spatial_source"],
-            tuple(ids.SpatialComponentProjection(c["part"], c["spatial_role"], c["raw_value"])
+            tuple(ids.SpatialComponentProjection(c["part"], c["unit"], c["raw_value"])
                   for c in scs))
 
     temporal = None
@@ -298,7 +304,7 @@ def _rebuild_from_db(cx: sqlite3.Connection, observation_row: sqlite3.Row):
         temporal = ids.TemporalProjection(
             tx["kind"], tx["referential"],
             tuple(ids.TemporalComponentProjection(
-                c["part"], c["temporal_role"], c["stated_offset"], c["raw_value"]) for c in tcs))
+                c["part"], c["stated_offset"], c["raw_value"]) for c in tcs))
 
     activity = None
     if a["activity_id"] is not None:
@@ -309,11 +315,16 @@ def _rebuild_from_db(cx: sqlite3.Connection, observation_row: sqlite3.Row):
         ctx = json.loads(act["context_json"]) if act["context_json"] is not None else None
         activity = ids.ActivityProjection(act["kind"], ctx)
 
-    links = ids.ObservationLinks(a["entity_role"], a["entity_position_link"],
-                               a["entity_time_link"], a["spatial_temporal_link"])
-    l1 = ids.l1_projection(entity=entity, spatial=spatial, temporal=temporal, links=links,
-                           deleted=a["deleted"], multiplicity=a["multiplicity"],
-                           activity=activity)
+    links = ids.ObservationLinks(a["activity_role"], a["entity_link"], a["spatial_link"],
+                                 a["occupancy"], a["attestation"])
+    bearer = None
+    if a["bearer_entity_id"] is not None:
+        b = cx.execute("SELECT * FROM entity WHERE entity_id=?",
+                       (a["bearer_entity_id"],)).fetchone()
+        bearer = ids.EntityProjection(b["identifier"], b["identifier_type"], b["type"])
+    l1 = ids.l1_projection(entity=entity, bearer=bearer, spatial=spatial, temporal=temporal,
+                           links=links, deleted=a["deleted"],
+                           multiplicity=a["multiplicity"], activity=activity)
 
     fp, line_no = cx.execute(
         "SELECT s.fingerprint_sha256, r.line_no FROM raw_record r "
@@ -344,3 +355,46 @@ def test_demo_cross_check_digests_match_stored(source_label):
         assert ch == row["content_hash"], f"content_hash drift for {source_label}"
     finally:
         cx.close()
+
+
+# --- bearer framing (the injectivity property the second entity FK introduces) ---------
+
+def test_absent_bearer_differs_from_present_but_empty_bearer():
+    """An observation with NO bearer must not project like one whose bearer is all-empty.
+
+    This is the same framing rule the spatial and temporal corners already rely on, applied
+    to the second entity row: without the presence flag, ``bearer=None`` and a bearer whose
+    three fields are all None would render as the same token run, and two structurally
+    DIFFERENT claims would hash equal — a forged same-evidence finding.
+    """
+    absent = _l1(bearer=None)
+    empty = _l1(bearer=ids.EntityProjection(None, None, None))
+    assert absent != empty
+    assert ids.claim_digest(absent) != ids.claim_digest(empty)
+
+
+def test_bearer_identity_moves_the_digest():
+    """Two CDR legs identical but for WHICH antenna served them are different claims."""
+    a = _l1(bearer=ids.EntityProjection("228-01-2042-77341", "cell", "antenna"))
+    b = _l1(bearer=ids.EntityProjection("228-01-2042-99999", "cell", "antenna"))
+    assert ids.claim_digest(a) != ids.claim_digest(b)
+
+
+def test_self_link_and_absent_bearer_is_the_gnss_shape():
+    """A GNSS fix carries its own position: link ``self``, no bearer row, still projectable."""
+    links = ids.ObservationLinks("unknown", "self", "at", "once", "instrument")
+    assert _l1(bearer=None, links=links)
+
+
+def test_the_two_cache_rows_differ_only_by_verb_and_spatial_link():
+    """The case the old model got wrong: harvested vs prefetched almanac rows.
+
+    Same bearer, same geometry, same interval — they differ ONLY in the entity link and the
+    spatial claim it licenses, and that difference must reach the digest, because one asserts
+    the device was near the access point and the other asserts nothing about the device.
+    """
+    harvested = _l1(links=ids.ObservationLinks(
+        "unknown", "served_by", "near", "once", "system_record"))
+    prefetched = _l1(links=ids.ObservationLinks(
+        "unknown", "cached", "unknown", "once", "third_party_register"))
+    assert ids.claim_digest(harvested) != ids.claim_digest(prefetched)
