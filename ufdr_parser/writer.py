@@ -2,8 +2,9 @@
 
 Defines:    CsvSink — accumulates FlatRecords in a SQLite spill table, tracks each
             (level, model_type)'s column order, and writes one CSV per group with the
-            source columns joined in; GroupSpec (one write job) and write_group (the
-            reusable per-group writer shared by the serial flush and the parallel workers).
+            source and traceability columns joined in; GroupSpec (one write job) and
+            write_group (the reusable per-group writer shared by the serial flush and the
+            parallel workers).
 Used by:    dump (the orchestrator) and parallel (the flush workers).
 Depends on: const (column/level names), source_lookup (SourceIndex/resolve), models
             (FlatRecord), sqlite3, csv.
@@ -31,6 +32,7 @@ from ufdr_parser.const import (
     LEVEL_FILE_PREFIX,
     LEVEL_TOP,
     SOURCE_COLUMNS,
+    TRACE_COLUMNS,
 )
 from ufdr_parser.models import FlatRecord
 from ufdr_parser.source_lookup import SourceIndex
@@ -98,8 +100,12 @@ class CsvSink:
         self._drain()
         self._conn.commit()
 
-    def groups(self, out_dir: Path, base: str) -> list["GroupSpec"]:
-        """The per-(level, type) write jobs: filename + full header, in stable order."""
+    def groups(self, out_dir: Path, base: str, trace: dict[str, str]) -> list["GroupSpec"]:
+        """The per-(level, type) write jobs: filename + full header, in stable order.
+
+        ``trace`` holds the traceability column values stamped on every row (see
+        ``archive.report_trace``).
+        """
         out_dir = Path(out_dir)
         keys = sorted(self._field_order)
         filenames = group_filenames(keys, base)
@@ -109,13 +115,24 @@ class CsvSink:
             header, column_map = group_columns(level, field_names)
             specs.append(
                 GroupSpec(
-                    level, model_type, header, out_dir / filenames[(level, model_type)], column_map
+                    level,
+                    model_type,
+                    header,
+                    out_dir / filenames[(level, model_type)],
+                    column_map,
+                    trace,
                 )
             )
         return specs
 
     def flush(
-        self, out_dir: Path, base: str, source: SourceIndex, *, workers: int = 1
+        self,
+        out_dir: Path,
+        base: str,
+        source: SourceIndex,
+        trace: dict[str, str],
+        *,
+        workers: int = 1,
     ) -> dict[str, int]:
         """Write one CSV per (level, type); return {filename: row_count}.
 
@@ -125,7 +142,7 @@ class CsvSink:
         self._drain()
         self._conn.commit()
         Path(out_dir).mkdir(parents=True, exist_ok=True)
-        specs = self.groups(out_dir, base)
+        specs = self.groups(out_dir, base, trace)
 
         if workers > 1 and len(specs) > 1:
             # Imported lazily so a serial run never pulls in the multiprocessing machinery.
@@ -155,7 +172,8 @@ class GroupSpec:
     """One CSV write job: which (level, type) goes to which file with which header.
 
     ``column_map`` maps a raw field name to its CSV column, renaming any that would collide
-    with an injected identity/source column (see ``group_columns``).
+    with an injected identity/source/traceability column (see ``group_columns``); ``trace``
+    holds the traceability column values stamped on every row.
     """
 
     level: int
@@ -163,6 +181,7 @@ class GroupSpec:
     header: list[str]
     path: Path
     column_map: dict[str, str]
+    trace: dict[str, str]
 
 
 def id_columns(level: int) -> list[str]:
@@ -205,8 +224,9 @@ def group_columns(
 ) -> tuple[list[str], dict[str, str]]:
     """Build a group's full CSV header and its ``{raw field name: column name}`` map.
 
-    HOW: the header is the identity columns + the field columns + the source columns; a field
-    whose name collides with a reserved injected column (an identity or ``source_*`` column) is
+    HOW: the header is the identity columns + the field columns + the source columns + the
+    traceability columns; a field whose name collides with a reserved injected column (an
+    identity, ``source_*`` or ``report_*`` column) is
     renamed to ``<name>#2`` (then #3, ...), and the map records that rename so the row writer
     places the value under the renamed column. WHY: without this, a model ``<field name="uuid">``
     both duplicates the ``uuid`` header AND, via ``row.update(fields)``, overwrites the injected
@@ -214,7 +234,7 @@ def group_columns(
     (rather than prefixing them) keeps the established, preset-facing column names intact while
     still capturing the colliding field losslessly under its ``#n`` name.
     """
-    reserved = list(id_columns(level)) + list(SOURCE_COLUMNS)
+    reserved = list(id_columns(level)) + list(SOURCE_COLUMNS) + list(TRACE_COLUMNS)
     used = set(reserved)
     column_map: dict[str, str] = {}
     field_columns: list[str] = []
@@ -228,7 +248,7 @@ def group_columns(
         used.add(column)
         column_map[name] = column
         field_columns.append(column)
-    header = list(id_columns(level)) + field_columns + list(SOURCE_COLUMNS)
+    header = list(id_columns(level)) + field_columns + list(SOURCE_COLUMNS) + list(TRACE_COLUMNS)
     return header, column_map
 
 
@@ -239,15 +259,18 @@ def write_rows(
     model_type: str,
     resolve: "Callable[[str | None], object | None]",
     column_map: dict[str, str],
+    trace: dict[str, str],
 ) -> int:
-    """Append one group's rows (no header) from ``records``, joining each to its source.
+    """Append one group's rows (no header) from ``records``, joining each to its source and
+    stamping the ``trace`` (report file) columns.
 
     Shared by the serial flush and the parallel merge so the row format has one definition.
     Rows are emitted in ``seq`` order (document order within a connection).
 
     HOW the injected columns survive a name clash: each field value is placed under its mapped
     column (``column_map``), so a field named like an identity/source column lands on its ``#n``
-    column and never overwrites the injected value; the source columns are written LAST. WHY
+    column and never overwrites the injected value; the source then traceability columns are
+    written LAST. WHY
     ``resolve(top_id)``: ``<extraInfos>`` is keyed by TOP-LEVEL model ids, so a nested row must
     look its source up by the id of its tree root (its own id resolves to nothing → blank
     source), letting every child inherit its parent's source.
@@ -270,6 +293,7 @@ def write_rows(
         entry = resolve(top_id)
         if entry is not None:
             row.update(entry.as_columns())
+        row.update(trace)
         csv_writer.writerow(row)
         count += 1
     return count
@@ -295,7 +319,13 @@ def write_group(
     fh, csv_writer = open_group_writer(spec.path, spec.header)
     try:
         return write_rows(
-            csv_writer, records_conn, spec.level, spec.model_type, resolve, spec.column_map
+            csv_writer,
+            records_conn,
+            spec.level,
+            spec.model_type,
+            resolve,
+            spec.column_map,
+            spec.trace,
         )
     finally:
         fh.close()

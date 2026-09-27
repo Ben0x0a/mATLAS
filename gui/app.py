@@ -956,15 +956,23 @@ class MainController(QObject):
     # --- UFDR dump mode (the standalone parser, no transform / no case) --------
 
     def _run_ufdr_dump(self) -> None:
-        """Dump every Cellebrite model in the source ``.ufdr`` to per-model CSVs under the
-        output folder. Independent of presets and the case model — it writes no run DB, so it
-        needs only a source file and an output folder (the transform fields are ignored)."""
+        """Dump every Cellebrite model in the source ``.ufdr`` or report ``.xml`` to per-model
+        CSVs under the output folder. Independent of presets and the case model — it writes no
+        run DB, so it needs only a source file and an output folder (the transform fields are
+        ignored)."""
+        # Lazy import, like run_dump below: keeps normal GUI start-up free of the parser.
+        from ufdr_parser.archive import input_kind
+
         source = self.source_edit.text().strip()
-        if self._reject_if_blank(source, "Choose a source .ufdr file."):
+        if self._reject_if_blank(source, "Choose a source .ufdr or report .xml file."):
             return
         source_path = Path(source).expanduser()
-        if not source_path.is_file() or source_path.suffix.lower() != ".ufdr":
-            self._show_error("UFDR dump mode needs a .ufdr file as the source.")
+        # Classified by header, not extension: a PA "XML report" export and a .ufdr are both
+        # accepted whatever they are named.
+        if not source_path.is_file() or input_kind(source_path) is None:
+            self._show_error(
+                "UFDR dump mode needs a .ufdr file or a Cellebrite report .xml as the source."
+            )
             return
         # A dump writes no case database, but it still needs a destination, and the case
         # folder is the only one the user has now named.

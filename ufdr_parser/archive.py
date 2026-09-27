@@ -1,8 +1,10 @@
 """Open the decoded ``report.xml`` from a .ufdr archive or a bare .xml file.
 
-Defines:    open_report (context manager yielding a binary stream) and report_size.
-Used by:    dump (the orchestrator) and the parallel parser.
-Depends on: const (REPORT_ENTRY_NAME), standard library zipfile.
+Defines:    open_report (context manager yielding a binary stream), report_size,
+            input_kind (is this a .ufdr or a bare report .xml?) and report_trace (the
+            traceability column values for a dump of this input).
+Used by:    dump (the orchestrator), the parallel parser, and gui.app (dump-mode input check).
+Depends on: const (REPORT_ENTRY_NAME, traceability column names), standard library zipfile.
 
 A .ufdr is a zip (usually STORED); the report is a single ``report.xml`` entry that can
 be up to ~32 GB. We never extract it to disk — the stream is read incrementally by the
@@ -17,11 +19,18 @@ import zipfile
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
-from ufdr_parser.const import REPORT_ENTRY_NAME
+from ufdr_parser.const import COL_REPORT_ENTRY, COL_REPORT_FILE, REPORT_ENTRY_NAME
 
 log = logging.getLogger(__name__)
 
 _ZIP_MAGIC = b"PK\x03\x04"
+_UTF8_BOM = b"\xef\xbb\xbf"
+# Enough leading bytes to skip a BOM plus leading whitespace before the first '<'.
+_XML_SNIFF_BYTES = 1024
+
+# input_kind results.
+INPUT_UFDR = "ufdr"  # a zip archive holding report.xml
+INPUT_XML = "xml"    # a bare report XML (e.g. a Physical Analyzer "XML report" export)
 
 
 def _is_zip(path: Path) -> bool:
@@ -31,6 +40,40 @@ def _is_zip(path: Path) -> bool:
             return fh.read(4) == _ZIP_MAGIC
     except OSError:
         return False
+
+
+def input_kind(path: Path) -> str | None:
+    """Classify a dump input by its header: ``INPUT_UFDR``, ``INPUT_XML``, or None.
+
+    HOW: zip magic -> a .ufdr (or any zip carrying report.xml); otherwise, if the first
+    non-whitespace byte after an optional UTF-8 BOM is ``<``, a bare XML report. WHY header
+    first: a report exported by Physical Analyzer as ``<name>_Report.xml`` and a .ufdr renamed
+    by hand must both be recognised by content, never by extension alone.
+    """
+    path = Path(path)
+    if _is_zip(path):
+        return INPUT_UFDR
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(_XML_SNIFF_BYTES)
+    except OSError:
+        return None
+    head = head.removeprefix(_UTF8_BOM).lstrip()
+    return INPUT_XML if head.startswith(b"<") else None
+
+
+def report_trace(path: Path) -> dict[str, str]:
+    """The traceability column values for a dump of ``path`` (same on every row).
+
+    ``report_file`` is the absolute input path; ``report_entry`` is the report's entry name
+    inside a zip input and blank for a bare XML.
+    """
+    path = Path(path)
+    entry = ""
+    if _is_zip(path):
+        with zipfile.ZipFile(path) as zf:
+            entry = _require_report_entry(zf, path)
+    return {COL_REPORT_FILE: str(path.resolve()), COL_REPORT_ENTRY: entry}
 
 
 def _find_report_entry(zf: zipfile.ZipFile) -> str | None:

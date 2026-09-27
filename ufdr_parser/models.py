@@ -13,10 +13,12 @@ id of the level-0 model at the root of its tree (``top_id``); ``top_type`` is th
 model type, used for relation tracking and ``--models`` filtering. ``top_id`` lets a nested
 row inherit its top-level model's source entry (``<extraInfos>`` is keyed by top-level ids).
 Only direct ``<field>`` children populate a record's own columns, so each nested model's
-fields stay on its own row (never flattened into the parent).
+fields stay on its own row (never flattened into the parent). A TimeStamp field is followed
+by a ``<name>.offset`` column stating its UTC offset (see const.TIMESTAMP_OFFSET_SUFFIX).
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Iterator
 
@@ -30,7 +32,13 @@ from ufdr_parser.const import (
     LOCAL_MULTI_MODEL_FIELD,
     MULTI_VALUE_SEPARATOR,
     TAG_VALUE,
+    TIMESTAMP_OFFSET_SUFFIX,
+    TIMESTAMP_OFFSET_UNSTATED,
+    TIMESTAMP_VALUE_TYPE,
 )
+
+# A trailing ISO-8601 zone designator: ``Z`` or ``+HH:MM`` / ``-HHMM``.
+_ISO_OFFSET = re.compile(r"(Z|[+-]\d{2}:?\d{2})$")
 
 
 @dataclass(frozen=True)
@@ -69,6 +77,26 @@ def _field_value(field_elem: "etree._Element") -> str | None:
     return MULTI_VALUE_SEPARATOR.join("".join(value.itertext()) for value in values)
 
 
+def _timestamp_offset(field_elem: "etree._Element") -> str | None:
+    """The stated UTC offset of each TimeStamp ``<value>``, joined like ``_field_value``.
+
+    Returns None when the field holds no TimeStamp value (so no offset column is added). Each
+    value contributes its trailing zone designator verbatim, or TIMESTAMP_OFFSET_UNSTATED when
+    it has none — never a guessed offset.
+    """
+    values = [
+        value for value in field_elem.findall(TAG_VALUE)
+        if value.get("type") == TIMESTAMP_VALUE_TYPE
+    ]
+    if not values:
+        return None
+    offsets = []
+    for value in values:
+        match = _ISO_OFFSET.search("".join(value.itertext()).strip())
+        offsets.append(match.group(1) if match else TIMESTAMP_OFFSET_UNSTATED)
+    return MULTI_VALUE_SEPARATOR.join(offsets)
+
+
 def flatten_model(
     elem: "etree._Element",
     *,
@@ -93,6 +121,9 @@ def flatten_model(
             name = child.get("name")
             if name is not None:
                 fields[name] = _field_value(child)
+                offset = _timestamp_offset(child)
+                if offset is not None:
+                    fields[f"{name}{TIMESTAMP_OFFSET_SUFFIX}"] = offset
         elif local in (LOCAL_MODEL_FIELD, LOCAL_MULTI_MODEL_FIELD):
             child_models.extend(
                 sub for sub in child if _local(sub.tag) == LOCAL_MODEL

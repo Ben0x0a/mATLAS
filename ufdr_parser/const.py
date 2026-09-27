@@ -1,8 +1,8 @@
 """Format constants for the Cellebrite UFDR report (``report.xml``).
 
 Defines:    the report namespace, the entry name inside the .ufdr zip, the fully
-            qualified tag names the streaming reader matches, and the CSV id/source
-            column names.
+            qualified tag names the streaming reader matches, and the CSV id/source/
+            traceability column names.
 Used by:    archive, reader, models, source_lookup, writer.
 Depends on: standard library only.
 
@@ -39,6 +39,17 @@ LOCAL_MULTI_MODEL_FIELD = "multiModelField"
 # by models._field_value.
 MULTI_VALUE_SEPARATOR = "; "
 
+# Every TimeStamp-typed field gets a companion ``<field><TIMESTAMP_OFFSET_SUFFIX>`` column
+# holding the UTC offset its value states (``+00:00``, ``Z``, ...), or TIMESTAMP_OFFSET_UNSTATED
+# when the value carries none (Cellebrite ``format="DateTimeOnly"``: date and time, no zone).
+# WHY a separate column: the offset is otherwise only implicit in the tail of the value string,
+# and a blank tail is easy to misread as UTC; stating it — or its absence — per value makes the
+# zone basis of every timestamp explicit without ever inventing an offset. Consumed by
+# models._field_value.
+TIMESTAMP_VALUE_TYPE = "TimeStamp"
+TIMESTAMP_OFFSET_SUFFIX = ".offset"
+TIMESTAMP_OFFSET_UNSTATED = "unstated"
+
 # Record levels: a top-level model, a 1:1/1:many child, and a grandchild.
 LEVEL_TOP = 0
 LEVEL_SUB = 1
@@ -66,3 +77,12 @@ SOURCE_COLUMNS = (
     COL_SOURCE_OFFSET,
     COL_SOURCE_SIZE,
 )
+
+# Traceability columns appended LAST on every row: which report file the dump read. They are
+# the same on every row of a run. ``report_file`` is the absolute path of the input as given
+# (the .ufdr archive, or the bare report .xml); ``report_entry`` is the report's entry name
+# inside the archive (blank for a bare .xml). Named ``report_*`` rather than ``source_*``
+# because the ``source_*`` columns above already mean the ON-DEVICE file a record came from.
+COL_REPORT_FILE = "report_file"
+COL_REPORT_ENTRY = "report_entry"
+TRACE_COLUMNS = (COL_REPORT_FILE, COL_REPORT_ENTRY)

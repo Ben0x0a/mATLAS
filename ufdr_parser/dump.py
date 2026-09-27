@@ -4,10 +4,13 @@ Defines:    DumpSummary (run result) and run_dump (open -> stream -> spill -> fl
 Used by:    cli and tests.
 Depends on: archive, reader, models, source_lookup, writer, sqlite3.
 
-One forward pass over report.xml feeds two sinks sharing one temporary SQLite database:
-decoded models are buffered by CsvSink; the trailing <extraInfos> id->source map is built
-in SourceIndex. At the end the buffered rows are flushed to CSV with each row joined to
-its source. Holding nothing per-record in RAM keeps the run flat for 32 GB reports.
+The input is a .ufdr archive (report.xml streamed from inside it) or a bare report XML such
+as a Physical Analyzer "XML report" export; ``archive`` tells them apart by header. One forward
+pass over the report feeds two sinks sharing one temporary SQLite database: decoded models are
+buffered by CsvSink; the trailing <extraInfos> id->source map is built in SourceIndex. At the
+end the buffered rows are flushed to CSV with each row joined to its source and stamped with
+the report file it came from (``report_file`` / ``report_entry``). Holding nothing per-record
+in RAM keeps the run flat for 32 GB reports.
 """
 from __future__ import annotations
 
@@ -18,10 +21,10 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ufdr_parser.archive import open_report
+from ufdr_parser.archive import open_report, report_trace
 from ufdr_parser.models import FlatRecord
 from ufdr_parser.reader import iter_items
-from ufdr_parser.source_lookup import SourceEntry, SourceIndex
+from ufdr_parser.source_lookup import EXTRA_INFO_MODEL_KIND, SourceEntry, SourceIndex
 from ufdr_parser.writer import CsvSink
 
 log = logging.getLogger(__name__)
@@ -39,6 +42,7 @@ class DumpSummary:
     # (level, model_type) -> set of field names, for the model_signatures drift check.
     fields_by_type: dict[tuple[int, str], set[str]] = field(default_factory=dict)
     record_count: int = 0
+    # Number of MODEL source entries in <extraInfos> (file node entries are not counted).
     source_count: int = 0
 
 
@@ -68,15 +72,17 @@ def run_dump(
     input_path = Path(input_path)
     out_dir = Path(out_dir)
     base = input_path.stem
+    # Computed from the ORIGINAL input: the parallel path may read a temp extracted copy.
+    trace = report_trace(input_path)
 
     if parse_workers > 1:
         # By-type parallel parse: each worker owns a modelType block, then a central merge.
         from ufdr_parser.parallel import run_parse_by_type
 
         result = run_parse_by_type(
-            input_path, out_dir, base, models=models, workers=parse_workers
+            input_path, out_dir, base, models=models, workers=parse_workers, trace=trace
         )
-        return DumpSummary(
+        summary = DumpSummary(
             files=result.files,
             types_by_level=result.types_by_level,
             relations=result.relations,
@@ -84,7 +90,34 @@ def run_dump(
             record_count=result.record_count,
             source_count=result.source_count,
         )
+    else:
+        summary = _run_serial(input_path, out_dir, base, trace, models=models, workers=workers)
 
+    if summary.record_count and not summary.source_count:
+        # WHY warn: blank source_* columns are otherwise indistinguishable from a parser
+        # fault. Some exports (e.g. a PA XML report with NodeCount="0") ship an empty
+        # <extraInfos>, so the on-device source is simply not in the report.
+        log.warning(
+            f"{input_path}: the report's <extraInfos> holds no model source entries; "
+            "the source_* columns are blank for every row"
+        )
+    log.info(
+        f"Dump complete: {summary.record_count} record(s), "
+        f"{summary.source_count} source entr(ies), {len(summary.files)} CSV file(s)"
+    )
+    return summary
+
+
+def _run_serial(
+    input_path: Path,
+    out_dir: Path,
+    base: str,
+    trace: dict[str, str],
+    *,
+    models: set[str] | None,
+    workers: int,
+) -> DumpSummary:
+    """The single-stream parse: one pass feeding CsvSink + SourceIndex, then the flush."""
     summary = DumpSummary()
 
     temp_dir = Path(tempfile.mkdtemp(prefix="ufdr-parser-"))
@@ -102,13 +135,10 @@ def run_dump(
                     summary.record_count += 1
                 elif isinstance(item, SourceEntry):
                     source.add(item)
-                    summary.source_count += 1
+                    if item.kind == EXTRA_INFO_MODEL_KIND:
+                        summary.source_count += 1
         source.finalise()
-        summary.files = sink.flush(out_dir, base, source, workers=workers)
-        log.info(
-            f"Dump complete: {summary.record_count} record(s), "
-            f"{summary.source_count} source entr(ies), {len(summary.files)} CSV file(s)"
-        )
+        summary.files = sink.flush(out_dir, base, source, trace, workers=workers)
         return summary
     finally:
         conn.close()

@@ -182,6 +182,7 @@ def run_parse_by_type(
     *,
     models: set[str] | None,
     workers: int,
+    trace: dict[str, str],
 ) -> ParallelDumpResult:
     """Parse decodedData by model type across ``workers`` processes, then merge to CSVs.
 
@@ -228,7 +229,7 @@ def run_parse_by_type(
             _, source_count = source_future.result()
             results = [fut.result() for fut in block_futures]  # block (document) order
 
-        return _merge(results, source_db, out_dir, base, source_count)
+        return _merge(results, source_db, out_dir, base, source_count, trace)
     finally:
         shutil.rmtree(temp, ignore_errors=True)
 
@@ -239,6 +240,7 @@ def _merge(
     out_dir: Path,
     base: str,
     source_count: int,
+    trace: dict[str, str],
 ) -> ParallelDumpResult:
     """Write one CSV per (level, type), unioning worker headers and joining the source map."""
     # Union field order per group, and record which spills contribute (both in block order).
@@ -270,7 +272,13 @@ def _merge(
             try:
                 for spill_path in group_spills[(level, model_type)]:
                     total += write_rows(
-                        csv_writer, spill_conns[spill_path], level, model_type, resolve, column_map
+                        csv_writer,
+                        spill_conns[spill_path],
+                        level,
+                        model_type,
+                        resolve,
+                        column_map,
+                        trace,
                     )
             finally:
                 handle.close()
