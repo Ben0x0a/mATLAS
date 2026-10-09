@@ -33,7 +33,6 @@ from ufdr_parser.const import (
     MULTI_VALUE_SEPARATOR,
     TAG_VALUE,
     TIMESTAMP_OFFSET_SUFFIX,
-    TIMESTAMP_OFFSET_UNSTATED,
     TIMESTAMP_VALUE_TYPE,
 )
 
@@ -77,24 +76,25 @@ def _field_value(field_elem: "etree._Element") -> str | None:
     return MULTI_VALUE_SEPARATOR.join("".join(value.itertext()) for value in values)
 
 
-def _timestamp_offset(field_elem: "etree._Element") -> str | None:
-    """The stated UTC offset of each TimeStamp ``<value>``, joined like ``_field_value``.
+def _timestamp_offset(field_elem: "etree._Element") -> tuple[bool, str | None]:
+    """Whether the field holds TimeStamp values, and the UTC offset each one states.
 
-    Returns None when the field holds no TimeStamp value (so no offset column is added). Each
-    value contributes its trailing zone designator verbatim, or TIMESTAMP_OFFSET_UNSTATED when
-    it has none — never a guessed offset.
+    Each value contributes its trailing zone designator verbatim, or nothing when it has none —
+    never a guessed or default offset. Several values are joined like ``_field_value`` (an
+    empty position stays empty, so positions still line up); when no value states an offset
+    the result is None, i.e. a blank cell.
     """
     values = [
         value for value in field_elem.findall(TAG_VALUE)
         if value.get("type") == TIMESTAMP_VALUE_TYPE
     ]
     if not values:
-        return None
+        return False, None
     offsets = []
     for value in values:
         match = _ISO_OFFSET.search("".join(value.itertext()).strip())
-        offsets.append(match.group(1) if match else TIMESTAMP_OFFSET_UNSTATED)
-    return MULTI_VALUE_SEPARATOR.join(offsets)
+        offsets.append(match.group(1) if match else "")
+    return True, (MULTI_VALUE_SEPARATOR.join(offsets) if any(offsets) else None)
 
 
 def flatten_model(
@@ -121,8 +121,9 @@ def flatten_model(
             name = child.get("name")
             if name is not None:
                 fields[name] = _field_value(child)
-                offset = _timestamp_offset(child)
-                if offset is not None:
+                is_timestamp, offset = _timestamp_offset(child)
+                if is_timestamp:
+                    # The column exists for every time field, blank when no offset is stated.
                     fields[f"{name}{TIMESTAMP_OFFSET_SUFFIX}"] = offset
         elif local in (LOCAL_MODEL_FIELD, LOCAL_MULTI_MODEL_FIELD):
             child_models.extend(

@@ -1003,10 +1003,18 @@ class MainController(QObject):
             f"Dumped {summary.record_count} record(s) from {summary.source_count} "
             f"source(s) to {len(summary.files)} CSV file(s)"
         )
+        failed = [brick for brick in summary.bricks if brick.error]
+        if failed:
+            status += f"; {len(failed)} post-dump step(s) failed (see log)"
         self._set_status(status)
         log.info(status)
         for name, rows in summary.files.items():
             log.info(f"  {name}: {rows} row(s)")
+        for brick in summary.bricks:
+            if brick.error:
+                log.error(f"  {brick.name} failed: {brick.error}")
+            for path in brick.files:
+                log.info(f"  {brick.name}: {path.name}")
 
     # --- active case (the top-level context across the three tabs) ------------
 

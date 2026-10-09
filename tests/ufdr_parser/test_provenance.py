@@ -135,8 +135,8 @@ def test_timestamp_offset_is_explicit(byref_xml: Path, tmp_path: Path) -> None:
     row = _read_csv(tmp_path / "out" / "byref_Report_Location.csv")[0]
     assert row["TimeStamp"] == "2025-04-16T03:49:26.902+00:00"
     assert row["TimeStamp.offset"] == "+00:00"
-    # DateTimeOnly carries no zone: stated as such, never guessed.
-    assert row["EndTime.offset"] == "unstated"
+    # DateTimeOnly carries no zone: the cell stays blank, never a guessed or default offset.
+    assert "EndTime.offset" in row and row["EndTime.offset"] == ""
     assert "Source.offset" not in row
 
 

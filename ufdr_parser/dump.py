@@ -1,8 +1,9 @@
 """Orchestrate a single-pass UFDR report dump to per-model CSVs.
 
 Defines:    DumpSummary (run result) and run_dump (open -> stream -> spill -> flush).
-Used by:    cli and tests.
-Depends on: archive, reader, models, source_lookup, writer, sqlite3.
+Used by:    cli, gui.app and tests.
+Depends on: archive, reader, models, source_lookup, writer, report_info, sqlite3; bricks
+            (imported lazily, run after the CSVs are written).
 
 The input is a .ufdr archive (report.xml streamed from inside it) or a bare report XML such
 as a Physical Analyzer "XML report" export; ``archive`` tells them apart by header. One forward
@@ -10,7 +11,8 @@ pass over the report feeds two sinks sharing one temporary SQLite database: deco
 buffered by CsvSink; the trailing <extraInfos> id->source map is built in SourceIndex. At the
 end the buffered rows are flushed to CSV with each row joined to its source and stamped with
 the report file it came from (``report_file`` / ``report_entry``). Holding nothing per-record
-in RAM keeps the run flat for 32 GB reports.
+in RAM keeps the run flat for 32 GB reports. Once the CSVs are complete, the registered bricks
+(e.g. the combined workbook) build their derived artefacts from them — see ``bricks``.
 """
 from __future__ import annotations
 
@@ -24,8 +26,9 @@ from pathlib import Path
 from ufdr_parser.archive import open_report, report_trace
 from ufdr_parser.models import FlatRecord
 from ufdr_parser.reader import iter_items
+from ufdr_parser.report_info import write_report_info
 from ufdr_parser.source_lookup import EXTRA_INFO_MODEL_KIND, SourceEntry, SourceIndex
-from ufdr_parser.writer import CsvSink
+from ufdr_parser.writer import CsvSink, group_filenames
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +47,8 @@ class DumpSummary:
     record_count: int = 0
     # Number of MODEL source entries in <extraInfos> (file node entries are not counted).
     source_count: int = 0
+    # One BrickResult per post-dump brick run. mutable default — one list per summary
+    bricks: list = field(default_factory=list)
 
 
 def _new_spill_db(directory: Path) -> sqlite3.Connection:
@@ -61,8 +66,12 @@ def run_dump(
     models: set[str] | None = None,
     workers: int = 1,
     parse_workers: int = 1,
+    bricks: set[str] | None = None,
 ) -> DumpSummary:
     """Dump every (or a ``models``-filtered subset of) model type to CSV under ``out_dir``.
+
+    After the CSVs are written, the post-dump bricks run on them: every registered brick by
+    default, only those named in ``bricks`` otherwise (an empty set runs none).
 
     ``models`` filters by top-level model type: a Location filter keeps Location rows and
     its child rows (Coordinate/StreetAddress) but not standalone Coordinate models.
@@ -74,6 +83,9 @@ def run_dump(
     base = input_path.stem
     # Computed from the ORIGINAL input: the parallel path may read a temp extracted copy.
     trace = report_trace(input_path)
+    # The report header (case, extraction, images) is not a model: dumped by its own short pass.
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report_info_path, report_info_rows = write_report_info(input_path, out_dir, base, trace)
 
     if parse_workers > 1:
         # By-type parallel parse: each worker owns a modelType block, then a central merge.
@@ -101,11 +113,42 @@ def run_dump(
             f"{input_path}: the report's <extraInfos> holds no model source entries; "
             "the source_* columns are blank for every row"
         )
+    summary.files[report_info_path.name] = report_info_rows
     log.info(
         f"Dump complete: {summary.record_count} record(s), "
         f"{summary.source_count} source entr(ies), {len(summary.files)} CSV file(s)"
     )
+    if bricks is None or bricks:
+        summary.bricks = _run_bricks(input_path, out_dir, base, trace, summary, bricks, report_info_path)
     return summary
+
+
+def _run_bricks(
+    input_path: Path,
+    out_dir: Path,
+    base: str,
+    trace: dict[str, str],
+    summary: DumpSummary,
+    names: set[str] | None,
+    report_info_path: Path,
+) -> list:
+    """Hand the finished CSV output to the post-dump bricks."""
+    # Lazy: bricks pull in openpyxl, which a CSV-only caller never needs.
+    from ufdr_parser.bricks import DumpOutput, run_bricks
+
+    # The group -> file mapping is recomputed by the SAME function the CSV writers used (one
+    # source of truth), from the groups the parse observed.
+    filenames = group_filenames(summary.fields_by_type.keys(), base)
+    output = DumpOutput(
+        input_path=input_path,
+        out_dir=out_dir,
+        base=base,
+        group_paths={key: out_dir / name for key, name in filenames.items()},
+        relations=frozenset(summary.relations),
+        trace=trace,
+        report_info_path=report_info_path,
+    )
+    return run_bricks(output, names)
 
 
 def _run_serial(

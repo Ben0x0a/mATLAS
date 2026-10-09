@@ -78,6 +78,8 @@ packages = [
     "model_atlas.sqlite",
     "ufdr_parser",
     "ufdr_parser.model_signatures",
+    "ufdr_parser.bricks",
+    "ufdr_parser.bricks.workbook",
 ]
 
 [tool.setuptools.package-data]

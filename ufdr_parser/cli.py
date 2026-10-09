@@ -64,7 +64,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Parse decodedData by model type across this many processes: 'auto' (size to "
         "CPU/RAM, capped at 4) or an integer (default: 1 = single-stream).",
     )
+    dump_cmd.add_argument(
+        "--bricks",
+        default=None,
+        metavar="NAME[,NAME]|none",
+        help="Post-dump bricks to run on the CSVs (default: all, e.g. 'workbook' = the "
+        "combined Excel workbook); 'none' writes the raw CSVs only.",
+    )
     return parser
+
+
+def _resolve_bricks(value: "str | None") -> "set[str] | None":
+    """None = every registered brick; 'none' = no brick; else the named ones."""
+    if value is None:
+        return None
+    names = {name.strip() for name in value.split(",") if name.strip()}
+    return set() if names == {"none"} else names
 
 
 def _resolve_workers(value: str, *, cap: int = 8) -> int:
@@ -98,12 +113,18 @@ def main(argv: list[str] | None = None) -> int:
             models=models,
             workers=_resolve_workers(args.workers),
             parse_workers=_resolve_workers(args.parse_workers, cap=4),
+            bricks=_resolve_bricks(args.bricks),
         )
         log.info(
             f"Done: {summary.record_count} record(s) across {len(summary.files)} file(s)."
         )
         _report_drift(args.baseline, summary)
-        return 0
+        failed = [brick for brick in summary.bricks if brick.error]
+        for brick in failed:
+            log.error(f"Brick '{brick.name}' failed: {brick.error}")
+        # The CSVs are complete either way; a failed brick still makes the exit status non-zero
+        # so a scripted run notices the missing derived output.
+        return 1 if failed else 0
     return 2
 
 

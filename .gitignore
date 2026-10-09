@@ -54,3 +54,7 @@ benchmark/
 
 # Runtime UFDR model-drift baseline (accumulated per deployment, not shipped)
 ufdr_parser/model_signatures/baseline.db
+
+# Legacy UFEDParser scripts, kept locally as a reference for the UFDR dump's combined
+# workbook; not part of mATLAS and not shipped.
+docs/legacy script/

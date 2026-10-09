@@ -31,6 +31,7 @@ def test_dump_writes_per_type_csvs(report_xml: Path, tmp_path: Path) -> None:
         f"{base}_SMCoordinate.csv",
         f"{base}_Call.csv",
         f"{base}_SMParty.csv",
+        f"{base}_report_info.csv",  # the report header, not a model
     }
     assert summary.record_count == 4
     assert summary.source_count == 2
@@ -71,7 +72,11 @@ def test_models_filter_keeps_children_drops_others(report_xml: Path, tmp_path: P
     out = tmp_path / "out"
     summary = run_dump(report_xml, out, models={"Location"})
     base = report_xml.stem
-    assert set(summary.files) == {f"{base}_Location.csv", f"{base}_SMCoordinate.csv"}
+    assert set(summary.files) == {
+        f"{base}_Location.csv",
+        f"{base}_SMCoordinate.csv",
+        f"{base}_report_info.csv",
+    }
 
 
 def test_relations_tracked(report_xml: Path, tmp_path: Path) -> None:
@@ -188,7 +193,7 @@ def test_cdata_marker_in_taggedfiles_does_not_misanchor(tmp_path: Path) -> None:
     summary = run_dump(report, out)
     base = report.stem
     # Only the REAL Location modelType is indexed (the spoof inside CDATA is ignored).
-    assert set(summary.files) == {f"{base}_Location.csv"}
+    assert set(summary.files) == {f"{base}_Location.csv", f"{base}_report_info.csv"}
     assert _read_csv(out / f"{base}_Location.csv")[0]["Source"] == "Real"
 
 

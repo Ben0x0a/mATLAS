@@ -40,15 +40,14 @@ LOCAL_MULTI_MODEL_FIELD = "multiModelField"
 MULTI_VALUE_SEPARATOR = "; "
 
 # Every TimeStamp-typed field gets a companion ``<field><TIMESTAMP_OFFSET_SUFFIX>`` column
-# holding the UTC offset its value states (``+00:00``, ``Z``, ...), or TIMESTAMP_OFFSET_UNSTATED
-# when the value carries none (Cellebrite ``format="DateTimeOnly"``: date and time, no zone).
-# WHY a separate column: the offset is otherwise only implicit in the tail of the value string,
-# and a blank tail is easy to misread as UTC; stating it — or its absence — per value makes the
-# zone basis of every timestamp explicit without ever inventing an offset. Consumed by
-# models._field_value.
+# holding the UTC offset its value states (``+00:00``, ``Z``, ...). The cell is BLANK when no
+# offset could be determined (Cellebrite ``format="DateTimeOnly"``: date and time, no zone) —
+# there is no default value, so a blank can never be mistaken for a real offset. WHY a separate
+# column: the offset is otherwise only implicit in the tail of the value string; giving it a
+# column of its own makes the zone basis of every timestamp explicit without ever inventing an
+# offset. Consumed by models._timestamp_offset.
 TIMESTAMP_VALUE_TYPE = "TimeStamp"
 TIMESTAMP_OFFSET_SUFFIX = ".offset"
-TIMESTAMP_OFFSET_UNSTATED = "unstated"
 
 # Record levels: a top-level model, a 1:1/1:many child, and a grandchild.
 LEVEL_TOP = 0
