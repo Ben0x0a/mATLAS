@@ -9,18 +9,15 @@ database.
 ## Requirements
 
 - Python 3.11 to 3.14
-- The preset library, a separate repository cloned beside this one:
-
-```text
-some-folder/
-├── mATLAS/                 # this repository
-└── presets/
-    └── mATLAS-presets/     # the presets repository
-```
+- Git, to fetch the app and its preset library ([mATLAS-presets](https://github.com/Ben0x0a/mATLAS-presets),
+  a separate repository so presets can be updated without an app release)
 
 ## Installation
 
 ```bash
+git clone https://github.com/Ben0x0a/mATLAS.git
+git clone https://github.com/Ben0x0a/mATLAS-presets.git presets
+cd mATLAS
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 python -m pip install .            # add '.[gui]' for the graphical interface
