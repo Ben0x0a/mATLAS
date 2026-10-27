@@ -214,8 +214,8 @@ class EditApi:
         self._conn.commit()
         return new_id
 
-    def _clone_row(self, table: str, source_id: str, edits: dict[str, Any]) -> str:
-        """Insert a fresh, non-colliding occurrence of ``source_id`` (+ ``edits``) into ``table``.
+    def _clone_row(self, table: str, source_file_id: str, edits: dict[str, Any]) -> str:
+        """Insert a fresh, non-colliding occurrence of ``source_file_id`` (+ ``edits``) into ``table``.
 
         HOW: copy the source row, apply ``edits``, then make every UNIQUE constraint distinct
         before minting the pk —
@@ -235,9 +235,9 @@ class EditApi:
         WHY not a verbatim clone: ``update`` on evidence directs the operator here, so this path
         MUST yield an insertable row on exactly the tables it exists for.
         """
-        original = self.row(table, source_id)
+        original = self.row(table, source_file_id)
         if original is None:
-            raise KeyError(f"no row {source_id!r} in {table!r}")
+            raise KeyError(f"no row {source_file_id!r} in {table!r}")
         pk = self._pk(table)
         fk_map = self._fk_map(table)
         unique_sets = self._unique_column_sets(table)
@@ -253,7 +253,7 @@ class EditApi:
                 snapshot[fk_col] = self._clone_row(parent_table, snapshot[fk_col], {})
 
         ordinal = self._next_ordinal()
-        new_id = ids.id_for(table, source_id, ordinal)
+        new_id = ids.id_for(table, source_file_id, ordinal)
         snapshot[pk] = new_id   # the new occurrence carries its own fresh identity
 
         # Pass 2: UNIQUE tuples with a non-FK discriminator -> regenerate that discriminator.

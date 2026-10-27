@@ -157,7 +157,7 @@ def test_reader_surfaces_carved_rows_recovered_after_live(tmp_path: Path) -> Non
     assert any(r.fields.get("hacc") == 77.7 for r in recovered)
     # Provenance: live rows are LIVE; every carved row names its origin (freelist/freespace),
     # the fine recovery_source behind the coarse RECOVERED state.
-    assert all(r.recovery_source == RecoverySource.LIVE for r in live)
+    assert all(r.recovery_source is None for r in live)      # recovered from nowhere
     assert all(
         r.recovery_source in (RecoverySource.FREELIST, RecoverySource.FREESPACE)
         for r in recovered

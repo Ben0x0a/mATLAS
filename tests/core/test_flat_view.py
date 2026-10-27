@@ -3,14 +3,12 @@
 Defines:    the column-contract test (the projected frame carries exactly the
             docs/csv_migration.md columns, in order, against the worked-example demo
             DB), the one-row-per-observation grain test (28 rows, corner-less observations
-            kept with empty cells), the unquoted-numeric rendering test, the derived
-            ``is_presence`` test (single source of truth = the vocabulary enum), and the
+            kept with empty cells), the unquoted-numeric rendering test, and the
             ``orig_<col>`` passthrough tests (first-appearance order, verbatim values,
             trailing-``_`` collision disambiguation).
 Used by:    the verification gate (pytest tests/core/test_flat_view.py).
-Depends on: ``model_atlas.core.flat_view`` (under test), ``model_atlas.core.vocabularies``
-            (the ``SpatialLink.is_presence`` derivation the projection must agree
-            with), pandas, and the worked-example demo DB
+Depends on: ``model_atlas.core.flat_view`` (under test), ``model_atlas.core.vocabularies``,
+            pandas, and the worked-example demo DB
             ``docs/examples/matlas_example.sqlite`` (28 observations, one positionless
             nav-origin leg).
 """
@@ -35,38 +33,39 @@ _DEMO_DB = Path(__file__).resolve().parents[2] / "docs" / "examples" / "matlas_e
 # Deliberately a second, independent declaration: a drive-by edit of the module's
 # CANONICAL_COLUMNS cannot silently pass — the doc's list is the oracle, not the code's.
 _EXPECTED_CANONICAL = (
-    # -- old columns, mapped (csv_migration.md "Every old column, mapped" order) --
-    "entity", "entity_type", "concerns",
+    # -- trace values and their obvious derivations: NO suffix -------------------
+    # A value converted from a source datum is still that datum: `latitude_wgs84` is the
+    # source's own coordinate in a named CRS, `entity` its own identifier normalised.
+    "entity", "entity_type",
     "time_lower_raw", "time_lower_source_field", "time_lower_unix_utc_us",
     "time_upper_raw", "time_upper_source_field", "time_upper_unix_utc_us",
-    "utc_offset_hours_lower", "utc_offset_hours_upper",   # F2: the old single column, split
+    "offset_to_local_hours_lower", "offset_to_local_hours_upper",
     "lower_accuracy_us", "upper_accuracy_us", "temporal_source",
     "latitude_wgs84", "latitude_source_field",
-    "longitude_wgs84", "longitude_source_field",
-    "altitude_m",
-    "raw_position",
-    "spatial_source",         # old position_source (the mechanism)
+    "longitude_wgs84", "longitude_source_field", "altitude_m",
+    "position_raw", "spatial_source",
     "horizontal_accuracy_m", "vertical_accuracy_m",
     "horizontal_speed_kmh", "vertical_speed_kmh",
     "horizontal_speed_accuracy_kmh", "vertical_speed_accuracy_kmh",
     "heading_deg", "heading_accuracy_deg", "beam_azimuth_deg", "beam_width_deg",
-    "entity_link", "spatial_link", "occupancy", "attestation", "recorded_at",
-    "raw_source_path", "input_file_path", "input_record_id", "source_record_uid",
-    "row_uid", "preset_id", "preset_name", "source_label", "source_tier", "deleted",
-    "record_rank", "record_rank_type",
-    # -- new columns (csv_migration.md "New columns" order) ------------------------
-    "case_number", "content_uid", "claim_digest",
-    "raw_identifier", "identifier_type", "activity_role", "concerns_origin",
-    "spatial_referential", "bearer_entity", "bearer_raw_identifier",
-    "bearer_identifier_type", "bearer_entity_type", "is_presence",
-    "spatial_method", "temporal_method",
-    "time_lower_stated_offset", "time_upper_stated_offset",
-    "time_lower_datetime_iso", "time_upper_datetime_iso",
-    "time_lower_date", "time_upper_date", "time_lower_time", "time_upper_time",
-    "recovery_state", "recovery_source", "data_source",
-    "activity_id", "activity_kind", "counterpart", "facets", "context",
-    "s2_cell_id",
+    # -- the three stored links (decision 55): preset-stated, so suffixed --------
+    "entity_link_matlas", "spatial_link_matlas", "temporal_link_matlas",
+    # -- acquisition paths come from the trace; the uid does not ----------------
+    "raw_source_path", "input_file_path", "input_record_id", "source_record_uid_matlas",
+    # -- mATLAS processing metadata ---------------------------------------------
+    "row_uid_matlas", "preset_id_matlas", "preset_name_matlas",
+    "source_label_matlas", "source_tier_matlas",
+    "record_rank_matlas", "record_order_matlas",  # record_order derived from rank == 1
+    "case_number_matlas", "observation_content_uid_matlas", "spatiotemporal_entity_hash_matlas",
+    "raw_identifier", "identifier_type",
+    # -- the position bearer: a real entity from the trace ----------------------
+    "bearer_entity", "bearer_raw_identifier",
+    "bearer_identifier_type", "bearer_entity_type",
+    # -- integration projections -------------------------------------------------
+    "recovery_state_matlas", "recovery_source_matlas",
+    "reported_data_source", "s2_cell_id_matlas",
 )
+
 
 
 @pytest.fixture(scope="module")
@@ -109,29 +108,34 @@ def test_one_row_per_observation(demo: sqlite3.Connection, frame: pd.DataFrame) 
     expected = {row[0] for row in demo.execute("SELECT observation_id FROM observation")}
     assert len(frame) == 28 == len(expected)
     # row_uid = observation_id (migration row: the founding-defect fix — genuinely unique).
-    assert set(frame["row_uid"]) == expected
-    assert frame["row_uid"].is_unique
+    assert set(frame["row_uid_matlas"]) == expected
+    assert frame["row_uid_matlas"].is_unique
 
 
-def test_row_uid_content_uid_case_number(demo: sqlite3.Connection,
+def test_row_uid_observation_content_uid_case_number(demo: sqlite3.Connection,
                                          frame: pd.DataFrame) -> None:
-    hashes = dict(demo.execute("SELECT observation_id, content_hash FROM observation"))
-    assert all(hashes[uid] == cu for uid, cu in zip(frame["row_uid"], frame["content_uid"]))
-    assert set(frame["case_number"]) == {"GE-2026-04412"}
+    hashes = dict(demo.execute("SELECT observation_id, observation_content_hash FROM observation"))
+    assert all(hashes[uid] == cu for uid, cu in zip(frame["row_uid_matlas"], frame["observation_content_uid_matlas"]))
+    assert set(frame["case_number_matlas"]) == {"GE-2026-04412"}
 
 
 def test_positionless_observation_kept_with_empty_coordinates(frame: pd.DataFrame) -> None:
     # The nav-search ORIGIN leg ("Home") has a spatial expression but no integration —
     # the flat rule says the line survives with EMPTY coordinate cells, never dropped
     # and never invented (§2 "a positionless claim vanishes from CSV" guard).
-    row = frame[(frame["preset_id"] == "nav_generic") & (frame["raw_position"] == "Home")]
-    assert len(row) == 1
+    row = frame[(frame["preset_id_matlas"] == "nav_generic")
+                & frame["latitude_wgs84"].isna()]
+    assert len(row) == 2   # both nav legs: neither address nor place name was integrated
     assert row["latitude_wgs84"].isna().all()
     assert row["longitude_wgs84"].isna().all()
-    assert row["s2_cell_id"].isna().all()
-    assert row["spatial_method"].isna().all()
-    # The expression header still projects: the place was EXPRESSED, just not integrated.
-    assert row["spatial_referential"].tolist() == ["place_name"]
+    assert row["s2_cell_id_matlas"].isna().all()
+    # The place was EXPRESSED, just not integrated: the verbatim raw still projects, which
+    # is the whole point of keeping the line. (`spatial_referential` and `spatial_method`
+    # left the projection — the referential is already named in the integration column
+    # titles, and the method lives in the run DB.)
+    # position_raw records only what produced the coordinates, and nothing did here, so it
+    # is empty too. The place survives at L1 in spatial_component, one join away.
+    assert row["position_raw"].isna().all()
 
 
 # --- numeric rendering --------------------------------------------------------
@@ -144,15 +148,17 @@ def test_numeric_columns_are_numeric_dtypes(frame: pd.DataFrame) -> None:
     assert str(frame["time_lower_unix_utc_us"].dtype) == "Int64"
     assert str(frame["lower_accuracy_us"].dtype) == "Int64"
     assert str(frame["upper_accuracy_us"].dtype) == "Int64"
-    assert str(frame["s2_cell_id"].dtype) == "Int64"
-    assert pd.api.types.is_numeric_dtype(frame["record_rank"])
-    # Some applied offsets carry the "N/A" assumed-UTC sentinel in the demo, so the column
-    # is a MIX (object dtype): the sentinel stays text (quoted) — "value, zone unknown" must
-    # never render as a bare number — while genuine offsets are restored to numbers per value.
-    assert not pd.api.types.is_numeric_dtype(frame["utc_offset_hours_lower"])
-    offset_values = set(frame["utc_offset_hours_lower"].dropna())
-    assert "N/A" in offset_values                                    # the sentinel, kept text
-    assert any(isinstance(value, float) for value in offset_values)  # real offsets, numeric
+    assert str(frame["s2_cell_id_matlas"].dtype) == "Int64"
+    assert pd.api.types.is_numeric_dtype(frame["record_rank_matlas"])
+    # The offset to local is stored TEXT (its model type is a float|str union, so a run
+    # with no configured zone can hold the "N/A" sentinel), and is restored to numeric per
+    # value. The demo DOES configure a zone, so every row here carries a real offset and the
+    # whole column comes back numeric — the sentinel is a RUN-level state now, not a
+    # per-row one, which is exactly why no demo row can exhibit it. The mixed case (some
+    # numbers, some sentinel) is covered directly by the _restore_numeric_dtype unit test.
+    offset_values = set(frame["offset_to_local_hours_lower"].dropna())
+    assert offset_values, "the demo must carry offsets to local"
+    assert all(isinstance(value, float) for value in offset_values)
 
 
 def test_s2_cell_id_exact_int64(demo: sqlite3.Connection, frame: pd.DataFrame) -> None:
@@ -164,7 +170,7 @@ def test_s2_cell_id_exact_int64(demo: sqlite3.Connection, frame: pd.DataFrame) -
         "  ON si.spatial_expression_id = a.spatial_expression_id "
         "LEFT JOIN spatial_index six "
         "  ON six.spatial_integration_id = si.spatial_integration_id"))
-    for uid, value in zip(frame["row_uid"], frame["s2_cell_id"]):
+    for uid, value in zip(frame["row_uid_matlas"], frame["s2_cell_id_matlas"]):
         if pd.isna(value):
             assert stored[uid] is None
         else:
@@ -178,20 +184,25 @@ def test_numeric_cells_render_unquoted(frame: pd.DataFrame) -> None:
     frame.to_csv(buffer, index=False, sep=";", quoting=csv.QUOTE_NONNUMERIC)
     rendered = buffer.getvalue()
     assert ";46.203;" in rendered          # a GNSS fix latitude, unquoted float
-    assert ';"N/A";' in rendered           # assumed-UTC applied offset, quoted text
+    assert ";1.0;" in rendered             # an offset to local, restored to a bare number
     assert '"46.203"' not in rendered
+    assert '"1.0"' not in rendered
 
 
 # --- derived locates ----------------------------------------------------------
 
-def test_locates_derived_from_the_vocabulary(frame: pd.DataFrame) -> None:
-    # Single source of truth: each row's is_presence must equal the enum's own
-    # derivation of its spatial_link — no second mapping may exist to disagree.
-    for link, is_presence in zip(frame["spatial_link"], frame["is_presence"]):
-        assert is_presence == V.SpatialLink(link).is_presence
-    # The demo exercises self / infrastructure / referenced.
-    # Both outcomes must actually occur in the demo, or the test proves nothing.
-    assert {True, False} <= set(frame["is_presence"])
+def test_record_order_derived_from_the_rank(frame: pd.DataFrame) -> None:
+    # The ONE derived column left in the projection. `record_order` is exactly
+    # `record_rank == 1`, so a stored copy could only ever contradict the rank beside it —
+    # the argument that also deleted Genesis/Locates and, this pass, is_presence (whose
+    # answer is read straight off `spatial_link`).
+    for rank, order in zip(frame["record_rank_matlas"], frame["record_order_matlas"]):
+        if pd.isna(rank):
+            assert pd.isna(order)   # no verdict is not a verdict of "additional"
+        else:
+            assert order == ("main" if int(rank) == 1 else "additional")
+    # The demo must actually exercise a rank, or the test proves nothing.
+    assert frame["record_rank_matlas"].notna().any()
 
 
 # --- the orig_ passthrough ------------------------------------------------------
@@ -213,8 +224,8 @@ def test_orig_columns_union_in_first_appearance_order(demo: sqlite3.Connection,
 def test_orig_values_are_verbatim(demo: sqlite3.Connection, frame: pd.DataFrame) -> None:
     # Every row repeats ITS OWN record's verbatim values; keys the record lacks are blank.
     raw = dict(demo.execute("SELECT raw_record_id, raw_json FROM raw_record"))
-    a_party = frame[frame["source_label"] == "CDR op-A"].iloc[0]
-    record = json.loads(raw[a_party["source_record_uid"]])
+    a_party = frame[frame["source_label_matlas"] == "CDR op-A"].iloc[0]
+    record = json.loads(raw[a_party["source_record_uid_matlas"]])
     assert a_party["orig_a_party"] == record["a_party"] == "+41 79 123 45 67"
     assert pd.isna(a_party["orig_ZLATITUDE"])   # a CDR record has no iOS-cache key
 
@@ -222,9 +233,10 @@ def test_orig_values_are_verbatim(demo: sqlite3.Connection, frame: pd.DataFrame)
 def test_passthrough_collision_gets_trailing_underscore() -> None:
     # A source field whose prefixed name collides with a canonical column must be
     # disambiguated (trailing "_"), never allowed to shadow the canonical column.
-    names = flat_view._passthrough_names(["position", "position_"], "raw_")
-    assert names["position"] == "raw_position_"       # "raw_position" is canonical
-    assert names["position_"] == "raw_position__"     # and chains must not collide either
+    # "raw" under the "position_" prefix would render as the canonical "position_raw".
+    names = flat_view._passthrough_names(["raw", "raw_"], "position_")
+    assert names["raw"] == "position_raw_"        # "position_raw" is canonical
+    assert names["raw_"] == "position_raw__"      # and chains must not collide either
 
 
 @pytest.mark.parametrize(
@@ -255,9 +267,9 @@ def test_restore_numeric_dtype_is_per_value() -> None:
     # A numeric-union TEXT column mixing real offsets with the "N/A" sentinel must restore
     # the genuine numbers to numeric values (rendered unquoted) while the sentinel stays
     # text (quoted) — not drag the whole column to TEXT because one sibling row is "N/A".
-    frame = pd.DataFrame({"utc_offset_hours_lower": ["1.0", "N/A", "0.0", None]})
-    flat_view._restore_numeric_dtype(frame, "utc_offset_hours_lower")
-    restored = list(frame["utc_offset_hours_lower"])
+    frame = pd.DataFrame({"offset_to_local_hours_lower": ["1.0", "N/A", "0.0", None]})
+    flat_view._restore_numeric_dtype(frame, "offset_to_local_hours_lower")
+    restored = list(frame["offset_to_local_hours_lower"])
     assert restored[0] == 1.0 and isinstance(restored[0], float)   # real offset -> number
     assert restored[1] == "N/A"                                    # sentinel -> kept text
     assert restored[2] == 0.0 and isinstance(restored[2], float)   # real offset -> number
@@ -267,4 +279,4 @@ def test_restore_numeric_dtype_is_per_value() -> None:
     frame.to_csv(buffer, index=False, sep=";", quoting=csv.QUOTE_NONNUMERIC)
     rendered = buffer.getvalue().splitlines()
     # (an empty cell renders as a quoted "" here, exactly as an all-null offset column does.)
-    assert rendered == ['"utc_offset_hours_lower"', "1.0", '"N/A"', "0.0", '""']
+    assert rendered == ['"offset_to_local_hours_lower"', "1.0", '"N/A"', "0.0", '""']

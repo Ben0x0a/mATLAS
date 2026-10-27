@@ -2,7 +2,7 @@
 
 Defines:    a round-trip test proving every enum-valued string in the worked-example
             demo DB is a member of the corresponding enum (columns enumerated
-            dynamically, no hardcoded row lists), the needs_bearer/is_presence derivations,
+            dynamically, no hardcoded row lists), the decision-55 link invariants,
             the phrase-fragment tests (including the negation/reference strings), and
             the is_standard_part predicate test.
 Used by:    pytest.
@@ -19,13 +19,12 @@ import pytest
 from model_atlas.core.vocabularies import (
     ActivityKind,
     EditKind,
-    ActivityRole,
-    Attestation,
     EntityLink,
     EntityType,
-    Occupancy,
+    TemporalLink,
     Origin,
     RecordState,
+    RecoverySource,
     SourceTier,
     SpatialReferential,
     SpatialLink,
@@ -42,25 +41,22 @@ _DEMO_DB = (
 
 # (table, column) -> the enum whose members must contain every stored value. The
 # columns are the enum-valued (closed-vocabulary) ones; free-text/method-defined columns
-# (e.g. analysis.record_rank_type, activity.context_json, entity.identifier_type — a free string
+# (e.g. entity.identifier_type — a free string
 # whose known kinds IdentifierType only suggests) are deliberately excluded.
 _ENUM_COLUMNS: dict[tuple[str, str], type[Enum]] = {
     ("entity", "type"): EntityType,
     ("entity", "concerns_origin"): Origin,
-    ("observation", "entity_origin"): Origin,
-    ("observation", "activity_role"): ActivityRole,
     ("observation", "entity_link"): EntityLink,
     ("observation", "spatial_link"): SpatialLink,
-    ("observation", "occupancy"): Occupancy,
-    ("observation", "attestation"): Attestation,
-    ("observation", "deleted"): RecordState,
+    ("observation", "temporal_link"): TemporalLink,
+    ("observation", "recovery_state"): RecordState,
+    ("observation", "recovery_source"): RecoverySource,
     ("spatial_expression", "referential"): SpatialReferential,
     ("temporal_expression", "kind"): TemporalKind,
     ("temporal_expression", "referential"): TemporalReferential,
-    ("activity", "kind"): ActivityKind,
     ("raw_record", "recovery_state"): RecordState,
     ("edit_log", "edit_kind"): EditKind,
-    ("source", "source_tier"): SourceTier,
+    ("source_file", "source_tier"): SourceTier,
 }
 
 
@@ -104,66 +100,44 @@ def test_demo_db_component_parts_are_standard() -> None:
         assert is_standard_part(part), f"{part!r} should be a standard part"
 
 
-# --- The two surviving derivations ----------------------------------------
-# Genesis/Locates are GONE with the conflated EntityPositionLink/EntityTimeLink they
-# un-mixed. What replaces them reads a SINGLE orthogonal field each, so neither can lose
-# information the way those views did (``at`` and ``claimed_at`` both rendered ``self``).
+# --- The links (decision 55) ----------------------------------------------
 
-def test_needs_bearer_is_exactly_not_self() -> None:
-    """The bearer invariant: a bearer row exists iff the link is not ``self``.
+def test_negation_lives_only_on_the_temporal_link() -> None:
+    """NOT-diamond-P == box-NOT-P, so negation storable on two arms would let one fact be
+    written two ways — the real bug ``NEVER_DURING_INTERVAL`` caused on two enums at once.
+    Only ``TemporalLink`` may carry a negative member."""
+    negative_words = ("absent", "never", "not")
+    for enum in (EntityLink, SpatialLink):
+        assert not any(word in m.value for m in enum for word in negative_words), enum
+    assert {TemporalLink.NEVER, TemporalLink.NOT_THROUGHOUT} == {
+        m for m in TemporalLink if any(word in m.value for word in negative_words)}
 
-    Every member must resolve, so a future addition cannot silently lack a rule.
-    """
-    assert {link: link.needs_bearer for link in EntityLink} == {
-        EntityLink.SELF: False,
-        EntityLink.SERVED_BY: True,
-        EntityLink.SEEN_BY: True,
-        EntityLink.USED_AT: True,
-        EntityLink.STAYED_AT: True,
-        EntityLink.SEARCHED_FOR: True,
-        EntityLink.SHARED: True,
-        EntityLink.CACHED: True,
-        EntityLink.UNKNOWN: True,
+
+def test_temporal_link_is_the_square_of_opposition_plus_unknown() -> None:
+    assert [m.value for m in TemporalLink] == [
+        "throughout", "at_least_once", "never", "not_throughout", "unknown"]
+
+
+def test_instant_canonicalisation_keeps_one_encoding_per_fact() -> None:
+    """On an instant box == diamond: each fact must map to ONE stored member."""
+    assert {m: m.canonical_on_instant for m in TemporalLink} == {
+        TemporalLink.THROUGHOUT: TemporalLink.AT_LEAST_ONCE,
+        TemporalLink.AT_LEAST_ONCE: TemporalLink.AT_LEAST_ONCE,
+        TemporalLink.NEVER: TemporalLink.NEVER,
+        TemporalLink.NOT_THROUGHOUT: TemporalLink.NEVER,
+        TemporalLink.UNKNOWN: TemporalLink.UNKNOWN,
     }
 
 
-def test_is_presence_separates_the_three_negatives() -> None:
-    """The ONE presence predicate, replacing a three-token test across two enums.
-
-    The point of the split: ``references`` (interest, no presence), ``absent`` (asserted
-    non-presence) and ``unknown`` (no claim either way) are all NOT presence, but they are
-    not each other — and ``unknown`` must stay distinguishable so it can be surfaced for
-    review rather than silently dropped.
-    """
-    assert {link: link.is_presence for link in SpatialLink} == {
-        SpatialLink.AT: True,
-        SpatialLink.WITHIN: True,
-        SpatialLink.NEAR: True,
-        SpatialLink.REFERENCES: False,
-        SpatialLink.ABSENT: False,
-        SpatialLink.UNKNOWN: False,
-    }
-    assert len({SpatialLink.REFERENCES, SpatialLink.ABSENT, SpatialLink.UNKNOWN}) == 3
+def test_entity_link_is_a_role_not_a_verb() -> None:
+    assert [m.value for m in EntityLink] == ["subject", "party", "mentioned", "unknown"]
 
 
-def test_negation_lives_only_on_the_spatial_link() -> None:
-    """Polarity on space, quantification on time — the convention modal duality forces.
-
-    NOT-diamond-P == box-NOT-P, so permitting negation on both corners would let one fact be
-    written two ways. That was the real bug: ``NEVER_DURING_INTERVAL`` existed on
-    ``EntityTimeLink`` AND ``SpatialTemporalLink`` at once, with no rule for disagreement.
-    """
-    assert not any("absent" in m.value or "never" in m.value for m in Occupancy)
-    assert SpatialLink.ABSENT.value == "absent"
-
-
-def test_occupancy_has_no_instant_member() -> None:
-    """An instant is the degenerate interval ``lower == upper``, where box == diamond.
-
-    The shape of the expression is ``TemporalKind``'s job; occupancy would carry no
-    information there, so the member must not exist.
-    """
-    assert not any(m.value == "instant" for m in Occupancy)
+def test_no_link_has_an_instant_member() -> None:
+    """An instant is the degenerate interval ``lower == upper``; its shape is
+    ``TemporalKind``'s job, so no link may restate it."""
+    for enum in (EntityLink, SpatialLink, TemporalLink):
+        assert not any(m.value == "instant" for m in enum)
     assert any(m.value == "instant" for m in TemporalKind)
 
 
@@ -172,9 +146,7 @@ def test_occupancy_has_no_instant_member() -> None:
 _PHRASED_ENUMS = (
     EntityLink,
     SpatialLink,
-    Occupancy,
-    Attestation,
-    ActivityRole,
+    TemporalLink,
     TemporalKind,
 )
 
@@ -187,15 +159,14 @@ def test_every_phrased_member_has_a_non_empty_phrase(enum: type[Enum]) -> None:
         )
 
 
-def test_negation_and_reference_members_phrase_accordingly() -> None:
-    # The negation reads as negation; REFERENCES reads as a reference, never presence.
-    assert SpatialLink.ABSENT.phrase == "not at"
-    assert SpatialLink.REFERENCES.phrase == "referring to"
-    # An assertion by a person reads as attribution, never as a weight or a doubt: the model
-    # records WHO asserts, and leaves credibility to the court.
-    assert Attestation.PERSON.phrase == "as stated by a person"
-    # `cached` must not read as presence — it is the verb that leaves no spatial claim.
-    assert EntityLink.CACHED.phrase == "cached"
+def test_negation_and_non_contact_members_phrase_accordingly() -> None:
+    # The negation reads as negation, on an interval and on an instant alike.
+    assert TemporalLink.NEVER.phrase == "never during"
+    assert TemporalLink.NEVER.instant_phrase == "not at"
+    assert TemporalLink.NOT_THROUGHOUT.instant_phrase == "not at"
+    # `searched` / `cached` must not read as presence.
+    assert SpatialLink.SEARCHED.phrase == "searched for"
+    assert SpatialLink.CACHED.phrase == "cached"
 
 
 # --- is_standard_part predicate -------------------------------------------
@@ -215,10 +186,10 @@ def test_column_cast_int_fires_for_assignable_integer_fields() -> None:
     # The implicit int-cast must fire for the integer fields a preset can actually MAP
     # (assignable names), mirroring how the float cast works — otherwise it is dead and a
     # preset would have to restate `cast: int`.
-    for field in ("multiplicity", "time_accuracy_us_lower", "time_accuracy_us_upper"):
+    for field in ("time_accuracy_us_lower", "time_accuracy_us_upper"):
         assert column_cast(field) is int
     # A float-shaped source value (e.g. pandas materialising "2.0") coerces to the integer 2.
-    cast = column_cast("multiplicity")
+    cast = column_cast("time_accuracy_us_lower")
     assert cast is not None and cast(2.0) == 2
 
 

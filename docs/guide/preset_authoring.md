@@ -138,9 +138,9 @@ observations:
       epoch:   cocoa
       zone:    const(UTC)
     links:
-      entity:   self
-      spatial:  at
-      temporal: once
+      entity:   subject
+      spatial:  measured
+      temporal: at_least_once
 ```
 
 For two times at one place (a visit interval and a created instant), write two observation
@@ -204,9 +204,9 @@ observations:
       epoch:   cocoa
       zone:    const(UTC)
     links:
-      entity:   self
-      spatial:  at
-      temporal: once
+      entity:   subject
+      spatial:  measured
+      temporal: at_least_once
 ```
 
 This is based on the mATLAS-presets `ios/ios_routined_cached_locations.yaml` (its
@@ -281,9 +281,9 @@ observations:
       format:  "%d.%m.%Y %H:%M:%S.%f"
       zone:    { from: 'header("Timestamp Date/Time - * (dd.MM.yyyy)")', pipe: "regex(tz, group=z)" }
     links:
-      entity:   self
-      spatial:  at
-      temporal: once
+      entity:   subject
+      spatial:  measured
+      temporal: at_least_once
 ```
 
 This is based on the mATLAS-presets `axiom/ios_cached_locations.yaml` (its
@@ -311,9 +311,9 @@ observations:
       epoch: cocoa
       zone:  const(UTC)
     links:
-      entity:   self
-      spatial:  at
-      temporal: continuous_during_interval
+      entity:   subject
+      spatial:  measured
+      temporal: throughout
 ```
 
 Adapted from the mATLAS-presets `ios/ios_routined_significant_visits.yaml`.
@@ -500,14 +500,14 @@ microseconds**. Map `epoch`/`format` unless the source truly stores µs.
 
 ### No zone → assumed UTC, flagged loudly
 
-A `time:` block with no `zone` assumes **UTC** and marks the assumption with a trailing
-` N/A` on the materialised local datetime (`UTC_OFFSET_UNKNOWN`). The instant is still
-recorded; the flag tells the examiner the offset was assumed, not stated.
+A `time:` block with no `zone` assumes **UTC** and marks the assumption in the row's
+`timespan_integration.method` (`assume_utc/…`). The instant is still recorded; the stamp
+tells the examiner the offset was assumed, not stated — per row, and auditable.
 
 ### A named zone beats a fixed offset, and beats the configured one
 
 `zone: const(Europe/Zurich)` resolves each bound's own offset through the tz database, so an
-interval spanning a DST change gets two different applied offsets. `zone: const(+01:00)` is
+interval spanning a DST change resolves each bound against its own offset. `zone: const(+01:00)` is
 season-blind by design — the source declared that number, so it is applied verbatim all year.
 A named zone also **outranks** the operator's configured `[timezone].local_zone`: the preset
 states what this source's clocks mean, the config only says what to assume otherwise.

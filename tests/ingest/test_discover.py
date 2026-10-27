@@ -2,7 +2,7 @@
 
 Covers:
   * a folder and a zip of the same tree -> equal source ``fingerprint_sha256`` but
-    distinct ``source_id`` / ``input_file_path`` (paths-only id, §2c);
+    distinct ``source_file_id`` / ``input_file_path`` (paths-only id, §2c);
   * two identical-bytes archives at two paths -> TWO ``archive`` rows sharing ``cd_sha256``
     (a GROUP BY finding, never a merge);
   * the opt-in, preset-scoped archive skip (nothing skipped without the flag; a skip needs
@@ -25,6 +25,7 @@ from pathlib import Path
 from model_atlas.core.ids import preset_id
 from model_atlas.core.store import RunStore
 from model_atlas.core.vocabularies import Preset
+from model_atlas.ingest import writer
 from model_atlas.ingest.writer import (
     SelfIngestionError,
     Target,
@@ -67,7 +68,7 @@ def _sqlite_bytes(table: str = "t") -> bytes:
 
 def _sources(store: RunStore) -> list[dict]:
     cur = store.connection.execute(
-        "SELECT source_id, input_file_path, inner_path, subunit, fingerprint_sha256 FROM source"
+        "SELECT source_file_id, input_file_path, inner_path, subunit, fingerprint_sha256 FROM source_file"
     )
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -75,7 +76,7 @@ def _sources(store: RunStore) -> list[dict]:
 
 # --- folder == zip (D29), paths-only id (§2c) -------------------------------
 
-def test_folder_and_zip_share_fingerprint_but_not_source_id(tmp_path: Path) -> None:
+def test_folder_and_zip_share_fingerprint_but_not_source_file_id(tmp_path: Path) -> None:
     folder = tmp_path / "tree"
     folder.mkdir()
     (folder / "x.csv").write_bytes(_csv_bytes())
@@ -90,7 +91,7 @@ def test_folder_and_zip_share_fingerprint_but_not_source_id(tmp_path: Path) -> N
     csv_rows = [r for r in rows if r["subunit"] is None]
     assert len(csv_rows) == 2
     assert csv_rows[0]["fingerprint_sha256"] == csv_rows[1]["fingerprint_sha256"]
-    assert csv_rows[0]["source_id"] != csv_rows[1]["source_id"]
+    assert csv_rows[0]["source_file_id"] != csv_rows[1]["source_file_id"]
     assert {r["input_file_path"] for r in csv_rows} == {
         str((folder / "x.csv").resolve()), str(zip_path.resolve())
     }
@@ -111,9 +112,9 @@ def test_append_adds_a_run_to_the_existing_case(tmp_path: Path) -> None:
         assert first.run_id != second.run_id        # two runs
         counts = {
             t: store.connection.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-            for t in ("case_metadata", "run", "source")
+            for t in ("case_metadata", "run", "source_file")
         }
-    assert counts == {"case_metadata": 1, "run": 2, "source": 2}
+    assert counts == {"case_metadata": 1, "run": 2, "source_file": 2}
 
 
 def test_records_written_verbatim(tmp_path: Path) -> None:
@@ -233,7 +234,7 @@ def test_nested_archives_do_not_collide(tmp_path: Path) -> None:
     assert len(db_rows) == 2
     inners = sorted(r["inner_path"] for r in db_rows)
     assert inners == ["a.zip!b.zip!x.db", "c.zip!b.zip!x.db"]
-    assert db_rows[0]["source_id"] != db_rows[1]["source_id"]
+    assert db_rows[0]["source_file_id"] != db_rows[1]["source_file_id"]
     # byte-identical inner db -> the two sources share a fingerprint (a finding, not a merge)
     assert db_rows[0]["fingerprint_sha256"] == db_rows[1]["fingerprint_sha256"]
 
@@ -269,7 +270,7 @@ def test_reappending_the_same_archive_to_a_case_is_idempotent(tmp_path: Path) ->
                               existing_case_id=first.case_id)     # must not raise
         archives = store.connection.execute("SELECT COUNT(*) FROM archive").fetchone()[0]
         run_archives = store.connection.execute("SELECT COUNT(*) FROM run_archive").fetchone()[0]
-        sources = store.connection.execute("SELECT COUNT(*) FROM source").fetchone()[0]
+        sources = store.connection.execute("SELECT COUNT(*) FROM source_file").fetchone()[0]
     assert first.case_id == second.case_id
     assert archives == 1                         # one path -> one archive row across both runs
     assert run_archives == 2                     # each run records its OWN encounter link
@@ -318,7 +319,7 @@ def test_target_filter_reads_only_the_named_file_and_subunit(tmp_path: Path) -> 
         "notes.csv": _csv_bytes(),
     }))
 
-    def target(file, fmt):
+    def target(file):
         if file.logical_path.name != "wanted.sqlite":
             return None
         return Target(subunits=frozenset({"places"}))
@@ -330,6 +331,40 @@ def test_target_filter_reads_only_the_named_file_and_subunit(tmp_path: Path) -> 
     assert report.not_targeted == 2
     # a declined file is never reported as unreadable — it was a choice, not a failure.
     assert report.skipped_unreadable == 0
+
+
+def test_a_declined_file_is_never_sniffed(tmp_path: Path, monkeypatch) -> None:
+    """"Passed over unopened" is literal: a file the target declines has NO bytes read.
+
+    The format sniff is the writer's first and cheapest read (512 head bytes), so it is the
+    exact probe for "was this file opened at all". Doing it before the filter costs one seek
+    plus one decompress-start per entry, which on a full-filesystem acquisition is a quarter
+    of a million reads to answer a question the path had already settled — so the ordering is
+    pinned here rather than left to be re-broken.
+    """
+    zip_path = tmp_path / "acq.zip"
+    zip_path.write_bytes(_zip_of({
+        "wanted.sqlite": _sqlite_bytes(table="places"),
+        "other.sqlite": _sqlite_bytes(table="places"),
+        "notes.csv": _csv_bytes(),
+    }))
+    sniffed: list[str] = []
+    real = writer.detect_source_format
+
+    def spy(file):
+        sniffed.append(file.logical_path.name)
+        return real(file)
+
+    monkeypatch.setattr(writer, "detect_source_format", spy)
+
+    def target(file):
+        if file.logical_path.name != "wanted.sqlite":
+            return None
+        return Target(subunits=frozenset({"places"}))
+
+    with RunStore() as store:
+        ingest_input(zip_path, store, case_number="C1", target=target)
+    assert sniffed == ["wanted.sqlite"]
 
 
 def test_target_none_subunits_reads_every_subunit(tmp_path: Path) -> None:
@@ -346,7 +381,7 @@ def test_target_none_subunits_reads_every_subunit(tmp_path: Path) -> None:
         db.write_bytes(Path(tmp.name).read_bytes())
 
     with RunStore() as store:
-        ingest_input(db, store, case_number="C1", target=lambda file, fmt: Target())
+        ingest_input(db, store, case_number="C1", target=lambda file: Target())
         assert {row["subunit"] for row in _sources(store)} == {"a", "b"}
 
 

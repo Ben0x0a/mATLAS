@@ -15,6 +15,7 @@ from __future__ import annotations
 import html
 import logging
 import tempfile
+from collections.abc import Iterable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from importlib.resources import files
@@ -691,21 +692,7 @@ class MainController(QObject):
         list_widget.addItem(item)
 
     def _add_selected_presets(self) -> None:
-        paths = set(self._selected_preset_paths())
-        by_path = {str(preset.path): preset for preset in self._presets}
-        for item in self.available_preset_list.selectedItems():
-            path = item.data(Qt.ItemDataRole.UserRole)
-            if path in paths:
-                continue
-            preset = by_path.get(path)
-            if preset is None:
-                continue
-            self._add_list_item(self.selected_preset_list, preset)
-            paths.add(path)
-        if self.selected_preset_list.count():
-            self.auto_preset_check.setChecked(False)
-        self._render_available_presets()
-        self._sync_single_preset_notice()
+        self._select_presets(self.available_preset_list.selectedItems())
 
     def _remove_selected_presets(self) -> None:
         for item in self.selected_preset_list.selectedItems():
@@ -715,11 +702,32 @@ class MainController(QObject):
         self._sync_single_preset_notice()
 
     def _add_all_presets(self) -> None:
-        """Move every loaded preset into the selected list (skipping any already selected)."""
-        selected = set(self._selected_preset_paths())
-        for preset in self._presets:
-            if str(preset.path) not in selected:
-                self._add_list_item(self.selected_preset_list, preset)
+        """Move every preset the available list currently SHOWS into the selected list.
+
+        WHY the list widget rather than ``self._presets``: with a search term typed, the
+        available list shows a subset, and "add all" next to a search box means "all of
+        these" — adding the hidden ones too would silently contradict what the analyst
+        can see. ``_render_available_presets`` is the single place the visible set is
+        decided, so reading its output keeps the two in step by construction.
+        """
+        self._select_presets(
+            self.available_preset_list.item(row)
+            for row in range(self.available_preset_list.count())
+        )
+
+    def _select_presets(self, items: Iterable[QListWidgetItem]) -> None:
+        """Move ``items`` from the available list to the selected one, skipping duplicates."""
+        paths = set(self._selected_preset_paths())
+        by_path = {str(preset.path): preset for preset in self._presets}
+        for item in items:
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if path in paths:
+                continue
+            preset = by_path.get(path)
+            if preset is None:
+                continue
+            self._add_list_item(self.selected_preset_list, preset)
+            paths.add(path)
         if self.selected_preset_list.count():
             self.auto_preset_check.setChecked(False)
         self._render_available_presets()

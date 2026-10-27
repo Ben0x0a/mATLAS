@@ -2,13 +2,13 @@
 
 Defines:    ``verbalize(row) -> str`` — renders one flat-view row (the flat-view
             column contract) as a single sentence assembled from the ``phrase``
-            fragments declared in ``model_atlas.core.vocabularies``. The owner's
-            target shape, one clause per corner plus the attribution: *"The device
-            <identifier> (referring <concerns>; the caller) <entity_link phrase>
-            <bearer>, <spatial_link phrase> <place>, <occupancy phrase> <timespan>,
-            <attestation phrase>."* — e.g. *"The device +41791234567 (the caller) was
-            served by 228-01-2042-77341, near 46.205, 6.138, continuously during the
-            interval from A to B, as recorded by a system."*
+            fragments declared in ``model_atlas.core.vocabularies``. The shape, one
+            clause per arm (decision 55): *"Entity <identifier> (referring <concerns>)
+            <spatial_link phrase> <bearer>, at <place>, <temporal_link phrase>
+            <timespan>."* — e.g. *"Entity +41791234567 was served by 228-01-2042-77341,
+            at 46.205, 6.138, at least once during the interval from A to B."* When the
+            entity holds its own position the spatial verb takes the place directly:
+            *"Entity X was measured at 46.205, 6.138, at T."*
 Used by:    consumers wired later (the bonus CSV column, the GUI
             panels — one function, called everywhere); tests.core.test_verbalize.
 Depends on: ``model_atlas.core.vocabularies`` (the ``phrase`` fragments — declared
@@ -21,7 +21,7 @@ where the code enforces them):
 - **Place** = the integration values when present (``latitude_wgs84`` /
   ``longitude_wgs84`` — which also covers a method's named substitution, e.g. a
   cell register or a place centroid resolving a raw reference to coordinates),
-  combined with the expression's verbatim raw (``raw_position``) when both exist;
+  with ``position_raw`` reproduced VERBATIM as the FALLBACK when there are none;
   the verbatim raw alone is the fallback (address, place name, cell ref).
 - **Instant vs interval** comes from the timespan itself, not a stored kind (the
   the flat view carries no ``temporal_kind`` column): equal or lone bounds render
@@ -29,13 +29,12 @@ where the code enforces them):
   <upper>". Each bound prefers the integrated offset-tagged ISO string (its
   ``N/A`` assumed-UTC sentinel stays visible), then the verbatim
   raw, then the canonical epoch microseconds.
-- **Negation reads as negation**: the fragments encode it (``absent`` -> "not at"),
-  and the assembler never softens a phrase. ``references`` -> "referring to" (never
-  presence); ``unknown`` members carry their own honest fragments rather than being
-  omitted, so an undetermined relation is SAID rather than silently reading as presence.
-- **Attribution never becomes weight**: the trailing ``attestation`` clause names the KIND
-  of party that asserts ("as stated by a person"), never how much the claim is worth —
-  that is a court question the model does not answer.
+- **Negation reads as negation**: only the temporal link carries it, and its fragments
+  say so ("never during", "not at"); the assembler never softens a phrase. ``unknown``
+  members carry their own honest fragments rather than being omitted, so an undetermined
+  relation is SAID rather than silently reading as presence.
+- **No attribution clause**: the source link is the record chain, not a vocabulary, so the
+  sentence states no "as recorded by" — and never how much the claim is worth.
 - **No invented facts**: an empty spatial corner is SAID ("with no recorded
   position"), an empty temporal corner likewise ("with no recorded time"); the
   ``(referring <concerns>)`` clause is omitted when concerns is NULL; a purely
@@ -43,11 +42,11 @@ where the code enforces them):
 - **Deterministic**: a pure function of the row's values — the same row always
   yields the same sentence, byte for byte.
 
-Sentence shape (why the spatial fragment carries no verb): ``spatial_link``'s fragments are
-BARE relational phrases ("at", "near", "not at"). When a bearer is named the entity-link
-clause supplies the verb ("was served by <bearer>, near <place>"); when the entity holds its
-own position there is no bearer clause and the sentence supplies it ("was at <place>"). A
-fragment carrying its own verb would produce "was served by X, was near Y".
+Sentence shape: ``spatial_link``'s fragments are VERB phrases taking one object. When
+another entity holds the position (``party``, or a ``mentioned`` row naming one) the object
+is that bearer and the place follows ("was served by <antenna>, at <place>"); otherwise the
+object is the place itself ("was measured at <place>"). ``entity_link`` adds a qualifier
+only where the structure cannot show it: ``mentioned`` and ``unknown``.
 """
 from __future__ import annotations
 
@@ -56,21 +55,24 @@ from typing import Any, Mapping
 import pandas as pd
 
 from model_atlas.core import vocabularies as V
+from model_atlas.core.local_time import render_local
 
 # The said-absence wordings (an empty corner is stated, never filled).
 # Consumed by verbalize() below and asserted verbatim by tests.core.test_verbalize.
 NO_POSITION_WORDING = "with no recorded position"
 NO_TIME_WORDING = "with no recorded time"
 
-# Neutral glue for a row whose place exists but whose E-S link is NULL: states that
-# a position was recorded without asserting HOW the entity relates to it (using the
+# Neutral glue for a row whose place exists but whose spatial link is NULL: states that
+# a position was recorded without asserting HOW the observation uses it (using the
 # UNKNOWN member's phrase instead would invent a stored link value).
 _UNLINKED_POSITION_WORDING = "had a recorded position of"
 
-# Each temporal bound renders from the first populated column in this preference
-# order: the integrated ISO string (human-readable, offset-tagged, sentinel-loud),
-# the verbatim raw, then the canonical epoch microseconds.
-_BOUND_COLUMN_SUFFIXES = ("datetime_iso", "raw", "unix_utc_us")
+# A bound with a canonical instant renders through ``core.local_time`` (the ONE renderer,
+# shared with the concomitance report) from the epoch µs plus the row's offset to local.
+# There is no stored ISO column to read any more — see local_time's module docstring.
+# Only a bound with NO instant falls back, to the verbatim raw: that is L1 evidence the
+# integration could not read, and showing it beats saying nothing.
+_BOUND_FALLBACK_SUFFIXES = ("raw",)
 
 
 def _cell(row: Mapping[str, Any] | pd.Series, column: str) -> Any | None:
@@ -103,7 +105,8 @@ def _subject(row: Mapping[str, Any] | pd.Series) -> str:
 
     A purely typed mention (NULL identifier) falls back to the type
     ("The device"); ``concerns`` and the role phrase join in one parenthesis, each
-    omitted when absent — never invented.
+    omitted when absent — never invented. The role phrase renders only for the roles the
+    sentence structure cannot show (``mentioned``, ``unknown``).
     """
     identifier = _cell(row, "entity")
     entity_type = _cell(row, "entity_type")
@@ -119,9 +122,9 @@ def _subject(row: Mapping[str, Any] | pd.Series) -> str:
     concerns = _cell(row, "concerns")
     if concerns is not None:
         qualifiers.append(f"referring {concerns}")
-    role = _cell(row, "activity_role")
-    if role is not None:
-        qualifiers.append(V.ActivityRole(role).phrase)
+    entity_link = _cell(row, "entity_link_matlas")
+    if entity_link in (V.EntityLink.MENTIONED.value, V.EntityLink.UNKNOWN.value):
+        qualifiers.append(V.EntityLink(entity_link).phrase)
     if qualifiers:
         head += " (" + "; ".join(qualifiers) + ")"
     return head
@@ -131,25 +134,35 @@ def _place(row: Mapping[str, Any] | pd.Series) -> str | None:
     """The place text, or None when the spatial corner carries no value.
 
     Integration coordinates win when present (they also carry a method's named
-    substitution — a geocoded address, a cell register's tower position); the
-    verbatim raw joins them for readability and is the sole fallback otherwise.
+    substitution — a geocoded address, a cell register's tower position), and
+    ``position_raw`` is the FALLBACK, not a companion, and is reproduced verbatim.
+
+    WHY it stopped being a companion: ``position_raw`` records the components that PRODUCED
+    the coordinates, so joining the two would state one coordinate twice — "was at
+    46.19, 6.12 (ZLATITUDE:46.193000 | ZLONGITUDE:6.129000)". The two are therefore
+    alternatives, and because a row only has ``position_raw`` when it also has coordinates,
+    this fallback is reached only by a caller supplying the column without them.
     """
     latitude = _cell(row, "latitude_wgs84")
     longitude = _cell(row, "longitude_wgs84")
-    raw = _cell(row, "raw_position")
     if latitude is not None and longitude is not None:
-        coordinates = f"{_coordinate(latitude)}, {_coordinate(longitude)}"
-        if raw is not None:
-            return f"{raw} ({coordinates})"
-        return coordinates
-    if raw is not None:
-        return str(raw)
-    return None
+        return f"{_coordinate(latitude)}, {_coordinate(longitude)}"
+    # The fallback renders ``position_raw`` VERBATIM, labels and separators included.
+    # WHY no reformatting: splitting on `` | `` and stripping the ``column:`` labels would
+    # make the sentence prettier at the cost of being a second interpretation of a column
+    # whose entire purpose is to be the source's own words. Nothing in the tool parses
+    # ``position_raw`` — an analyst does, against the integrated coordinates — and a
+    # verbaliser that reshaped it would be the one exception.
+    raw = _cell(row, "position_raw")
+    return None if raw is None else str(raw)
 
 
 def _bound_text(row: Mapping[str, Any] | pd.Series, which: str) -> str | None:
     """One temporal bound's display text (``which`` is ``lower`` or ``upper``)."""
-    for suffix in _BOUND_COLUMN_SUFFIXES:
+    unix_us = _cell(row, f"time_{which}_unix_utc_us")
+    if unix_us is not None:
+        return render_local(int(unix_us), _cell(row, f"offset_to_local_hours_{which}"))
+    for suffix in _BOUND_FALLBACK_SUFFIXES:
         value = _cell(row, f"time_{which}_{suffix}")
         if value is not None:
             return str(value)
@@ -190,6 +203,39 @@ def _link_phrase(row: Mapping[str, Any] | pd.Series, column: str,
     return vocabulary(value).phrase
 
 
+def _bearer(row: Mapping[str, Any] | pd.Series) -> str | None:
+    """The bearer's text when ANOTHER entity holds the position, else None.
+
+    ``subject`` rows repeat the targeted entity as their bearer (decision 55), so naming it
+    again would read "Entity X was measured at X"; the place is the object there instead. A
+    typed bearer with no identifier is still named by its type — it exists in the record.
+    """
+    if _cell(row, "entity_link_matlas") == V.EntityLink.SUBJECT.value:
+        return None
+    bearer = _cell(row, "bearer_entity") or _cell(row, "bearer_raw_identifier")
+    if bearer is not None:
+        return str(bearer)
+    bearer_type = _cell(row, "bearer_entity_type")
+    if bearer_type is not None and bearer_type != V.EntityType.UNKNOWN.value:
+        return f"an unidentified {bearer_type}"
+    return None
+
+
+def _temporal_clause(link: str | None, timespan: tuple[str, bool]) -> str:
+    """The temporal clause: the link's interval or instant fragment, then the timespan.
+
+    Without a link an instant reads "at T" and an interval "during the interval from A to B"
+    — neutral glue that asserts no quantifier.
+    """
+    body, is_instant = timespan
+    if link is None:
+        connector = V.TemporalKind.INSTANT.phrase if is_instant else "during"
+    else:
+        member = V.TemporalLink(link)
+        connector = member.instant_phrase if is_instant else member.phrase
+    return f"{connector} {body}"
+
+
 def verbalize(row: Mapping[str, Any] | pd.Series) -> str:
     """Render one observation (a flat-view row) as one deterministic sentence.
 
@@ -200,57 +246,29 @@ def verbalize(row: Mapping[str, Any] | pd.Series) -> str:
     subject = _subject(row)
     place = _place(row)
     timespan = _timespan(row)
-    entity_phrase = _link_phrase(row, "entity_link", V.EntityLink)
-    spatial_phrase = _link_phrase(row, "spatial_link", V.SpatialLink)
-    occupancy_phrase = _link_phrase(row, "occupancy", V.Occupancy)
-    attestation_phrase = _link_phrase(row, "attestation", V.Attestation)
+    bearer = _bearer(row)
+    spatial_phrase = _link_phrase(row, "spatial_link_matlas", V.SpatialLink)
+    temporal_link = _cell(row, "temporal_link_matlas")
 
-    # The bearer clause: "was served by <bearer>". Rendered only when a bearer is actually
-    # named AND the verb is not `self` — for `self` the entity holds its own position, so
-    # there is no second party and the spatial fragment carries the verb instead.
-    bearer = _cell(row, "bearer_entity") or _cell(row, "bearer_raw_identifier")
-    bearer_clause: str | None = None
-    if (bearer is not None and entity_phrase is not None
-            and _cell(row, "entity_link") != V.EntityLink.SELF.value):
-        bearer_clause = f"{entity_phrase} {bearer}"
-
-    # The trailing attribution. Self-contained by construction ("as recorded by a system"),
-    # because no column carries the attestor's identity — the model records the KIND of party
-    # that asserts, never who they are and never what the claim is worth.
-    tail_attribution = f", {attestation_phrase}" if attestation_phrase is not None else ""
-
-    # Both corners empty: the sentence still exists and SAYS both absences.
-    if place is None and timespan is None:
-        head = f"{subject} {bearer_clause}" if bearer_clause else subject
-        return f"{head}, {NO_POSITION_WORDING} and {NO_TIME_WORDING}{tail_attribution}."
-
-    # No place: the spatial fragment describes a position that is not there, so only the
-    # said absence and the timespan render (never an invented position).
-    if place is None:
-        body, is_instant = timespan
-        head = f"{subject} {bearer_clause}" if bearer_clause else subject
-        connector = occupancy_phrase or (V.TemporalKind.INSTANT.phrase if is_instant
-                                         else "during")
-        return (f"{head}, {NO_POSITION_WORDING}, {connector} "
-                f"{body}{tail_attribution}.")
-
-    # The spatial fragment is BARE ("at", "near", "not at"), so the verb comes from the
-    # bearer clause when there is one and from the sentence otherwise.
-    if spatial_phrase is None:
-        spatial = f"{_UNLINKED_POSITION_WORDING} {place}"
-    elif bearer_clause is not None:
-        spatial = f"{bearer_clause}, {spatial_phrase} {place}"
+    # The spatial clause. With a verb, its object is the bearer when another entity holds the
+    # position (the place, or its said absence, follows) and the place otherwise. A spatial
+    # expression the integration could not place still keeps its verb — "searched for <poi>"
+    # stays true even when no coordinate was resolved. With no verb at all, a bearer is
+    # introduced by the entity-link phrase, which asserts no use of a position.
+    if spatial_phrase is not None and bearer is not None:
+        where = f"at {place}" if place is not None else NO_POSITION_WORDING
+        spatial = f"{subject} {spatial_phrase} {bearer}, {where}"
+    elif spatial_phrase is not None and place is not None:
+        spatial = f"{subject} {spatial_phrase} {place}"
+    elif place is not None:
+        spatial = f"{subject} {_UNLINKED_POSITION_WORDING} {place}"
+    elif bearer is not None:
+        spatial = f"{subject}, {V.EntityLink.PARTY.phrase} {bearer}, {NO_POSITION_WORDING}"
     else:
-        spatial = f"was {spatial_phrase} {place}"
+        spatial = f"{subject}, {NO_POSITION_WORDING}"
 
-    # No timespan: the occupancy fragment quantifies an interval that is not there, so it
-    # drops; the absence is said instead.
+    # An empty temporal corner is SAID; the quantifier has nothing to quantify, so it drops.
     if timespan is None:
-        return f"{subject} {spatial}, {NO_TIME_WORDING}{tail_attribution}."
-
-    body, is_instant = timespan
-    # Occupancy fragments end in their own preposition ("continuously during"), so the
-    # timespan body follows directly. Without one, an instant reads "at T" and an interval
-    # "during the interval from A to B".
-    connector = occupancy_phrase or (V.TemporalKind.INSTANT.phrase if is_instant else "during")
-    return f"{subject} {spatial}, {connector} {body}{tail_attribution}."
+        joiner = " and" if place is None else ","
+        return f"{spatial}{joiner} {NO_TIME_WORDING}."
+    return f"{spatial}, {_temporal_clause(temporal_link, timespan)}."

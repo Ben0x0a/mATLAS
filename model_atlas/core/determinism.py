@@ -16,14 +16,14 @@ Defines:    rule 1 — ``sqlite_enumeration_sql`` (records enumerate in ``rowid`
             cell becomes ``{"$blob": {"sha256": …, "bytes": n}}``; the bytes themselves
             never enter the run DB).
 Used by:    the reader/enumeration bricks (they assign ``line_no`` through rules 1-3),
-            the discovery walker (rule 4 builds the ``source_id`` natural key), the
+            the discovery walker (rule 4 builds the ``source_file_id`` natural key), the
             projection/export brick (rule 6), the future UFDR reader (rule 7), and
             tests/core/test_determinism.py + tests/core/test_constraints.py.
 Depends on: ``model_atlas.core.ids`` (``canonical_json`` — defined there, reused here)
             and the standard library only (``hashlib``, ``sqlite3``, ``unicodedata``,
             ``collections.abc``, ``enum``).
 
-WHY this module exists: the ids and digests embed ``line_no`` and ``output_ordinal``
+WHY this module exists: the digests embed ``line_no``
 (core/ids.py), so diffability is a promise ONLY if enumeration and canonicalisation are
 pinned. Each doc rule is one small executable definition here — the reader bricks call
 these instead of re-stating the rule, and the tests exercise the doc rule by rule, so a
@@ -218,20 +218,20 @@ def _is_windows_style(text: str) -> bool:
 
 
 def canonical_path(path: str) -> str:
-    """Canonicalise a filesystem path for the ``source_id`` natural key (rule 4).
+    """Canonicalise a filesystem path for the ``source_file_id`` natural key (rule 4).
 
     HOW: NFC-normalise the text; fold ``\\``->``/`` ONLY for genuinely Windows-style paths
     (a drive-root or UNC prefix); then REQUIRE the result to be absolute (a POSIX root or a
     drive-letter root).
     WHY the conditional fold (not an unconditional one): on POSIX a literal ``\\`` is a legal
     filename byte, so rewriting it unconditionally would collapse ``/dir/a\\b`` and
-    ``/dir/a/b`` onto one path — two distinct exhibits silently sharing a ``source_id``.
+    ``/dir/a/b`` onto one path — two distinct exhibits silently sharing a ``source_file_id``.
     WHY raise on a relative path instead of absolutising: ``os.path.abspath`` would fold
     the process's working directory into the id — non-determinism smuggled into
     evidence identity. Discovery owns absolutisation (it knows the operator's --input
     root); by the time a path feeds an id it must already be absolute.
     WHY NFC: macOS volumes serve decomposed (NFD) names — the same exhibit walked on
-    two platforms must derive ONE ``source_id``, not two.
+    two platforms must derive ONE ``source_file_id``, not two.
     """
     text = unicodedata.normalize("NFC", path)
     if _is_windows_style(text):
@@ -250,9 +250,9 @@ def _escape_segment(text: str) -> str:
     always the join delimiter.
     WHY: without escaping, ``!`` is forgeable — archive ``a.zip!b`` -> member ``c`` and
     archive ``a.zip`` -> member ``b!c`` both flatten to ``a.zip!b!c``, one ``inner_path``
-    (and one ``source_id``) for two distinct exhibits. Escaping makes the join reversible,
+    (and one ``source_file_id``) for two distinct exhibits. Escaping makes the join reversible,
     so the two chains derive DIFFERENT strings — and it is this escaped form that feeds
-    ``source_id``.
+    ``source_file_id``.
     """
     return text.replace("\\", "/").replace(CONTAINER_JOIN, "\\" + CONTAINER_JOIN)
 

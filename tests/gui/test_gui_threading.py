@@ -32,6 +32,9 @@ from gui.worker import TaskRunner
 from tests.app.test_edit_api import _build_persisted_db
 from tests.gui.conftest import drain
 
+# The engine raises until decision 55's presence predicate exists; these tests run it.
+_ENGINE_DISABLED = pytest.mark.skip(reason="concomitance is disabled until its presence predicate is redesigned (decision 55)")
+
 
 def _pump_until(app, predicate, timeout: float = 5.0) -> None:
     """Spin the event loop until ``predicate`` holds, so queued cross-thread slots run."""
@@ -85,6 +88,7 @@ def test_async_open_lands_on_gui_thread_and_edit_does_not_raise(app, tmp_path) -
     drain(app)   # run that delete NOW rather than at some later timer tick
 
 
+@_ENGINE_DISABLED
 def test_pending_panel_query_is_waited_at_quit(app, tmp_path, monkeypatch) -> None:
     # The spatiotemporal panel shares the app's lifecycle-managed runner, so wait_all() (wired
     # to aboutToQuit) also drains its concomitance run — quitting mid-run must not leave a

@@ -44,7 +44,7 @@ convenience is ``write_preset`` (a preset's definition IS its identity):
 SELECT-then-INSERT, returning the existing id for an identical row but RAISING when the
 same ``key``+``version`` carries a different ``definition_digest`` (the un-bumped-edit
 finding). The parent-before-child ingest write order (case → run → source → raw_record →
-activity(+record) → entity + expressions + components BEFORE the observation referencing
+entity + expressions + components BEFORE the observation referencing
 them → integrations → analysis) is NOT enforced by the store: ``PRAGMA foreign_keys = ON``
 (set by ``create_schema``) makes every FK check immediately, so writing a child before its
 parent raises on its own.
@@ -71,10 +71,10 @@ from model_atlas.core.schema import APPLICATION_ID, USER_VERSION, create_schema
 
 L0_TABLES: tuple[str, ...] = (
     "case_metadata", "run", "archive", "run_archive", "preset", "run_preset",
-    "source", "raw_record",
+    "source_file", "raw_record",
 )
 L1_TABLES: tuple[str, ...] = (
-    "activity", "activity_record", "entity", "spatial_expression",
+    "activity", "entity", "spatial_expression",
     "spatial_component", "temporal_expression", "temporal_component", "observation",
 )
 L2_TABLES: tuple[str, ...] = (
@@ -161,11 +161,10 @@ class RunStore:
         "write_run_archive": "run_archive",
         "write_preset": "preset",
         "write_run_preset": "run_preset",
-        "write_source": "source",
+        "write_source_file": "source_file",
         "write_raw_record": "raw_record",
         # L1 — observation
         "write_activity": "activity",
-        "write_activity_record": "activity_record",
         "write_entity": "entity",
         "write_spatial_expression": "spatial_expression",
         "write_spatial_component": "spatial_component",
@@ -298,8 +297,8 @@ class RunStore:
     def write_run_preset(self, row: V.RunPreset) -> None:
         self._insert("run_preset", row)
 
-    def write_source(self, row: V.Source) -> None:
-        self._insert("source", row)
+    def write_source_file(self, row: V.SourceFile) -> None:
+        self._insert("source_file", row)
 
     def write_raw_record(self, row: V.RawRecord) -> None:
         self._insert("raw_record", row)
@@ -308,9 +307,6 @@ class RunStore:
 
     def write_activity(self, row: V.Activity) -> None:
         self._insert("activity", row)
-
-    def write_activity_record(self, row: V.ActivityRecord) -> None:
-        self._insert("activity_record", row)
 
     def write_entity(self, row: V.Entity) -> None:
         self._insert("entity", row)

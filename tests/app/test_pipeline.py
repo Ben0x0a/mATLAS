@@ -4,7 +4,7 @@ Drives ``process()`` over the golden source fixture (tests/fixtures/golden: cach
 + its two presets) as a FOLDER and as a ZIP, asserting the relational-engine contract: the
 stable ``ProcessResult`` shape, the mandatory case database, the flat-CSV projection on
 disk (one file per format), the sidecars, create-then-append determinism, and folder==zip
-evidence parity (equal content_uid / claim_digest sets — the paths differ, the evidence
+evidence parity (equal observation_content_uid / spatiotemporal_entity_hash sets — the paths differ, the evidence
 digests must not).
 Used by:    pytest.
 Depends on: model_atlas.app.pipeline, the golden fixture folder.
@@ -47,7 +47,7 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
 
 
 def _digest_pairs(rows: list[dict[str, str]]) -> set[tuple[str, str]]:
-    return {(row["content_uid"], row["claim_digest"]) for row in rows}
+    return {(row["observation_content_uid_matlas"], row["spatiotemporal_entity_hash_matlas"]) for row in rows}
 
 
 def test_source_tier_follows_the_matched_preset(tmp_path: Path) -> None:
@@ -57,7 +57,7 @@ def test_source_tier_follows_the_matched_preset(tmp_path: Path) -> None:
     result = process(_fixture_folder(tmp_path), secondary, tmp_path / "out",
                      concerns=_LINKED)
     rows = _read_rows(result.output_csv)
-    assert rows and all(row["source_tier"] == "secondary" for row in rows)
+    assert rows and all(row["source_tier_matlas"] == "secondary" for row in rows)
 
 
 def test_run_writes_case_db_csv_and_sidecars(tmp_path: Path) -> None:
@@ -79,8 +79,8 @@ def test_run_writes_case_db_csv_and_sidecars(tmp_path: Path) -> None:
     assert len(rows) == 2
     # The projection's mandatory provenance/derivation columns are present and filled.
     for row in rows:
-        assert row["content_uid"] and row["claim_digest"]
-        assert row["temporal_method"]
+        assert row["observation_content_uid_matlas"] and row["spatiotemporal_entity_hash_matlas"]
+        assert row["time_lower_unix_utc_us"]
     # The sidecar is valid JSON and names the run's source.
     trace = json.loads(result.output_traceability.read_text(encoding="utf-8"))
     assert trace["row_counts"]["rows"] == 2
@@ -135,7 +135,7 @@ def test_append_builds_the_same_case_as_the_union_of_runs(tmp_path: Path) -> Non
     def digests(db: Path) -> set:
         con = sqlite3.connect(db)
         try:
-            return set(con.execute("SELECT content_hash, claim_digest FROM observation").fetchall())
+            return set(con.execute("SELECT observation_content_hash, spatiotemporal_entity_hash FROM observation").fetchall())
         finally:
             con.close()
 
@@ -183,7 +183,7 @@ def test_re_appending_the_same_evidence_is_a_recorded_no_op(tmp_path: Path) -> N
     con = sqlite3.connect(out / "merged.matlas.sqlite")
     try:
         assert con.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 2       # both runs recorded
-        assert con.execute("SELECT COUNT(*) FROM source").fetchone()[0] == 1    # no duplicate source
+        assert con.execute("SELECT COUNT(*) FROM source_file").fetchone()[0] == 1    # no duplicate source
         assert con.execute("SELECT COUNT(*) FROM observation").fetchone()[0] == 1 # unchanged (1 row)
     finally:
         con.close()
@@ -206,14 +206,14 @@ def test_no_match_writes_the_case_db_but_no_csv(tmp_path: Path) -> None:
 
 def test_two_independent_runs_produce_identical_digests(tmp_path: Path) -> None:
     # Determinism spot-check: the SAME evidence processed twice into SEPARATE cases yields
-    # byte-identical content_hash/claim_digest sets and an identical CSV projection — nothing
+    # byte-identical observation_content_hash/spatiotemporal_entity_hash sets and an identical CSV projection — nothing
     # run-, time-, or order-dependent leaks into an id, a digest, or the output.
     import sqlite3
 
     def digests(db: Path) -> set:
         con = sqlite3.connect(db)
         try:
-            return set(con.execute("SELECT content_hash, claim_digest FROM observation").fetchall())
+            return set(con.execute("SELECT observation_content_hash, spatiotemporal_entity_hash FROM observation").fetchall())
         finally:
             con.close()
 
@@ -223,7 +223,20 @@ def test_two_independent_runs_produce_identical_digests(tmp_path: Path) -> None:
 
     d1 = digests(first.output_case_db)
     assert d1 and d1 == digests(second.output_case_db)             # identical evidence identity
-    assert first.output_csv.read_bytes() == second.output_csv.read_bytes()  # identical projection
+
+    # The CSVs must match on every column EXCEPT the id columns, which are random per run
+    # since decision 50. That is the honest form of this assertion: it tests the invariant
+    # that survives (nothing run-, time- or order-dependent reaches a digest or a projected
+    # VALUE) instead of a reproducibility the ids deliberately no longer have.
+    import csv as _csv
+    def rows_without_ids(path):
+        with open(path, encoding="utf-8-sig", newline="") as handle:
+            reader = _csv.reader(handle, delimiter=";")
+            header = next(reader)
+            keep = [i for i, name in enumerate(header)
+                    if not name.endswith(("_uid", "_uid_matlas", "row_uid_matlas"))]
+            return [header] + [[row[i] for i in keep] for row in reader]
+    assert rows_without_ids(first.output_csv) == rows_without_ids(second.output_csv)
 
 
 def _mixed_input(tmp_path: Path) -> Path:
@@ -244,7 +257,7 @@ def _mixed_input(tmp_path: Path) -> Path:
 def _ingested_units(case_db: Path) -> set:
     con = sqlite3.connect(case_db)
     try:
-        return set(con.execute("SELECT input_file_path, subunit FROM source").fetchall())
+        return set(con.execute("SELECT input_file_path, subunit FROM source_file").fetchall())
     finally:
         con.close()
 
@@ -261,7 +274,7 @@ def test_l0_opens_only_what_the_presets_target(tmp_path: Path) -> None:
 
 def test_untargeted_neighbours_do_not_change_evidence_identity(tmp_path: Path) -> None:
     # Targeting decides what a run OPENS, never what a source IS once opened: the same
-    # cached.csv yields the same content_uid/claim_digest set whether it sits alone or beside
+    # cached.csv yields the same observation_content_uid/spatiotemporal_entity_hash set whether it sits alone or beside
     # evidence the presets pass over.
     crowded = process(_mixed_input(tmp_path / "crowded"), _GOLDEN, tmp_path / "out1",
                       concerns=_LINKED)

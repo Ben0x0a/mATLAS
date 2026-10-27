@@ -48,62 +48,59 @@ def _write_preset(store: RunStore, *, run_id: str, key: str, version: str,
     return preset_id
 
 
-def _write_source(store: RunStore, *, run_id: str, path: str, inner: str | None,
+def _write_source_file(store: RunStore, *, run_id: str, path: str, inner: str | None,
                   fingerprint: str) -> str:
-    source_id = ids.source_id(path, inner, None)
-    store.write_source(V.Source(
-        source_id=source_id, run_id=run_id, input_file_path=path, inner_path=inner,
+    source_file_id = ids.new_id()
+    store.write_source_file(V.SourceFile(
+        source_file_id=source_file_id, run_id=run_id, input_file_path=path, inner_path=inner,
         format="csv", fingerprint_sha256=fingerprint,
         source_tier=V.SourceTier.PRIMARY))
-    return source_id
+    return source_file_id
 
 
-def _write_gps_observation(store: RunStore, *, source_id: str, preset_id: str,
+def _write_gps_observation(store: RunStore, *, source_file_id: str, preset_id: str,
                          preset_key: str, line_no: int, fingerprint: str) -> str:
     """A full L1→L3 placement: entity + spatial/temporal corners + integrations + analysis.
 
     Returns the observation id. Ids and the two digests are computed with core.ids exactly as
     the assembler will, so the row is a faithful T00-shaped placement.
     """
-    output_ordinal = 0
-    rr_id = ids.raw_record_id(source_id, line_no)
+    rr_id = ids.new_id()
     store.write_raw_record(V.RawRecord(
-        raw_record_id=rr_id, source_id=source_id, line_no=line_no,
+        raw_record_id=rr_id, source_file_id=source_file_id, line_no=line_no,
         raw_json='{"ZLATITUDE":"46.193000","ZLONGITUDE":"6.129000"}',
         recovery_state=V.RecordState.LIVE))
-
-    nat_key = (rr_id, output_ordinal)
-    entity_id = ids.entity_id((rr_id, output_ordinal, None,
-                               V.IdentifierType.NONE, V.EntityType.DEVICE))
+    entity_id = ids.new_id()
     store.write_entity(V.Entity(
         entity_id=entity_id, identifier=None, raw_identifier=None,
         identifier_type=V.IdentifierType.NONE, type=V.EntityType.DEVICE))
 
-    sx_id = ids.spatial_expression_id(nat_key)
+    sx_id = ids.new_id()
     store.write_spatial_expression(V.SpatialExpression(
-        spatial_expression_id=sx_id, referential=V.SpatialReferential.EPSG_4326,
+        spatial_expression_id=sx_id,
+        position_type=V.PositionType.COORDINATE, referential=V.SpatialReferential.EPSG_4326,
         spatial_source="GNSS"))
     spatial_components = (
         V.SpatialComponent(
-            spatial_component_id=ids.spatial_component_id(sx_id, 0),
+            spatial_component_id=ids.new_id(),
             spatial_expression_id=sx_id, ordinal=0, part="latitude",
             source_field="ZLATITUDE", raw_value="46.193000"),
         V.SpatialComponent(
-            spatial_component_id=ids.spatial_component_id(sx_id, 1),
+            spatial_component_id=ids.new_id(),
             spatial_expression_id=sx_id, ordinal=1, part="longitude",
             source_field="ZLONGITUDE", raw_value="6.129000"),
     )
     for component in spatial_components:
         store.write_spatial_component(component)
 
-    tx_id = ids.temporal_expression_id(nat_key)
+    tx_id = ids.new_id()
     store.write_temporal_expression(V.TemporalExpression(
         temporal_expression_id=tx_id, kind=V.TemporalKind.INSTANT,
         referential=V.TemporalReferential.APPLE_CFABSOLUTE,
         temporal_source="internal_clock"))
     temporal_components = (
         V.TemporalComponent(
-            temporal_component_id=ids.temporal_component_id(tx_id, 0),
+            temporal_component_id=ids.new_id(),
             temporal_expression_id=tx_id, ordinal=0, part="lower",
             stated_offset="N/A",
             source_field="ZTIMESTAMP", raw_value="763689600"),
@@ -113,21 +110,20 @@ def _write_gps_observation(store: RunStore, *, source_id: str, preset_id: str,
 
     # L2 integrations (space + time), 1:1 with their expression.
     si_method = "passthrough_wgs84/1.0"
-    si_id = ids.spatial_integration_id(sx_id, si_method)
+    si_id = ids.new_id()
     store.write_spatial_integration(V.SpatialIntegration(
         spatial_integration_id=si_id, spatial_expression_id=sx_id, method=si_method,
         latitude_wgs84=46.193, longitude_wgs84=6.129, horizontal_accuracy_m=12.0))
     store.write_spatial_index(V.SpatialIndex(
-        spatial_index_id=ids.spatial_index_id(si_id), spatial_integration_id=si_id,
+        spatial_index_id=ids.new_id(), spatial_integration_id=si_id,
         s2_cell_id=1234567890123456789, s2_level=30))
     ti_method = "epoch_cfabsolute/1.0"
     store.write_timespan_integration(V.TimespanIntegration(
-        timespan_integration_id=ids.timespan_integration_id(tx_id, ti_method),
+        timespan_integration_id=ids.new_id(),
         temporal_expression_id=tx_id, method=ti_method,
         lower_unix_utc_us=763689600_000_000, upper_unix_utc_us=763689600_000_000))
 
     # The observation itself, after its corners exist (R20). Digests via core.ids.
-    links = ids.ObservationLinks(activity_role=V.ActivityRole.UNKNOWN)
     l1 = ids.l1_projection(
         bearer=None,
         entity=ids.EntityProjection(identifier=None,
@@ -145,47 +141,33 @@ def _write_gps_observation(store: RunStore, *, source_id: str, preset_id: str,
                 ids.TemporalComponentProjection(
                     part=c.part,
                     stated_offset=c.stated_offset, raw_value=c.raw_value)
-                for c in temporal_components)),
-        links=links, deleted=None, multiplicity=None, activity=None)
-    content_hash, claim_digest = ids.digests(
+                for c in temporal_components)))
+    observation_content_hash, spatiotemporal_entity_hash = ids.digests(
         fingerprint_sha256=fingerprint, preset_key=preset_key, line_no=line_no,
-        output_ordinal=output_ordinal, l1=l1)
-    observation_id = ids.observation_id(rr_id, preset_key, output_ordinal)
+        l1=l1)
+    observation_id = ids.new_id()
     store.write_observation(V.Observation(
         observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
-        output_ordinal=output_ordinal, entity_id=entity_id, content_hash=content_hash,
-        claim_digest=claim_digest, entity_origin=V.Origin.PRESET_MAPPED,
+        entity_id=entity_id, observation_content_hash=observation_content_hash,
+        spatiotemporal_entity_hash=spatiotemporal_entity_hash,
         spatial_expression_id=sx_id, temporal_expression_id=tx_id,
-        activity_role=V.ActivityRole.UNKNOWN,
-        spatial_link=V.SpatialLink.AT,
-        attestation=V.Attestation.INSTRUMENT,
-        occupancy=V.Occupancy.ONCE, source_label="iOS cache"))
+        spatial_link=V.SpatialLink.MEASURED,
+        temporal_link=V.TemporalLink.AT_LEAST_ONCE, source_label="iOS cache"))
     store.write_analysis(V.Analysis(
-        analysis_id=ids.analysis_id(observation_id, "untangle/2.0"),
-        observation_id=observation_id, method="untangle/2.0", record_rank_type="gps_fix",
-        record_rank=1))
+        analysis_id=ids.new_id(),
+        observation_id=observation_id, method="untangle/2.0", record_rank=1))
     return observation_id
 
 
-def _write_call_with_activity(store: RunStore, *, source_id: str, preset_id: str,
+def _write_call_with_activity(store: RunStore, *, source_file_id: str, preset_id: str,
                               preset_key: str, line_no: int, fingerprint: str) -> str:
     """A CDR-shaped placement carrying an activity + activity_record (exercises L1 grouping)."""
-    output_ordinal = 0
-    rr_id = ids.raw_record_id(source_id, line_no)
+    rr_id = ids.new_id()
     store.write_raw_record(V.RawRecord(
-        raw_record_id=rr_id, source_id=source_id, line_no=line_no,
+        raw_record_id=rr_id, source_file_id=source_file_id, line_no=line_no,
         raw_json='{"a_party":"+41791234567"}', recovery_state=V.RecordState.LIVE))
 
-    activity_id = ids.activity_id(rr_id, 0)
-    store.write_activity(V.Activity(
-        activity_id=activity_id, kind=V.ActivityKind.CALL,
-        context_json='{"callee":"+41762223344"}'))
-    store.write_activity_record(V.ActivityRecord(
-        activity_record_id=ids.activity_record_id(activity_id, rr_id),
-        activity_id=activity_id, raw_record_id=rr_id))
-
-    entity_id = ids.entity_id((rr_id, output_ordinal, "+41791234567",
-                               V.IdentifierType.MSISDN, V.EntityType.DEVICE))
+    entity_id = ids.new_id()
     store.write_entity(V.Entity(
         entity_id=entity_id, identifier="+41791234567", raw_identifier="+41 79 123 45 67",
         identifier_type=V.IdentifierType.MSISDN, type=V.EntityType.DEVICE))
@@ -195,36 +177,27 @@ def _write_call_with_activity(store: RunStore, *, source_id: str, preset_id: str
         entity=ids.EntityProjection(identifier="+41791234567",
                                     identifier_type=V.IdentifierType.MSISDN,
                                     type=V.EntityType.DEVICE),
-        spatial=None, temporal=None,
-        links=ids.ObservationLinks(activity_role=V.ActivityRole.CALLER),
-        deleted=None, multiplicity=None,
-        activity=ids.ActivityProjection(kind=V.ActivityKind.CALL,
-                                        context={"callee": "+41762223344"}))
-    content_hash, claim_digest = ids.digests(
+        spatial=None, temporal=None)
+    observation_content_hash, spatiotemporal_entity_hash = ids.digests(
         fingerprint_sha256=fingerprint, preset_key=preset_key, line_no=line_no,
-        output_ordinal=output_ordinal, l1=l1)
-    observation_id = ids.observation_id(rr_id, preset_key, output_ordinal)
+        l1=l1)
+    observation_id = ids.new_id()
     store.write_observation(V.Observation(
         observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
-        output_ordinal=output_ordinal, entity_id=entity_id, content_hash=content_hash,
-        claim_digest=claim_digest, activity_id=activity_id,
-        activity_role=V.ActivityRole.CALLER,
-        spatial_link=V.SpatialLink.NEAR,
-        attestation=V.Attestation.SYSTEM_RECORD, source_label="CDR op-A"))
+        entity_id=entity_id, observation_content_hash=observation_content_hash,
+        spatiotemporal_entity_hash=spatiotemporal_entity_hash, source_label="CDR op-A"))
     return observation_id
 
 
-def _write_positionless_observation(store: RunStore, *, source_id: str, preset_id: str,
+def _write_positionless_observation(store: RunStore, *, source_file_id: str, preset_id: str,
                                   preset_key: str, line_no: int,
                                   fingerprint: str) -> str:
     """An entity-only observation (no spatial/temporal corner) — must persist (CSV rule)."""
-    output_ordinal = 0
-    rr_id = ids.raw_record_id(source_id, line_no)
+    rr_id = ids.new_id()
     store.write_raw_record(V.RawRecord(
-        raw_record_id=rr_id, source_id=source_id, line_no=line_no,
+        raw_record_id=rr_id, source_file_id=source_file_id, line_no=line_no,
         raw_json='{"note":"no place"}', recovery_state=V.RecordState.LIVE))
-    entity_id = ids.entity_id((rr_id, output_ordinal, None,
-                               V.IdentifierType.NONE, V.EntityType.PERSON))
+    entity_id = ids.new_id()
     store.write_entity(V.Entity(
         entity_id=entity_id, identifier=None, raw_identifier="l'homme",
         identifier_type=V.IdentifierType.NONE, type=V.EntityType.PERSON))
@@ -233,16 +206,15 @@ def _write_positionless_observation(store: RunStore, *, source_id: str, preset_i
         entity=ids.EntityProjection(identifier=None,
                                     identifier_type=V.IdentifierType.NONE,
                                     type=V.EntityType.PERSON),
-        spatial=None, temporal=None, links=ids.ObservationLinks(),
-        deleted=None, multiplicity=None, activity=None)
-    content_hash, claim_digest = ids.digests(
+        spatial=None, temporal=None)
+    observation_content_hash, spatiotemporal_entity_hash = ids.digests(
         fingerprint_sha256=fingerprint, preset_key=preset_key, line_no=line_no,
-        output_ordinal=output_ordinal, l1=l1)
-    observation_id = ids.observation_id(rr_id, preset_key, output_ordinal)
+        l1=l1)
+    observation_id = ids.new_id()
     store.write_observation(V.Observation(
         observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
-        output_ordinal=output_ordinal, entity_id=entity_id, content_hash=content_hash,
-        claim_digest=claim_digest, source_label="note"))
+        entity_id=entity_id, observation_content_hash=observation_content_hash,
+        spatiotemporal_entity_hash=spatiotemporal_entity_hash, source_label="note"))
     return observation_id
 
 
@@ -254,22 +226,22 @@ def _build_scenario(store: RunStore, *, case_id: str, run_id: str) -> None:
 
     # Two byte-identical exhibits (same fingerprint, different paths): distinct sources.
     fp_cache = "fp-cache-9f31"
-    s_folder = _write_source(store, run_id=run_id, path="/case/exhibit_A/cache.sqlite",
+    s_folder = _write_source_file(store, run_id=run_id, path="/case/exhibit_A/cache.sqlite",
                              inner=None, fingerprint=fp_cache)
-    s_zip = _write_source(store, run_id=run_id, path="/case/exhibit_A_copy.zip",
+    s_zip = _write_source_file(store, run_id=run_id, path="/case/exhibit_A_copy.zip",
                           inner="exhibit_A_copy.zip!cache.sqlite", fingerprint=fp_cache)
-    _write_gps_observation(store, source_id=s_folder, preset_id=p_cache,
+    _write_gps_observation(store, source_file_id=s_folder, preset_id=p_cache,
                          preset_key="ios_cache", line_no=1, fingerprint=fp_cache)
-    _write_gps_observation(store, source_id=s_zip, preset_id=p_cache,
+    _write_gps_observation(store, source_file_id=s_zip, preset_id=p_cache,
                          preset_key="ios_cache", line_no=1, fingerprint=fp_cache)
 
     # A CDR source: an activity-bearing call + a positionless note.
     fp_cdr = "fp-cdrA-11aa"
-    s_cdr = _write_source(store, run_id=run_id, path="/case/operatorA_cdr.csv",
+    s_cdr = _write_source_file(store, run_id=run_id, path="/case/operatorA_cdr.csv",
                           inner=None, fingerprint=fp_cdr)
-    _write_call_with_activity(store, source_id=s_cdr, preset_id=p_cdr,
+    _write_call_with_activity(store, source_file_id=s_cdr, preset_id=p_cdr,
                               preset_key="cdr_generic", line_no=1, fingerprint=fp_cdr)
-    _write_positionless_observation(store, source_id=s_cdr, preset_id=p_cdr,
+    _write_positionless_observation(store, source_file_id=s_cdr, preset_id=p_cdr,
                                   preset_key="cdr_generic", line_no=2, fingerprint=fp_cdr)
 
     # An archive encounter + an opt-in, recorded skip of another (run_archive.skipped=1).
@@ -443,47 +415,16 @@ def test_two_exhibits_collapse_into_one_source_raises() -> None:
         run_id = ids.run_id()
         _write_case_and_run(store, case_id=ids.case_metadata_id(), run_id=run_id)
         path = "/case/exhibit_A/cache.sqlite"
-        # The same file opened twice derives the SAME source_id (uuid5 from the paths, §2c),
+        # The same file opened twice derives the SAME source_file_id (uuid5 from the paths, §2c),
         # so the deterministic PK — the backstop the schema names — rejects the second write.
         # (The natural-key UNIQUE cannot catch this pair on its own: SQLite treats the NULL
         # inner_path/subunit as distinct, so the path-derived PK is the true guarantor.)
-        source_id = ids.source_id(path, None, None)
-        store.write_source(V.Source(source_id=source_id, run_id=run_id,
+        source_file_id = ids.new_id()
+        store.write_source_file(V.SourceFile(source_file_id=source_file_id, run_id=run_id,
                                     input_file_path=path))
         with pytest.raises(sqlite3.IntegrityError):
-            store.write_source(V.Source(source_id=source_id, run_id=run_id,
+            store.write_source_file(V.SourceFile(source_file_id=source_file_id, run_id=run_id,
                                         input_file_path=path))
-
-
-def test_duplicate_evidence_drops_an_observation_raises() -> None:
-    """Row: duplicate evidence drops an observation (§2a). Same (record,preset,ordinal) RAISES."""
-    with RunStore() as store:
-        run_id = ids.run_id()
-        _write_case_and_run(store, case_id=ids.case_metadata_id(), run_id=run_id)
-        preset_id = _write_preset(store, run_id=run_id, key="k", version="1.0")
-        source_id = _write_source(store, run_id=run_id, path="/f.csv", inner=None,
-                                  fingerprint="fp")
-        rr_id = ids.raw_record_id(source_id, 1)
-        store.write_raw_record(V.RawRecord(raw_record_id=rr_id, source_id=source_id,
-                                           line_no=1, raw_json="{}"))
-        e1 = ids.entity_id((rr_id, 0, None, V.IdentifierType.NONE, V.EntityType.DEVICE))
-        store.write_entity(V.Entity(entity_id=e1, identifier=None, raw_identifier=None,
-                                    identifier_type=V.IdentifierType.NONE,
-                                    type=V.EntityType.DEVICE))
-        observation_id = ids.observation_id(rr_id, "k", 0)
-        store.write_observation(V.Observation(
-            observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
-            output_ordinal=0, entity_id=e1, content_hash="ch", claim_digest="cd"))
-        # A second reading with the SAME (raw_record_id, preset_id, output_ordinal) and a
-        # fresh entity corner: the §2a natural-key UNIQUE must reject the duplicate.
-        e2 = ids.entity_id((rr_id, 0, None, V.IdentifierType.NONE, V.EntityType.PERSON))
-        store.write_entity(V.Entity(entity_id=e2, identifier=None, raw_identifier=None,
-                                    identifier_type=V.IdentifierType.NONE,
-                                    type=V.EntityType.PERSON))
-        with pytest.raises(sqlite3.IntegrityError):
-            store.write_observation(V.Observation(
-                observation_id="other", raw_record_id=rr_id, preset_id=preset_id,
-                output_ordinal=0, entity_id=e2, content_hash="ch2", claim_digest="cd2"))
 
 
 def test_two_observations_share_a_corner_or_entity_raises() -> None:
@@ -492,30 +433,29 @@ def test_two_observations_share_a_corner_or_entity_raises() -> None:
         run_id = ids.run_id()
         _write_case_and_run(store, case_id=ids.case_metadata_id(), run_id=run_id)
         preset_id = _write_preset(store, run_id=run_id, key="k", version="1.0")
-        source_id = _write_source(store, run_id=run_id, path="/f.csv", inner=None,
+        source_file_id = _write_source_file(store, run_id=run_id, path="/f.csv", inner=None,
                                   fingerprint="fp")
-        rr1 = ids.raw_record_id(source_id, 1)
-        rr2 = ids.raw_record_id(source_id, 2)
+        rr1 = ids.new_id()
+        rr2 = ids.new_id()
         for line, rr in ((1, rr1), (2, rr2)):
-            store.write_raw_record(V.RawRecord(raw_record_id=rr, source_id=source_id,
+            store.write_raw_record(V.RawRecord(raw_record_id=rr, source_file_id=source_file_id,
                                                line_no=line, raw_json="{}"))
-        shared_entity = ids.entity_id((rr1, 0, None, V.IdentifierType.NONE,
-                                       V.EntityType.DEVICE))
+        shared_entity = ids.new_id()
         store.write_entity(V.Entity(entity_id=shared_entity, identifier=None,
                                     raw_identifier=None,
                                     identifier_type=V.IdentifierType.NONE,
                                     type=V.EntityType.DEVICE))
         store.write_observation(V.Observation(
-            observation_id=ids.observation_id(rr1, "k", 0), raw_record_id=rr1,
-            preset_id=preset_id, output_ordinal=0, entity_id=shared_entity,
-            content_hash="ch", claim_digest="cd"))
+            observation_id=ids.new_id(), raw_record_id=rr1,
+            preset_id=preset_id, entity_id=shared_entity,
+            observation_content_hash="ch", spatiotemporal_entity_hash="cd"))
         # A second, otherwise-distinct observation pointing at the SAME entity_id violates the
         # owned-corner UNIQUE(entity_id) — two observations may never share an entity row.
         with pytest.raises(sqlite3.IntegrityError):
             store.write_observation(V.Observation(
-                observation_id=ids.observation_id(rr2, "k", 0), raw_record_id=rr2,
-                preset_id=preset_id, output_ordinal=0, entity_id=shared_entity,
-                content_hash="ch2", claim_digest="cd2"))
+                observation_id=ids.new_id(), raw_record_id=rr2,
+                preset_id=preset_id, entity_id=shared_entity,
+                observation_content_hash="ch2", spatiotemporal_entity_hash="cd2"))
 
 
 def test_two_phones_become_one_entity_stays_distinct() -> None:
@@ -523,14 +463,14 @@ def test_two_phones_become_one_entity_stays_distinct() -> None:
     with RunStore() as store:
         run_id = ids.run_id()
         _write_case_and_run(store, case_id=ids.case_metadata_id(), run_id=run_id)
-        source_id = _write_source(store, run_id=run_id, path="/f.csv", inner=None,
+        source_file_id = _write_source_file(store, run_id=run_id, path="/f.csv", inner=None,
                                   fingerprint="fp")
         for line in (1, 2):
-            rr = ids.raw_record_id(source_id, line)
-            store.write_raw_record(V.RawRecord(raw_record_id=rr, source_id=source_id,
+            rr = ids.new_id()
+            store.write_raw_record(V.RawRecord(raw_record_id=rr, source_file_id=source_file_id,
                                                line_no=line, raw_json="{}"))
             # A purely typed 'device' mention (identifier NULL): nothing exists to merge on.
-            eid = ids.entity_id((rr, 0, None, V.IdentifierType.NONE, V.EntityType.DEVICE))
+            eid = ids.new_id()
             store.write_entity(V.Entity(entity_id=eid, identifier=None,
                                         raw_identifier=None,
                                         identifier_type=V.IdentifierType.NONE,
@@ -545,22 +485,23 @@ def test_register_upgrade_second_integration_for_expression_raises() -> None:
     with RunStore() as store:
         run_id = ids.run_id()
         _write_case_and_run(store, case_id=ids.case_metadata_id(), run_id=run_id)
-        source_id = _write_source(store, run_id=run_id, path="/f.csv", inner=None,
+        source_file_id = _write_source_file(store, run_id=run_id, path="/f.csv", inner=None,
                                   fingerprint="fp")
-        rr = ids.raw_record_id(source_id, 1)
-        store.write_raw_record(V.RawRecord(raw_record_id=rr, source_id=source_id,
+        rr = ids.new_id()
+        store.write_raw_record(V.RawRecord(raw_record_id=rr, source_file_id=source_file_id,
                                            line_no=1, raw_json="{}"))
-        sx = ids.spatial_expression_id((rr, 0))
+        sx = ids.new_id()
         store.write_spatial_expression(V.SpatialExpression(
-            spatial_expression_id=sx, referential=V.SpatialReferential.EPSG_4326))
+            spatial_expression_id=sx,
+        position_type=V.PositionType.COORDINATE, referential=V.SpatialReferential.EPSG_4326))
         store.write_spatial_integration(V.SpatialIntegration(
-            spatial_integration_id=ids.spatial_integration_id(sx, "m1"),
+            spatial_integration_id=ids.new_id(),
             spatial_expression_id=sx, method="m1", latitude_wgs84=1.0))
         # v1 UNIQUE(spatial_expression_id): a re-run under a new method may NOT add a second
         # integration for the same expression — it would rewrite evidence in place.
         with pytest.raises(sqlite3.IntegrityError):
             store.write_spatial_integration(V.SpatialIntegration(
-                spatial_integration_id=ids.spatial_integration_id(sx, "m2"),
+                spatial_integration_id=ids.new_id(),
                 spatial_expression_id=sx, method="m2", latitude_wgs84=2.0))
 
 
@@ -572,11 +513,8 @@ def test_operator_input_does_not_mutate_the_digest() -> None:
         entity = ids.EntityProjection(identifier="+41791234567",
                                       identifier_type=V.IdentifierType.MSISDN,
                                       type=V.EntityType.DEVICE)
-        l1 = ids.l1_projection(bearer=None, entity=entity, spatial=None, temporal=None,
-                               links=ids.ObservationLinks(activity_role=V.ActivityRole.CALLER),
-                               deleted=None, multiplicity=None, activity=None)
-        return ids.digests(fingerprint_sha256="fp", preset_key="k", line_no=1,
-                           output_ordinal=0, l1=l1)
+        l1 = ids.l1_projection(bearer=None, entity=entity, spatial=None, temporal=None)
+        return ids.digests(fingerprint_sha256="fp", preset_key="k", line_no=1, l1=l1)
 
     assert digests_for(None) == digests_for("A. Moreau")
 
@@ -587,10 +525,10 @@ def test_positionless_claim_persists() -> None:
         run_id = ids.run_id()
         _write_case_and_run(store, case_id=ids.case_metadata_id(), run_id=run_id)
         preset_id = _write_preset(store, run_id=run_id, key="k", version="1.0")
-        source_id = _write_source(store, run_id=run_id, path="/f.csv", inner=None,
+        source_file_id = _write_source_file(store, run_id=run_id, path="/f.csv", inner=None,
                                   fingerprint="fp")
         observation_id = _write_positionless_observation(
-            store, source_id=source_id, preset_id=preset_id, preset_key="k",
+            store, source_file_id=source_file_id, preset_id=preset_id, preset_key="k",
             line_no=1, fingerprint="fp")
         row = store.connection.execute(
             "SELECT spatial_expression_id, temporal_expression_id FROM observation "
@@ -651,22 +589,24 @@ def test_opt_in_archive_skip_is_recorded() -> None:
 
 # Columns/tables that legitimately carry the run's uuid4 roots (excluded from the compare).
 _RUN_ONLY_TABLES = frozenset({"case_metadata", "run", "run_archive", "run_preset"})
-_RUN_CARRYING_COLUMNS = {"source": {"run_id"}, "edit_log": {"edit_id"}}
+_RUN_CARRYING_COLUMNS = {"source_file": {"run_id"}, "edit_log": {"edit_id"}}
 
 
 def _fingerprint_db(conn: sqlite3.Connection) -> dict[str, list[tuple]]:
     """Every evidence table's rows, run-id-carrying columns dropped, sorted for comparison.
 
-    WHY drop those columns/tables: the case/run roots are uuid4 (D10/D28) and everything
-    run-scoped (source.run_id, run_archive, run_preset, edit_log.edit_id) carries them; every
-    OTHER id is uuid5 over natural keys, so two runs over the same evidence must match exactly.
+    WHY drop them: since decision 50 EVERY evidence-chain id is a random uuid4, so no id
+    can be compared across runs. Dropping all of them leaves the CONTENT — the verbatim
+    values, the derived coordinates and instants, and both digests — and that is what must
+    match exactly between two runs over the same evidence.
     """
     fingerprint: dict[str, list[tuple]] = {}
     for table in schema.COPYABLE_TABLES:
         if table in _RUN_ONLY_TABLES:
             continue
         columns = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
-        drop = _RUN_CARRYING_COLUMNS.get(table, set())
+        drop = _RUN_CARRYING_COLUMNS.get(table, set()) | {
+            c for c in columns if c.endswith("_id")}
         kept = [c for c in columns if c not in drop]
         rows = conn.execute(f"SELECT {', '.join(kept)} FROM {table}").fetchall()
         fingerprint[table] = sorted(rows, key=repr)

@@ -41,78 +41,75 @@ def _build_persisted_db(target: Path) -> dict[str, str]:
         store.write_run_preset(V.RunPreset(
             run_preset_id=ids.run_preset_id(run, preset_id), run_id=run,
             preset_id=preset_id))
-        source_id = ids.source_id("/case/fix.csv", None, None)
-        store.write_source(V.Source(
-            source_id=source_id, run_id=run, input_file_path="/case/fix.csv",
+        source_file_id = ids.new_id()
+        store.write_source_file(V.SourceFile(
+            source_file_id=source_file_id, run_id=run, input_file_path="/case/fix.csv",
             format="csv", fingerprint_sha256="fp-1", source_tier=V.SourceTier.PRIMARY))
 
-        line_no, output_ordinal = 1, 0
-        rr_id = ids.raw_record_id(source_id, line_no)
+        line_no = 1
+        rr_id = ids.new_id()
         store.write_raw_record(V.RawRecord(
-            raw_record_id=rr_id, source_id=source_id, line_no=line_no,
+            raw_record_id=rr_id, source_file_id=source_file_id, line_no=line_no,
             raw_json='{"lat":"46.193000","lon":"6.129000"}',
             recovery_state=V.RecordState.LIVE))
-        nat_key = (rr_id, output_ordinal)
-        entity_id = ids.entity_id((rr_id, output_ordinal, None,
-                                   V.IdentifierType.NONE, V.EntityType.DEVICE))
+        entity_id = ids.new_id()
         store.write_entity(V.Entity(
             entity_id=entity_id, identifier=None, raw_identifier=None,
             identifier_type=V.IdentifierType.NONE, type=V.EntityType.DEVICE))
-        sx_id = ids.spatial_expression_id(nat_key)
+        sx_id = ids.new_id()
         store.write_spatial_expression(V.SpatialExpression(
-            spatial_expression_id=sx_id, referential=V.SpatialReferential.EPSG_4326,
+            spatial_expression_id=sx_id,
+        position_type=V.PositionType.COORDINATE, referential=V.SpatialReferential.EPSG_4326,
             spatial_source="GNSS"))
         store.write_spatial_component(V.SpatialComponent(
-            spatial_component_id=ids.spatial_component_id(sx_id, 0),
+            spatial_component_id=ids.new_id(),
             spatial_expression_id=sx_id, ordinal=0, part="latitude",
             source_field="lat", raw_value="46.193000"))
 
         si_method = "passthrough_wgs84/1.0"
-        si_id = ids.spatial_integration_id(sx_id, si_method)
+        si_id = ids.new_id()
         store.write_spatial_integration(V.SpatialIntegration(
             spatial_integration_id=si_id, spatial_expression_id=sx_id, method=si_method,
             latitude_wgs84=46.193, longitude_wgs84=6.129, horizontal_accuracy_m=12.0))
 
         # A temporal corner + its integration, so the editable-table tests can exercise
         # timespan_integration (UNIQUE on the owned temporal_expression FK) too.
-        tx_id = ids.temporal_expression_id(nat_key)
+        tx_id = ids.new_id()
         store.write_temporal_expression(V.TemporalExpression(
             temporal_expression_id=tx_id, kind=V.TemporalKind.INSTANT))
         ti_method = "utc_passthrough/1.0"
-        ti_id = ids.timespan_integration_id(tx_id, ti_method)
+        ti_id = ids.new_id()
         store.write_timespan_integration(V.TimespanIntegration(
             timespan_integration_id=ti_id, temporal_expression_id=tx_id, method=ti_method,
             lower_unix_utc_us=1_700_000_000_000_000))
 
         l1 = ids.l1_projection(
             bearer=None,
-        entity=ids.EntityProjection(identifier=None,
+            entity=ids.EntityProjection(identifier=None,
                                         identifier_type=V.IdentifierType.NONE,
                                         type=V.EntityType.DEVICE),
             spatial=ids.SpatialProjection(
                 referential=V.SpatialReferential.EPSG_4326, spatial_source="GNSS",
                 components=(ids.SpatialComponentProjection(
                     part="latitude", raw_value="46.193000"),)),
-            temporal=None, links=ids.ObservationLinks(activity_role=V.ActivityRole.UNKNOWN),
-            deleted=None, multiplicity=None, activity=None)
-        content_hash, claim_digest = ids.digests(
+            temporal=None)
+        observation_content_hash, spatiotemporal_entity_hash = ids.digests(
             fingerprint_sha256="fp-1", preset_key="gps", line_no=line_no,
-            output_ordinal=output_ordinal, l1=l1)
-        observation_id = ids.observation_id(rr_id, "gps", output_ordinal)
+            l1=l1)
+        observation_id = ids.new_id()
         store.write_observation(V.Observation(
             observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
-            output_ordinal=output_ordinal, entity_id=entity_id,
-            content_hash=content_hash, claim_digest=claim_digest,
-            entity_origin=V.Origin.PRESET_MAPPED, spatial_expression_id=sx_id,
-            temporal_expression_id=tx_id, activity_role=V.ActivityRole.UNKNOWN))
+            entity_id=entity_id,
+            observation_content_hash=observation_content_hash, spatiotemporal_entity_hash=spatiotemporal_entity_hash,
+            spatial_expression_id=sx_id, temporal_expression_id=tx_id))
 
         # An analysis verdict, so the editable-table tests can exercise analysis'
         # UNIQUE(observation_id, method) — the composite natural key with a non-FK discriminator.
         an_method = "untangle/1.0"
-        an_id = ids.analysis_id(observation_id, an_method)
+        an_id = ids.new_id()
         store.write_analysis(V.Analysis(
             analysis_id=an_id, observation_id=observation_id, method=an_method,
-            record_rank_type="gps_fix", record_rank=1))
+            record_rank=1))
         store.persist(target)
     return {"entity_id": entity_id, "spatial_integration_id": si_id,
             "spatial_expression_id": sx_id, "timespan_integration_id": ti_id,

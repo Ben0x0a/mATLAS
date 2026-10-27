@@ -49,6 +49,9 @@ from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore
 from model_atlas.integrate.spatial import integrate_spatial
 
+# The engine raises until decision 55's presence predicate exists.
+pytestmark = pytest.mark.skip(reason="concomitance is disabled until its presence predicate is redesigned (decision 55)")
+
 # The reference point (same as tests/integrate/test_spatial.py) and time origin.
 KNOWN = (46.2030, 6.1430)
 BASE_US = 1_773_453_600_000_000            # 2026-03-14T02:00:00Z in unix µs
@@ -87,8 +90,8 @@ class _CaseFixture:
                                                  case_number=case_number))
         run_id_ = ids.run_id()
         store.write_run(V.Run(run_id=run_id_, case_id=case_id))
-        self.source_id = ids.source_id(f"/case/{case_number}.csv", None, None)
-        store.write_source(V.Source(source_id=self.source_id, run_id=run_id_,
+        self.source_file_id = ids.new_id()
+        store.write_source_file(V.SourceFile(source_file_id=self.source_file_id, run_id=run_id_,
                                     input_file_path=f"/case/{case_number}.csv"))
         self.preset_key = f"fixture_{case_number}"
         self.preset_id = ids.preset_id(self.preset_key, "1")
@@ -108,18 +111,19 @@ class _CaseFixture:
                   st_link: str = "once") -> str:
         """One placed-and-timed observation; returns its observation_id."""
         self.line_no += 1
-        record_id = ids.raw_record_id(self.source_id, self.line_no)
+        record_id = ids.new_id()
         self.store.write_raw_record(V.RawRecord(
-            raw_record_id=record_id, source_id=self.source_id,
+            raw_record_id=record_id, source_file_id=self.source_file_id,
             line_no=self.line_no, raw_json="{}"))
         natural_key = (record_id, 0)
-        entity_id = ids.entity_id(natural_key)
+        entity_id = ids.new_id()
         self.store.write_entity(V.Entity(
             entity_id=entity_id, identifier=identifier, raw_identifier=identifier,
             identifier_type=identifier_type, type=entity_type))
-        sx_id = ids.spatial_expression_id(natural_key)
+        sx_id = ids.new_id()
         self.store.write_spatial_expression(V.SpatialExpression(
-            spatial_expression_id=sx_id, referential="epsg:4326"))
+            spatial_expression_id=sx_id,
+        position_type=V.PositionType.COORDINATE, referential="epsg:4326"))
         parts: list[tuple[str, str]] = [("latitude", str(latitude)),
                                         ("longitude", str(longitude))]
         if accuracy_m is not None:
@@ -128,30 +132,27 @@ class _CaseFixture:
             parts.append(("horizontal_accuracy_m", str(accuracy_m)))
         for ordinal, (part, raw) in enumerate(parts):
             self.store.write_spatial_component(V.SpatialComponent(
-                spatial_component_id=ids.spatial_component_id(sx_id, ordinal),
+                spatial_component_id=ids.new_id(),
                 spatial_expression_id=sx_id, ordinal=ordinal,
                 part=part, raw_value=raw))
-        tx_id = ids.temporal_expression_id(natural_key)
+        tx_id = ids.new_id()
         self.store.write_temporal_expression(V.TemporalExpression(
             temporal_expression_id=tx_id, kind="interval"))
         self.store.write_timespan_integration(V.TimespanIntegration(
-            timespan_integration_id=ids.timespan_integration_id(tx_id, "fixture/1.0"),
+            timespan_integration_id=ids.new_id(),
             temporal_expression_id=tx_id, method="fixture/1.0",
             lower_unix_utc_us=lower_us, upper_unix_utc_us=upper_us,
             lower_accuracy_us=lower_accuracy_us,
             upper_accuracy_us=upper_accuracy_us,
-            lower_datetime_iso=dt.datetime.fromtimestamp(
-                lower_us / 1_000_000, tz=dt.timezone.utc).isoformat(),
-            upper_datetime_iso=dt.datetime.fromtimestamp(
-                upper_us / 1_000_000, tz=dt.timezone.utc).isoformat()))
-        observation_id = ids.observation_id(record_id, self.preset_key, 0)
+            offset_to_local_hours_lower=0.0, offset_to_local_hours_upper=0.0))
+        observation_id = ids.new_id()
         self.store.write_observation(V.Observation(
             observation_id=observation_id, raw_record_id=record_id,
-            preset_id=self.preset_id, output_ordinal=0, entity_id=entity_id,
-            content_hash=f"ch-{self.line_no}", claim_digest=f"cd-{self.line_no}",
+            preset_id=self.preset_id, entity_id=entity_id,
+            observation_content_hash=f"ch-{self.line_no}", spatiotemporal_entity_hash=f"cd-{self.line_no}",
             spatial_expression_id=sx_id, temporal_expression_id=tx_id,
-            activity_role="unknown", spatial_link=position_link,
-            entity_link="self", occupancy=st_link,
+            spatial_link=position_link,
+            entity_link="self", temporal_occupancy_link=st_link,
             source_label=f"src-{self.line_no}"))
         return observation_id
 
@@ -220,10 +221,10 @@ JOIN timespan_integration ti ON ti.temporal_expression_id = a.temporal_expressio
 WHERE ti.lower_unix_utc_us IS NOT NULL AND ti.upper_unix_utc_us IS NOT NULL
   AND si.latitude_wgs84 IS NOT NULL AND si.longitude_wgs84 IS NOT NULL
   AND (a.spatial_link IS NULL OR a.spatial_link != 'references')
-  AND (a.occupancy IS NULL
-       OR a.occupancy != 'never_during_interval')
-  AND (a.occupancy IS NULL
-       OR a.occupancy != 'never_during_interval')
+  AND (a.temporal_occupancy_link IS NULL
+       OR a.temporal_occupancy_link != 'never_during_interval')
+  AND (a.temporal_occupancy_link IS NULL
+       OR a.temporal_occupancy_link != 'never_during_interval')
 """
 
 

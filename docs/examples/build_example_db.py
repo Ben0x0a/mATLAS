@@ -43,10 +43,12 @@ import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import s2sphere
 
 DB = Path(__file__).parent / "matlas_example.sqlite"
+CSV = Path(__file__).parent / "matlas_example.csv"
 
 # Sentinel for a spatial expression the engine CANNOT integrate today. The demo used to
 # fabricate ``cell_register/…``, ``camera_register/…``, ``geocode_nominatim/…`` and
@@ -73,6 +75,16 @@ _CORNER_ABSENT = "-"
 
 # S2 leaf level: CellId.from_lat_lng always returns a level-30 leaf cell.
 S2_LEAF_LEVEL = 30
+
+
+def new_id() -> str:
+    """A fresh uuid4 for one EVIDENCE-CHAIN row — mirrors ``ids.new_id`` (decision 50).
+
+    CONSEQUENCE for this fixture: the built database is NO LONGER byte-reproducible. Every
+    rebuild produces different ids, so its diff is not a review artefact any more; compare
+    the CSV's content columns, or the digests, which stay content-derived.
+    """
+    return str(uuid.uuid4())
 
 
 def u5(table: str, *parts: object) -> str:
@@ -116,8 +128,7 @@ def canonical_json(obj: object) -> str:
                       allow_nan=False)
 
 
-def l1_projection(*, entity, bearer, spatial, temporal, links, deleted, multiplicity,
-                  activity) -> str:
+def l1_projection(*, entity, bearer, spatial, temporal) -> str:
     """The NORMATIVE L1 projection both digests hash (schema §"The normative L1
     projection"), in the exact field order — and only those fields.
 
@@ -128,15 +139,18 @@ def l1_projection(*, entity, bearer, spatial, temporal, links, deleted, multipli
     one). Combined with ``_txt`` escaping SEP, the token stream is uniquely recoverable.
 
     Excluded normatively: concerns / concerns_uid / both origins, raw_identifier,
-    component source_fields, all paths, all ids/run_id, all integrations, all analysis.
+    component source_fields, all paths, all ids/run_id, all integrations, all analysis —
+    and the LINKS (decision 55): they are the preset author's statement, not record
+    content, so two readings disagreeing on a link still converge. A `subject` row passes
+    no bearer: its bearer IS the targeted entity, already in the first block.
     Those are deliberately absent below so a register/tz upgrade, an operator param, or
     a renamed source column can never move an evidence digest.
     """
     parts: list[str] = []
 
-    # targeted entity: identifier ⟂ identifier_type ⟂ type ⟂ activity_role (always 4 slots)
+    # targeted entity: identifier ⟂ identifier_type ⟂ type (always 3 slots)
     parts += [_txt(entity["identifier"]), _txt(entity["identifier_type"]),
-              _txt(entity["type"]), _txt(links["activity_role"])]
+              _txt(entity["type"])]
     # bearer: presence ⟂ [identifier ⟂ identifier_type ⟂ type]. The flag is what keeps an
     # ABSENT bearer distinguishable from a present one whose fields are all empty.
     if bearer is None:
@@ -164,19 +178,9 @@ def l1_projection(*, entity, bearer, spatial, temporal, links, deleted, multipli
             parts += [_txt(c["part"]),
                       _txt(c["stated_offset"]), _txt(c["raw_value"])]
 
-    # the three links ⟂ deleted ⟂ multiplicity (always 5 slots)
-    parts += [_txt(links["entity_link"]), _txt(links["spatial_link"]),
-              _txt(links["occupancy"]), _txt(links["attestation"]),
-              _txt(deleted), _txt(multiplicity)]
-
-    # activity: presence ⟂ [kind ⟂ canonical context_json]
-    if activity is None:
-        parts += [_CORNER_ABSENT]
-    else:
-        ctx = activity.get("context_json")
-        parts += [_CORNER_PRESENT, _txt(activity["kind"]),
-                  "" if ctx is None else canonical_json(ctx)]
-
+    # recovery_state / recovery_source are EXCLUDED like paths: HOW a record was obtained is
+    # provenance, not identity, so a claim carved from free space converges with the same
+    # claim read live (decision 48).
     return SEP.join(parts)
 
 
@@ -196,33 +200,38 @@ def us_from_iso(iso_with_offset: str) -> int:
     return int(dt.timestamp() * 1_000_000)
 
 
-def local_projection(unix_us: int | None, offset_hours: float | str | None):
-    """Convenience projection for ONE bound: (datetime_iso, date, time_us).
+DEMO_LOCAL_ZONE = "Europe/Paris"
+"""The case's configured local zone (``matlas_config.toml`` -> ``timezone.local_zone``).
 
-    HOW: from canonical UTC µs + the applied offset we render the local wall clock.
-    - no instant (unix_us is None)        -> ("", None, None)   (empty everywhere)
-    - offset known (a float)              -> "…+01:00" ISO + local date + time-of-day µs
-    - offset UNKNOWN (the "N/A" sentinel) -> assumed-UTC clock with a LOUD trailing " N/A"
-    WHY: the ` N/A` suffix keeps "value, zone unknown" visibly distinct from "no value"
-    (empty) — the two must never be confused.
+The demo hard-codes one because ``offset_to_local_hours_*`` is a property of the CASE, not
+of any source: every row gets the offset an analyst adds to the canonical UTC µs to read
+that instant in this zone.
+
+That every demo row lands on ``+1.0`` is the point, not a flaw. The sources here are a mix
+of epochs, offset-bearing clocks and naive ones, and under the OLD applied-offset meaning
+this column disagreed row by row (and was NULL for every epoch) while telling the analyst
+nothing about the zone they actually read in. It is uniform now because the demo's instants
+all fall in March, before the European DST change; a case spanning it would show +1 and +2,
+which is why the value is stored per bound rather than once per run.
+"""
+
+
+def offset_to_local(unix_us: int | None, zone: str | None = DEMO_LOCAL_ZONE):
+    """Hours to ADD to ``unix_us`` to read it in ``zone`` — mirrors
+    ``model_atlas.integrate.temporal.offset_to_local``.
+
+    None when there is no instant to offset; the loud "N/A" when no zone is configured;
+    otherwise the zone's offset AT that instant, so DST is resolved per bound.
+    NOTE this is the UTC -> local direction. It is NOT the offset the source's clock
+    carried: that survives in the verbatim raw value and its column name, and HOW the
+    instant was reached is stamped in ``method``.
     """
     if unix_us is None:
-        return "", None, None
-    known = isinstance(offset_hours, (int, float))
-    off = float(offset_hours) if known else 0.0
-    local_us = unix_us + int(round(off * 3600 * 1_000_000))
-    dt = datetime.fromtimestamp(local_us / 1_000_000, tz=timezone.utc)  # already shifted
-    if known:
-        sign = "+" if off >= 0 else "-"
-        oh, om = divmod(int(round(abs(off) * 60)), 60)
-        iso = dt.strftime("%Y-%m-%dT%H:%M:%S") + f"{sign}{oh:02d}:{om:02d}"
-    else:
-        # zone unknown: show the assumed-UTC clock, flagged loudly.
-        iso = dt.strftime("%Y-%m-%dT%H:%M:%S") + " N/A"
-    date_us = int(datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc).timestamp()
-                  * 1_000_000)
-    time_us = local_us - date_us
-    return iso, date_us, time_us
+        return None
+    if not zone:
+        return "N/A"
+    instant = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=unix_us)
+    return instant.astimezone(ZoneInfo(zone)).utcoffset().total_seconds() / 3600
 
 
 # --------------------------------------------------------------------------- #
@@ -249,14 +258,14 @@ CREATE TABLE run_archive (run_archive_id TEXT PRIMARY KEY,
     archive_id TEXT NOT NULL REFERENCES archive(archive_id),
     parsed_at TEXT, skipped INTEGER NOT NULL DEFAULT 0,
     UNIQUE (run_id, archive_id));
-CREATE TABLE source (source_id TEXT PRIMARY KEY,
+CREATE TABLE source_file (source_file_id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES run(run_id),
-    input_file_path TEXT NOT NULL, inner_path TEXT, data_source TEXT,
+    input_file_path TEXT NOT NULL, inner_path TEXT, reported_data_source TEXT,
     format TEXT, subunit TEXT, fingerprint_sha256 TEXT,
     sibling_fingerprints_json TEXT, exhibit_ref TEXT, source_tier TEXT,
     record_count INTEGER,
     UNIQUE (run_id, input_file_path, inner_path, subunit));
-CREATE INDEX ix_source_fp ON source(fingerprint_sha256);
+CREATE INDEX ix_source_fp ON source_file(fingerprint_sha256);
 CREATE TABLE preset (preset_id TEXT PRIMARY KEY,
     key TEXT NOT NULL, name TEXT, version TEXT,
     definition_digest TEXT NOT NULL, UNIQUE (key, version));
@@ -265,23 +274,21 @@ CREATE TABLE run_preset (run_preset_id TEXT PRIMARY KEY,
     preset_id TEXT NOT NULL REFERENCES preset(preset_id),
     UNIQUE (run_id, preset_id));
 CREATE TABLE raw_record (raw_record_id TEXT PRIMARY KEY,
-    source_id TEXT NOT NULL REFERENCES source(source_id), line_no INTEGER NOT NULL,
+    source_file_id TEXT NOT NULL REFERENCES source_file(source_file_id), line_no INTEGER NOT NULL,
     native_record_uid TEXT, recovery_state TEXT, recovery_source TEXT,
-    raw_json TEXT NOT NULL, UNIQUE (source_id, line_no));
+    raw_json TEXT NOT NULL, UNIQUE (source_file_id, line_no));
 
 -- Layer 1 ------------------------------------------------------------------
-CREATE TABLE activity (activity_id TEXT PRIMARY KEY, kind TEXT, context_json TEXT);
-CREATE TABLE activity_record (activity_record_id TEXT PRIMARY KEY,
-    activity_id TEXT NOT NULL REFERENCES activity(activity_id),
-    raw_record_id TEXT NOT NULL REFERENCES raw_record(raw_record_id),
-    UNIQUE (activity_id, raw_record_id));
+-- Kept but EMPTY: nothing writes activity (decision 51); observation.activity_id stays
+-- NULL so the link exists when activity is finally modelled.
+CREATE TABLE activity (activity_id TEXT PRIMARY KEY, kind TEXT);
 CREATE TABLE entity (entity_id TEXT PRIMARY KEY,
     identifier TEXT, raw_identifier TEXT, identifier_type TEXT NOT NULL,
     type TEXT NOT NULL, concerns TEXT, concerns_origin TEXT, concerns_uid TEXT);
 CREATE INDEX ix_entity_norm ON entity(identifier_type, identifier);
 CREATE INDEX ix_entity_concerns ON entity(concerns_uid);
 CREATE TABLE spatial_expression (spatial_expression_id TEXT PRIMARY KEY,
-    referential TEXT NOT NULL, spatial_source TEXT);
+    referential TEXT, position_type TEXT NOT NULL, spatial_source TEXT);
 CREATE TABLE spatial_component (spatial_component_id TEXT PRIMARY KEY,
     spatial_expression_id TEXT NOT NULL
         REFERENCES spatial_expression(spatial_expression_id),
@@ -299,30 +306,35 @@ CREATE TABLE temporal_component (temporal_component_id TEXT PRIMARY KEY,
 CREATE TABLE observation (observation_id TEXT PRIMARY KEY,
     raw_record_id TEXT NOT NULL REFERENCES raw_record(raw_record_id),
     preset_id TEXT NOT NULL REFERENCES preset(preset_id),
-    output_ordinal INTEGER NOT NULL,
     entity_id TEXT NOT NULL UNIQUE REFERENCES entity(entity_id),
-    entity_origin TEXT,
     activity_id TEXT REFERENCES activity(activity_id),
     spatial_expression_id TEXT UNIQUE
         REFERENCES spatial_expression(spatial_expression_id),
     temporal_expression_id TEXT UNIQUE
         REFERENCES temporal_expression(temporal_expression_id),
     bearer_entity_id TEXT UNIQUE REFERENCES entity(entity_id),
-    activity_role TEXT, entity_link TEXT, spatial_link TEXT,
-    occupancy TEXT, attestation TEXT, recorded_at TEXT,
-    deleted TEXT, multiplicity INTEGER,
+    entity_link TEXT, spatial_link TEXT, temporal_link TEXT,
+    recovery_state TEXT, recovery_source TEXT,
     source_label TEXT, input_record_id TEXT, source_record_uid TEXT,
-    content_hash TEXT NOT NULL, claim_digest TEXT NOT NULL,
-    UNIQUE (raw_record_id, preset_id, output_ordinal));
-CREATE INDEX ix_observation_ch ON observation(content_hash);
-CREATE INDEX ix_observation_cd ON observation(claim_digest);
+    -- No UNIQUE over (raw_record_id, preset_id): one preset with several observation
+    -- templates writes several rows for one record, and output_ordinal (which used to
+    -- discriminate them) went with decision 50.
+    observation_content_hash TEXT NOT NULL, spatiotemporal_entity_hash TEXT NOT NULL,
+    -- Decision 55's link/bearer invariants, as in the real schema (IS = NULL-safe).
+    CHECK ((entity_link IS 'subject') = (bearer_entity_id IS entity_id)),
+    CHECK (entity_link IS NOT 'party' OR (bearer_entity_id IS NOT NULL
+           AND bearer_entity_id IS NOT entity_id)),
+    CHECK (entity_link IS NOT 'unknown' OR bearer_entity_id IS NULL),
+    CHECK (spatial_expression_id IS NOT NULL OR spatial_link IS NULL));
+CREATE INDEX ix_observation_ch ON observation(observation_content_hash);
+CREATE INDEX ix_observation_cd ON observation(spatiotemporal_entity_hash);
 CREATE INDEX ix_observation_act ON observation(activity_id);
 
 -- Layer 2 ------------------------------------------------------------------
 CREATE TABLE spatial_integration (spatial_integration_id TEXT PRIMARY KEY,
     spatial_expression_id TEXT NOT NULL UNIQUE
         REFERENCES spatial_expression(spatial_expression_id),
-    method TEXT NOT NULL, referential TEXT, spatial_source TEXT,
+    method TEXT NOT NULL, position_raw TEXT, referential TEXT, spatial_source TEXT,
     latitude_wgs84 REAL, longitude_wgs84 REAL, altitude_m REAL,
     horizontal_accuracy_m REAL, vertical_accuracy_m REAL,
     horizontal_speed_kmh REAL, vertical_speed_kmh REAL,
@@ -337,17 +349,15 @@ CREATE INDEX ix_spatial_index_cell ON spatial_index(s2_cell_id);
 CREATE TABLE timespan_integration (timespan_integration_id TEXT PRIMARY KEY,
     temporal_expression_id TEXT NOT NULL UNIQUE
         REFERENCES temporal_expression(temporal_expression_id),
-    method TEXT NOT NULL,
+    method TEXT NOT NULL, kind TEXT, referential TEXT, temporal_source TEXT,
     lower_unix_utc_us INTEGER, upper_unix_utc_us INTEGER,
-    lower_datetime_iso TEXT, upper_datetime_iso TEXT,
-    lower_date INTEGER, upper_date INTEGER, lower_time INTEGER, upper_time INTEGER,
-    utc_offset_hours_lower TEXT, utc_offset_hours_upper TEXT,
+    offset_to_local_hours_lower TEXT, offset_to_local_hours_upper TEXT,
     lower_accuracy_us INTEGER, upper_accuracy_us INTEGER);
 
 -- Layer 3 ------------------------------------------------------------------
 CREATE TABLE analysis (analysis_id TEXT PRIMARY KEY,
     observation_id TEXT NOT NULL REFERENCES observation(observation_id),
-    method TEXT NOT NULL, record_rank_type TEXT, record_rank INTEGER,
+    method TEXT NOT NULL, record_rank INTEGER, record_rank_type TEXT,
     UNIQUE (observation_id, method));
 CREATE TABLE edit_log (edit_id TEXT PRIMARY KEY,
     ordinal INTEGER NOT NULL UNIQUE,
@@ -358,14 +368,14 @@ CREATE TABLE edit_log (edit_id TEXT PRIMARY KEY,
 CREATE VIEW duplicate_sources AS
     SELECT fingerprint_sha256, COUNT(*) AS copies,
            GROUP_CONCAT(input_file_path, ' | ') AS files
-    FROM source GROUP BY fingerprint_sha256 HAVING COUNT(*) > 1;
+    FROM source_file GROUP BY fingerprint_sha256 HAVING COUNT(*) > 1;
 CREATE VIEW possible_same_evidence AS
-    SELECT a.claim_digest, COUNT(*) AS copies,
+    SELECT a.spatiotemporal_entity_hash, COUNT(*) AS copies,
            GROUP_CONCAT(s.input_file_path, ' | ') AS files
     FROM observation a
     JOIN raw_record r ON r.raw_record_id = a.raw_record_id
-    JOIN source s ON s.source_id = r.source_id
-    GROUP BY a.claim_digest HAVING COUNT(*) > 1;
+    JOIN source_file s ON s.source_file_id = r.source_file_id
+    GROUP BY a.spatiotemporal_entity_hash HAVING COUNT(*) > 1;
 """
 
 # --------------------------------------------------------------------------- #
@@ -384,7 +394,7 @@ class Builder:
     """Thin insert wrapper so the worked example below reads as a narrative.
 
     Each method returns the surrogate id of the row it wrote, honouring the schema's
-    ingest write order: run -> source -> raw_record -> activity(+link) -> entity +
+    ingest write order: run -> source_file -> raw_record -> entity +
     expressions + components -> observation -> integrations -> analysis. No
     ``INSERT OR IGNORE`` anywhere: a UNIQUE violation here would be a derivation bug and
     must raise (the ingestion write order).
@@ -418,8 +428,8 @@ class Builder:
                tier="primary", siblings=None):
         # id from PATHS, never the fingerprint: two byte-identical exhibits
         # stay two sources whose matching hash is a finding, not a merge.
-        sid = u5("source", path, inner, subunit)
-        self.cx.execute("INSERT INTO source VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        sid = new_id()
+        self.cx.execute("INSERT INTO source_file VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (sid, self.run_id, path, inner, data_source, fmt, subunit, fp,
              json.dumps(siblings or []), exhibit, tier, None))
         return sid
@@ -435,27 +445,20 @@ class Builder:
              "2026-03-15T08:00:05Z", skipped))
         return aid
 
-    def record(self, sid, line, raw: dict, recovery="live", recovery_source="live"):
-        rrid = u5("record", sid, line)
+    def record(self, sid, line, raw: dict, recovery="live", recovery_source=None):
+        rrid = new_id()
         # raw_json is the COMPLETE row (verbatim values). recovery_source is the fine origin
-        # (live/wal/journal/freelist/freespace) behind the coarse recovery_state.
+        # (wal/journal/freelist/freespace) behind the coarse recovery_state, and stays NULL
+        # for a live or intact row — recovered from nowhere, so a populated cell IS the
+        # "this row was recovered" signal rather than an echo of recovery_state.
         self.cx.execute("INSERT INTO raw_record VALUES (?,?,?,?,?,?,?)",
             (rrid, sid, line, None, recovery, recovery_source, canonical_json(raw)))
         return rrid
 
     # ---- Layer 1 ---------------------------------------------------------
-    def activity(self, rrid, kind, context=None, ordinal=0):
-        aid = u5("activity", rrid, ordinal)
-        self.cx.execute("INSERT INTO activity VALUES (?,?,?)",
-            (aid, kind, None if context is None else canonical_json(context)))
-        # exactly one link per activity at ingest — its own record.
-        self.cx.execute("INSERT INTO activity_record VALUES (?,?,?)",
-            (u5("actrec", aid, rrid), aid, rrid))
-        return aid, context
-
     def entity(self, rrid, ordinal, identifier, raw_identifier, id_type, etype,
                concerns=None, concerns_origin=None):
-        eid = u5("entity", rrid, ordinal, identifier, id_type, etype)
+        eid = new_id()
         concerns_uid = None
         if concerns is not None:
             # case-folded/stemmed digest so "A. Moreau"/"moreau a." group together,
@@ -467,16 +470,21 @@ class Builder:
              concerns, concerns_origin, concerns_uid))
         return eid, {"identifier": identifier, "identifier_type": id_type, "type": etype}
 
-    def spatial(self, rrid, ordinal, referential, spatial_source, components,
-                method, lat, lon, **metrics):
+    def spatial(self, rrid, ordinal, position_type, referential, spatial_source,
+                components, method, lat, lon, **metrics):
         """components: list of (part, unit, source_field, raw_value)."""
-        sx = u5("sx", rrid, ordinal)
-        self.cx.execute("INSERT INTO spatial_expression VALUES (?,?,?)",
-            (sx, referential, spatial_source))
+        sx = new_id()
+        # position_type is STATED, and the referential belongs to the two
+        # self-contained-transformation types only — a lookup type stores NULL.
+        from model_atlas.core.vocabularies import PositionType
+        kind = PositionType(position_type)
+        self.cx.execute("INSERT INTO spatial_expression VALUES (?,?,?,?)",
+            (sx, referential if kind.takes_referential else None,
+             kind.value, spatial_source))
         comp_dicts = []
         for i, (part, unit, field, rawv) in enumerate(components):
             self.cx.execute("INSERT INTO spatial_component VALUES (?,?,?,?,?,?,?)",
-                (u5("sc", sx, i), sx, i, part, field, rawv, unit))
+                (new_id(), sx, i, part, field, rawv, unit))
             comp_dicts.append({"part": part, "unit": unit, "raw_value": rawv})
         # An integration row exists when the pass produced ANY canonical column — the
         # engine's own rule (``if not columns: return None`` in integrate/spatial.py).
@@ -485,10 +493,15 @@ class Builder:
         # Only a place with nothing derivable at all gets no row, and no position is ever
         # invented to fill one.
         if lat is not None or any(v is not None for v in metrics.values()):
-            si = u5("si", sx, method)
+            si = new_id()
+            # The verbatim components behind the two canonical coordinate columns —
+            # exactly what the real integration records, so the demo shows the same shape.
+            position_raw = " | ".join(
+                f"{fld}:{raw}" for part, _u, fld, raw in components
+                if part in ("latitude", "longitude") and raw is not None) or None
             self.cx.execute("INSERT INTO spatial_integration VALUES "
-                            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (si, sx, method, referential, spatial_source, lat, lon,
+                            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (si, sx, method, position_raw, referential, spatial_source, lat, lon,
                  metrics.get("altitude_m"), metrics.get("horizontal_accuracy_m"),
                  metrics.get("vertical_accuracy_m"), metrics.get("horizontal_speed_kmh"),
                  metrics.get("vertical_speed_kmh"),
@@ -500,78 +513,78 @@ class Builder:
                 # one S2 leaf cell per POINT: a metrics-only row is not a point and is
                 # deliberately unindexed (integrate/spatial.py makes the same distinction).
                 self.cx.execute("INSERT INTO spatial_index VALUES (?,?,?,?)",
-                    (u5("s2", si), si, s2_signed_leaf(lat, lon), S2_LEAF_LEVEL))
+                    (new_id(), si, s2_signed_leaf(lat, lon), S2_LEAF_LEVEL))
         # ordinal ordering matters for the L1 projection, so hand it back ready-sorted.
         return sx, {"referential": referential, "spatial_source": spatial_source,
                     "components": comp_dicts}
 
     def temporal(self, rrid, ordinal, kind, referential, temporal_source, components,
-                 method, lower_us, upper_us, off_lower=None, off_upper=None,
-                 lower_accuracy_us=None, upper_accuracy_us=None):
+                 method, lower_us, upper_us,
+                 lower_accuracy_us=None, upper_accuracy_us=None, local_zone=DEMO_LOCAL_ZONE):
         """components: list of (part, stated_offset, source_field, raw)."""
-        tx = u5("tx", rrid, ordinal)
+        tx = new_id()
         self.cx.execute("INSERT INTO temporal_expression VALUES (?,?,?,?)",
             (tx, kind, referential, temporal_source))
         comp_dicts = []
         for i, (part, stated, field, rawv) in enumerate(components):
             self.cx.execute("INSERT INTO temporal_component VALUES (?,?,?,?,?,?,?)",
-                (u5("tc", tx, i), tx, i, part, stated, field, rawv))
+                (new_id(), tx, i, part, stated, field, rawv))
             comp_dicts.append({"part": part, "stated_offset": stated, "raw_value": rawv})
-        lo_iso, lo_date, lo_time = local_projection(lower_us, off_lower)
-        up_iso, up_date, up_time = local_projection(upper_us, off_upper)
+        # The offsets are DERIVED from the instants + the case's zone, never passed in per
+        # call: production stamps them in one funnel (integrate_expression) for exactly this
+        # reason — a per-call-site offset is a per-call-site chance to state a wrong one.
         self.cx.execute("INSERT INTO timespan_integration VALUES "
-                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (u5("ti", tx, method), tx, method, lower_us, upper_us,
-             lo_iso, up_iso, lo_date, up_date, lo_time, up_time,
-             _off_text(off_lower), _off_text(off_upper),
+                        "(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (new_id(), tx, method, kind, referential, temporal_source,
+             lower_us, upper_us,
+             _off_text(offset_to_local(lower_us, local_zone)),
+             _off_text(offset_to_local(upper_us, local_zone)),
              lower_accuracy_us, upper_accuracy_us))
         return tx, {"kind": kind, "referential": referential, "components": comp_dicts}
 
     def observation(self, rrid, preset_id, preset_key, ordinal, entity_pair,
-                  spatial_pair, temporal_pair, activity_pair, role,
-                  entity_link, spatial_link, occupancy, attestation,
+                  spatial_pair, temporal_pair,
+                  entity_link, spatial_link, temporal_link,
                   bearer_pair=None,
-                  deleted=None, multiplicity=None, label=None, input_record_id=None,
-                  source_record_uid=None, entity_origin="preset_mapped"):
+                  recovery_state=None, recovery_source=None,
+                  label=None, input_record_id=None, source_record_uid=None):
         eid, entity_l1 = entity_pair
-        bearer_id, bearer_l1 = bearer_pair or (None, None)
+        # A `subject` holds its own position: its bearer IS the targeted entity (decision 55),
+        # and the projection carries no separate bearer block for it.
+        bearer_id, bearer_l1 = ((eid, None) if entity_link == "subject"
+                                else bearer_pair or (None, None))
         sx, spatial_l1 = spatial_pair or (None, None)
         tx, temporal_l1 = temporal_pair or (None, None)
-        act_id, act_ctx = activity_pair or (None, None)
-        links = {"activity_role": role, "entity_link": entity_link,
-                 "spatial_link": spatial_link, "occupancy": occupancy,
-                 "attestation": attestation}
-        activity_l1 = None if act_id is None else {"kind": _activity_kind(self.cx, act_id),
-                                                   "context_json": act_ctx}
         l1 = l1_projection(entity=entity_l1, bearer=bearer_l1, spatial=spatial_l1,
-                           temporal=temporal_l1, links=links, deleted=deleted,
-                           multiplicity=multiplicity, activity=activity_l1)
-        # claim_digest = the L1 projection ALONE — preset/file-independent, so two
+                           temporal=temporal_l1)
+        # spatiotemporal_entity_hash = the L1 projection ALONE — preset/file-independent, so two
         # presets extracting the same claim converge and surface as possible-same-evidence.
-        claim_digest = sha256_hex(l1)
+        spatiotemporal_entity_hash = sha256_hex(l1)
         fp, line_no = self.cx.execute(
             "SELECT s.fingerprint_sha256, r.line_no FROM raw_record r "
-            "JOIN source s ON s.source_id=r.source_id WHERE r.raw_record_id=?",
+            "JOIN source_file s ON s.source_file_id=r.source_file_id WHERE r.raw_record_id=?",
             (rrid,)).fetchone()
-        # content_hash = fingerprint ⟂ preset key ⟂ line_no ⟂ output_ordinal ⟂ L1 —
+        # observation_content_hash = fingerprint ⟂ preset key ⟂ line_no ⟂ L1 —
         # the digest scoped to THIS preset's reading of THIS file; no paths, so
         # folder==zip parity holds.
-        content_hash = sha256_hex(SEP.join(
-            [_txt(fp), preset_key, str(line_no), str(ordinal), l1]))
-        # "assertion" is the FROZEN id-derivation tag (see ids.OBSERVATION_NAME): an opaque
-        # uuid5 input, not the table name. It must not follow the table rename.
-        aid = u5("assertion", rrid, preset_key, ordinal)
+        observation_content_hash = sha256_hex(SEP.join(
+            [_txt(fp), preset_key, str(line_no), l1]))
+        aid = new_id()
         self.cx.execute("INSERT INTO observation VALUES "
-                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (aid, rrid, preset_id, ordinal, eid, entity_origin, act_id, sx, tx,
-             bearer_id, role, entity_link, spatial_link, occupancy, attestation, None,
-             deleted, multiplicity, label, input_record_id,
-             source_record_uid, content_hash, claim_digest))
+                        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (aid, rrid, preset_id, eid, None, sx, tx,
+             bearer_id, entity_link, spatial_link, temporal_link,
+             recovery_state, recovery_source, label, input_record_id,
+             source_record_uid, observation_content_hash, spatiotemporal_entity_hash))
         return aid
 
-    def analysis(self, aid, method, record_rank_type, record_rank):
+    def analysis(self, aid, method, record_rank):
+        # The label is written from the SAME value as the rank, so the two cannot disagree
+        # at the point of writing (decision 54). NULL rank -> NULL label.
+        rank_type = (None if record_rank is None
+                     else "main" if record_rank == 1 else "additional")
         self.cx.execute("INSERT INTO analysis VALUES (?,?,?,?,?)",
-            (u5("analysis", aid, method), aid, method, record_rank_type, record_rank))
+            (new_id(), aid, method, record_rank, rank_type))
 
 
 def _off_text(off: float | str | None) -> str | None:
@@ -581,15 +594,6 @@ def _off_text(off: float | str | None) -> str | None:
         return None
     return off if isinstance(off, str) else f"{float(off):+.1f}"
 
-
-def _activity_kind(cx: sqlite3.Connection, activity_id: str) -> str:
-    return cx.execute("SELECT kind FROM activity WHERE activity_id=?",
-                      (activity_id,)).fetchone()[0]
-
-
-# --------------------------------------------------------------------------- #
-# The worked example — one night in Geneva                                     #
-# --------------------------------------------------------------------------- #
 
 def build() -> sqlite3.Connection:
     if DB.exists():
@@ -624,7 +628,7 @@ def build() -> sqlite3.Connection:
     p_nav = b.preset("nav_generic", "Generic navigation", "1.0")
 
     # ---- iOS Cache.sqlite fixes, ingested TWICE (folder + zip) ------------
-    # WHY twice: folder==zip must produce equal content_hash/claim_digest (no paths in
+    # WHY twice: folder==zip must produce equal observation_content_hash/spatiotemporal_entity_hash (no paths in
     # the digests) yet remain two distinct sources — the duplicate-evidence finding.
     b.archive("/case/exhibit_A_copy.zip", "cd-exA-copy-abc123")
     fixes = [  # (line, lat, lon, acc, speed_ms, heading, cf_ts, local_iso)
@@ -644,7 +648,7 @@ def build() -> sqlite3.Connection:
             rr = b.record(sid, line, {"ZLATITUDE": lat, "ZLONGITUDE": lon,
                 "ZHORIZONTALACCURACY": acc, "ZSPEED": sp, "ZCOURSE": hd, "ZTIMESTAMP": cf})
             ent = b.entity(rr, 0, None, None, "none", "device")
-            sx = b.spatial(rr, 0, "epsg:4326", "GNSS",
+            sx = b.spatial(rr, 0, "coordinate", "epsg:4326", "GNSS",
                 [("latitude", None, "ZLATITUDE", lat),
                  ("longitude", None, "ZLONGITUDE", lon),
                  ("horizontal_accuracy_m", None, "ZHORIZONTALACCURACY", acc),
@@ -655,11 +659,10 @@ def build() -> sqlite3.Connection:
                 horizontal_speed_kmh=round(float(sp) * 3.6, 2), heading_deg=float(hd))
             tx = b.temporal(rr, 0, "instant", "apple_cfabsolute", "internal_clock",
                 [("lower", None, "ZTIMESTAMP", cf)],
-                "epoch_cfabsolute/1.0", us_from_iso(iso), us_from_iso(iso),
-                off_lower="N/A", off_upper="N/A")
-            a = b.observation(rr, p_cache, "ios_cache", 0, ent, sx, tx, None,
-                "unknown", "self", "at", "once", "instrument", label="iOS cache")
-            b.analysis(a, "untangle/2.0", "gps_fix", 1)
+                "epoch_cfabsolute/1.0", us_from_iso(iso), us_from_iso(iso))
+            a = b.observation(rr, p_cache, "ios_cache", 0, ent, sx, tx,
+                "subject", "measured", "at_least_once", label="iOS cache")
+            b.analysis(a, "untangle/2.0", 1)
 
     # ---- Visit with entry & exit (Local.sqlite) --------------------------
     sid = b.source("/case/exhibit_A/local.sqlite", None, None, "sqlite",
@@ -667,7 +670,7 @@ def build() -> sqlite3.Connection:
     rr = b.record(sid, 1, {"ZLAT": "46.193000", "ZLON": "6.129000",
                            "ZENTRYDATE": "763689600", "ZEXITDATE": "763702200"})
     ent = b.entity(rr, 0, None, None, "none", "device")
-    sx = b.spatial(rr, 0, "epsg:4326", "GNSS",
+    sx = b.spatial(rr, 0, "coordinate", "epsg:4326", "GNSS",
         [("latitude", None, "ZLAT", "46.193000"),
          ("longitude", None, "ZLON", "6.129000")],
         "passthrough_wgs84/1.0+unit_convert/1.0", HOME[0], HOME[1],
@@ -678,26 +681,24 @@ def build() -> sqlite3.Connection:
         [("lower", None, "ZENTRYDATE", "763689600"),
          ("upper", None, "ZEXITDATE", "763702200")],
         "epoch_cfabsolute/1.0", us_from_iso("2026-03-13 20:00:00+01"),
-        us_from_iso("2026-03-13 23:30:00+01"), off_lower="N/A", off_upper="N/A")
-    b.observation(rr, p_visit, "ios_visits", 0, ent, sx, tx, None,
-        "unknown", "self", "at", "continuous", "instrument", label="iOS visits")
+        us_from_iso("2026-03-13 23:30:00+01"))
+    b.observation(rr, p_visit, "ios_visits", 0, ent, sx, tx,
+        "subject", "measured", "throughout", label="iOS visits")
 
     # ---- CDRs: operator A file (3 records; #2 is THE call near the scene) -
     def cdr(sid, line, a_msisdn, b_msisdn, imei, start_iso, dur, cell, coords,
             preset_id, preset_key, azimuth=120, beam_width=65):
         rr = b.record(sid, line, {"a_party": a_msisdn, "b_party": b_msisdn,
             "imei": imei, "start": start_iso[:-3], "duration": str(dur), "cell": cell})
-        # the callee + the caller's own IMEI are activity context, NOT parties —
-        # they live in context_json (inside the L1 projection), no observation_mention.
-        act = b.activity(rr, "call",
-            {"callee": b_msisdn.replace(" ", ""), "caller_imei": imei})
+        # The callee and the caller's own IMEI have NO home since decision 51 removed
+        # activity: they are non-positional parties, and that gap is deliberately open.
         ent = b.entity(rr, 0, a_msisdn.replace(" ", ""), a_msisdn, "msisdn", "device")
         # The BEARER: the serving antenna. It holds the position the record states, so it
         # gets a real entity row instead of surviving only as a cell_ref string — which is
         # what makes "which other handsets hit this cell?" a GROUP BY rather than a
         # string match against a raw component value.
         bearer = b.entity(rr, 1, cell, cell, "cell", "antenna")
-        sx = b.spatial(rr, 0, "cell_ref", "cell",
+        sx = b.spatial(rr, 0, "cell_id", None, "cell",
             [("raw_position", None, "cell", cell)],
             "unit_convert/1.0", None, None,
             beam_azimuth_deg=float(azimuth), beam_width_deg=float(beam_width))
@@ -706,11 +707,11 @@ def build() -> sqlite3.Connection:
             [("lower", "+01:00", "start", start_iso[:-3]),
              ("duration", "+01:00", "duration", str(dur))],
             "tz_localize/tzdb2026a+start_plus_duration/1.0",
-            lo, lo + dur * 1_000_000, off_lower=1.0, off_upper=1.0)
-        a = b.observation(rr, preset_id, preset_key, 0, ent, sx, tx, act,
-            "caller", "served_by", "near", "continuous", "system_record", bearer_pair=bearer,
+            lo, lo + dur * 1_000_000)
+        a = b.observation(rr, preset_id, preset_key, 0, ent, sx, tx,
+            "party", "served", "at_least_once", bearer_pair=bearer,
             label="CDR op-A")
-        b.analysis(a, "untangle/2.0", "cdr_leg", 1)
+        b.analysis(a, "untangle/2.0", 1)
         return a
 
     sid = b.source("/case/operatorA_cdr.csv", None, None, "csv", None,
@@ -729,11 +730,10 @@ def build() -> sqlite3.Connection:
                    "fp-cdrB-22bb", "REQ-78")
     rr = b.record(sid, 1, {"caller": "+41791234567", "callee": "+41762223344",
         "start": "2026-03-14 02:20:31", "duration": "187", "cell_b": "228-02-1011-55221"})
-    act = b.activity(rr, "call", {"counterpart": "+41791234567"})
     ent = b.entity(rr, 0, "+41762223344", "+41762223344", "msisdn", "device")
     # The B-leg's own serving antenna — a different cell from the A-leg's.
     bearer = b.entity(rr, 1, "228-02-1011-55221", "228-02-1011-55221", "cell", "antenna")
-    sx = b.spatial(rr, 0, "cell_ref", "cell",
+    sx = b.spatial(rr, 0, "cell_id", None, "cell",
         [("raw_position", None, "cell_b", "228-02-1011-55221")],
         "unit_convert/1.0", None, None,
         beam_azimuth_deg=300.0, beam_width_deg=65.0)
@@ -742,13 +742,13 @@ def build() -> sqlite3.Connection:
         [("lower", "+01:00", "start", "2026-03-14 02:20:31"),
          ("duration", "+01:00", "duration", "187")],
         "tz_localize/tzdb2026a+start_plus_duration/1.0",
-        lo, lo + 187_000_000, off_lower=1.0, off_upper=1.0)
-    b.observation(rr, p_cdr, "cdr_generic", 0, ent, sx, tx, act,
-        "callee", "served_by", "near", "continuous", "system_record", bearer_pair=bearer,
+        lo, lo + 187_000_000)
+    b.observation(rr, p_cdr, "cdr_generic", 0, ent, sx, tx,
+        "party", "served", "at_least_once", bearer_pair=bearer,
         label="CDR op-B")
 
     # ---- overlapping disclosure: operator A supplement re-contains #2 -----
-    # WHY: same claim in a different file -> equal claim_digest, distinct content_hash
+    # WHY: same claim in a different file -> equal spatiotemporal_entity_hash, distinct observation_content_hash
     # (different fingerprint) — a possible-same-evidence finding, never a merge.
     sid = b.source("/case/operatorA_cdr_supplement.csv", None, None, "csv", None,
                    "fp-cdrA2-33cc", "REQ-77bis")
@@ -769,16 +769,15 @@ def build() -> sqlite3.Connection:
         ent = b.entity(rr, 0, "GE123456", "GE 123 456", "plate", "vehicle")
         # The BEARER: the camera. The plate was seen BY it; the position is the camera's.
         bearer = b.entity(rr, 1, cam, cam, "camera", "camera")
-        sx = b.spatial(rr, 0, "cell_ref", "camera",
+        sx = b.spatial(rr, 0, "unknown", None, "camera",
             [("raw_position", None, "camera_id", cam)],
             _UNAVAILABLE, None, None)
         tx = b.temporal(rr, 0, "instant", "local_string", "NTP",
             [("lower", "+01:00", "ts", ts[:-3])],
-            "tz_stated_offset/1.0", us_from_iso(ts), us_from_iso(ts),
-            off_lower=1.0, off_upper=1.0)
-        a = b.observation(rr, p_anpr, "anpr_ch", 0, ent, sx, tx, None,
-            "unknown", "seen_by", "near", "once", "instrument", bearer_pair=bearer, label="ANPR")
-        b.analysis(a, "untangle/2.0", "anpr_read", 1)
+            "tz_stated_offset/1.0", us_from_iso(ts), us_from_iso(ts))
+        a = b.observation(rr, p_anpr, "anpr_ch", 0, ent, sx, tx,
+            "party", "seen", "at_least_once", bearer_pair=bearer, label="ANPR")
+        b.analysis(a, "untangle/2.0", 1)
 
     # ---- CCTV at the scene -----------------------------------------------
     sid = b.source("/case/dvr_index.csv", None, None, "csv", None,
@@ -786,16 +785,16 @@ def build() -> sqlite3.Connection:
     rr = b.record(sid, 1, {"channel": "Lobby-2", "site": "Rue du Stand 15, 1204 Geneve",
         "start": "2026-03-14 02:25:00", "end": "2026-03-14 02:50:00"})
     ent = b.entity(rr, 0, "Lobby-2", "Lobby-2", "camera", "camera")
-    sx = b.spatial(rr, 0, "address", "manual",
+    sx = b.spatial(rr, 0, "street_address", None, "manual",
         [("raw_position", None, "site", "Rue du Stand 15, 1204 Geneve")],
         _UNAVAILABLE, None, None)
     tx = b.temporal(rr, 0, "interval", "local_string", "internal_clock",
         [("lower", None, "start", "2026-03-14 02:25:00"),
          ("upper", None, "end", "2026-03-14 02:50:00")],
         "tz_localize/tzdb2026a", us_from_iso("2026-03-14 02:25:00+01"),
-        us_from_iso("2026-03-14 02:50:00+01"), off_lower=1.0, off_upper=1.0)
-    b.observation(rr, p_dvr, "dvr_generic", 0, ent, sx, tx, None,
-        "unknown", "self", "at", "continuous", "instrument", label="CCTV")
+        us_from_iso("2026-03-14 02:50:00+01"))
+    b.observation(rr, p_dvr, "dvr_generic", 0, ent, sx, tx,
+        "subject", "located", "throughout", label="CCTV")
 
     # ---- robbery in the police register ----------------------------------
     # the event IS the entity (identifier == concerns, identifier_type=case_ref);
@@ -808,16 +807,16 @@ def build() -> sqlite3.Connection:
         "to": "2026-03-14 02:45", "victim": "M. Keller"})
     ent = b.entity(rr, 0, "GE-2026-04412", "GE-2026-04412", "case_ref", "event",
                    concerns="GE-2026-04412", concerns_origin="preset_mapped")
-    sx = b.spatial(rr, 0, "address", "manual",
+    sx = b.spatial(rr, 0, "street_address", None, "manual",
         [("raw_position", None, "location", "Rue du Stand 15, Geneve")],
         _UNAVAILABLE, None, None)
     tx = b.temporal(rr, 0, "interval", "local_string", "manual",
         [("lower", None, "from", "2026-03-14 02:30"),
          ("upper", None, "to", "2026-03-14 02:45")],
         "tz_localize/tzdb2026a", us_from_iso("2026-03-14 02:30:00+01"),
-        us_from_iso("2026-03-14 02:45:00+01"), off_lower=1.0, off_upper=1.0)
-    b.observation(rr, p_police, "police_reg", 0, ent, sx, tx, None,
-        "unknown", "self", "at", "continuous", "system_record",
+        us_from_iso("2026-03-14 02:45:00+01"))
+    b.observation(rr, p_police, "police_reg", 0, ent, sx, tx,
+        "subject", "located", "throughout",
         label="police register")
 
     # ---- witness audition ------------------------------------------------
@@ -828,19 +827,21 @@ def build() -> sqlite3.Connection:
     # concerns = the reporter (Marie Dupont), fixed at parsing.
     ent = b.entity(rr, 0, None, "l'homme", "none", "person",
                    concerns="Marie Dupont", concerns_origin="preset_mapped")
-    sx = b.spatial(rr, 0, "place_name", "manual",
+    sx = b.spatial(rr, 0, "unknown", None, "manual",
         [("raw_position", None, "statement", "pres de la gare")],
         _UNAVAILABLE, None, None)
     tx = b.temporal(rr, 0, "interval", "local_string", "manual",
         [("lower", "+01:00", "statement", "vers midi le 14 mars"),
          ("upper", "+01:00", "statement", "vers midi le 14 mars")],
         "fuzzy_time/1.0", us_from_iso("2026-03-14 11:00:00+01"),
-        us_from_iso("2026-03-14 13:00:00+01"), off_lower=1.0, off_upper=1.0,
+        us_from_iso("2026-03-14 13:00:00+01"),
         # the fuzzy_time reader assigns ±1 h to EACH bound of "vers midi" — a METHOD-level
         # accuracy claim (no L1 component), so it lands per bound only at L2.
         lower_accuracy_us=3600_000_000, upper_accuracy_us=3600_000_000)
-    b.observation(rr, p_audit, "audition", 0, ent, sx, tx, None,
-        "unknown", "self", "at", "continuous", "person",
+    b.observation(rr, p_audit, "audition", 0, ent, sx, tx,
+        # "vers midi": the statement places the man there at SOME point around noon, not for
+        # the whole fuzzy window.
+        "subject", "located", "at_least_once",
         label="audition")
 
     # ---- shared pin in instant messaging (REFERENCED, never presence) ----
@@ -849,21 +850,22 @@ def build() -> sqlite3.Connection:
     rr = b.record(sid, 1, {"sender": "+41791234567", "recipient": "+41762223344",
         "ts": "1773450680", "lat": "46.203000", "lon": "6.140000",
         "caption": "meet me here", "is_deleted": "1"})
-    act = b.activity(rr, "message", {"recipient": "+41762223344"})
     ent = b.entity(rr, 0, "+41791234567", "+41791234567", "msisdn", "device")
-    sx = b.spatial(rr, 0, "epsg:4326", "GNSS",
+    sx = b.spatial(rr, 0, "coordinate", "epsg:4326", "GNSS",
         [("latitude", None, "lat", "46.203000"),
          ("longitude", None, "lon", "6.140000")],
         "passthrough_wgs84/1.0", SCENE[0], SCENE[1])
     tx = b.temporal(rr, 0, "instant", "unix_epoch_s", "NTP",
         [("lower", None, "ts", "1773450680")],   # epoch: no stated zone
-        "epoch_unix_s/1.0", 1773450680_000_000, 1773450680_000_000,
-        off_lower="N/A", off_upper="N/A")
-    # deleted = the APP's own flag — a different fact from raw_record.recovery_state.
+        "epoch_unix_s/1.0", 1773450680_000_000, 1773450680_000_000)
+    # The chat app reports this row as recovered rather than read in place — a SECONDARY
+    # source, so the value is the TOOL's report, stated by the preset (decision 48). The old
+    # `deleted` column asked a question the export could not answer separately from this one.
     pin = b.entity(rr, 1, "scene-pin", "scene-pin", "none", "poi")
-    b.observation(rr, p_im, "im_generic", 0, ent, sx, tx, act,
-        "sender", "shared", "references", "once", "system_record",
-        bearer_pair=pin, deleted="deleted", label="chat pin")
+    b.observation(rr, p_im, "im_generic", 0, ent, sx, tx,
+        "party", "shared", "at_least_once",
+        bearer_pair=pin, recovery_state="recovered", recovery_source="freelist",
+        label="chat pin")
 
     # ---- route navigation search — TWO places (origin, destination) ------
     sid = b.source("/case/exhibit_A/maps_history.db", None, None, "sqlite",
@@ -871,24 +873,24 @@ def build() -> sqlite3.Connection:
     rr = b.record(sid, 1, {"account": "jdoe@gmail.com",
         "query_ts": "2026-03-13T21:04:09Z", "origin": "Home",
         "destination": "Rue du Stand 15, Geneve"})
-    act = b.activity(rr, "trip", {"origin": "Home", "destination": "Rue du Stand 15, Geneve"})
-    for ordinal, (ref, field, rawv, geo) in enumerate((
-            ("address", "destination", "Rue du Stand 15, Geneve", SCENE),
-            ("place_name", "origin", "Home", None))):
+    for ordinal, (kind, field, rawv, geo) in enumerate((
+            ("street_address", "destination", "Rue du Stand 15, Geneve", SCENE),
+            # A bare label, neither an address nor a coordinate.
+            ("unknown", "origin", "Home", None))):
         ent = b.entity(rr, ordinal, "jdoe@gmail.com", "jdoe@gmail.com", "email", "account")
-        sx = b.spatial(rr, ordinal, ref, "manual",
+        sx = b.spatial(rr, ordinal, kind, None, "manual",
             [("raw_position", None, field, rawv)],
             _UNAVAILABLE, None, None)
         tx = b.temporal(rr, ordinal, "instant", "iso8601", "NTP",
             [("lower", "+00:00", "query_ts", "2026-03-13T21:04:09Z")],
             "passthrough_utc/1.0", us_from_iso("2026-03-13 21:04:09+00"),
-            us_from_iso("2026-03-13 21:04:09+00"), off_lower=0.0, off_upper=0.0)
+            us_from_iso("2026-03-13 21:04:09+00"))
         target = b.entity(rr, ordinal + 10, rawv, rawv, "none", "poi")
-        b.observation(rr, p_nav, "nav_generic", ordinal, ent, sx, tx, act,
-            "unknown", "searched_for", "references", "once", "system_record",
+        b.observation(rr, p_nav, "nav_generic", ordinal, ent, sx, tx,
+            "party", "searched", "at_least_once",
             bearer_pair=target, label="nav search")
 
-    # ---- an explicit alibi: NEVER_DURING_INTERVAL (negated presence) -----
+    # ---- an explicit alibi: temporal_link = never (the only negation) ---
     # WHY: gives presence queries something to EXCLUDE — the suspect's phone was NOT at
     # home during the robbery window (a negated claim; the graph layer is deferred).
     sid = b.source("/case/alibi_statement.csv", None, None, "csv", None,
@@ -897,16 +899,19 @@ def build() -> sqlite3.Connection:
         "from": "2026-03-14 02:30", "to": "2026-03-14 02:45",
         "claim": "not present"})
     ent = b.entity(rr, 0, "+41791234567", "+41791234567", "msisdn", "device")
-    sx = b.spatial(rr, 0, "place_name", "manual",
+    sx = b.spatial(rr, 0, "unknown", None, "manual",
         [("raw_position", None, "place", "Home")],
         _UNAVAILABLE, None, None)
     tx = b.temporal(rr, 0, "interval", "local_string", "manual",
         [("lower", "+01:00", "from", "2026-03-14 02:30"),
          ("upper", "+01:00", "to", "2026-03-14 02:45")],
         "tz_localize/tzdb2026a", us_from_iso("2026-03-14 02:30:00+01"),
-        us_from_iso("2026-03-14 02:45:00+01"), off_lower=1.0, off_upper=1.0)
-    b.observation(rr, p_audit, "audition", 0, ent, sx, tx, None,
-        "unknown", "self", "absent", "continuous", "person",
+        us_from_iso("2026-03-14 02:45:00+01"))
+    # Home holds the position; the device is a party to it, and the ONLY negation is the
+    # temporal link (decision 55): never located there during the window.
+    home = b.entity(rr, 1, "Home", "Home", "none", "poi")
+    b.observation(rr, p_audit, "audition", 0, ent, sx, tx,
+        "party", "located", "never", bearer_pair=home,
         label="alibi")
 
     # ---- one edit_log row: an analyst corrected a geocode in place --
@@ -917,6 +922,17 @@ def build() -> sqlite3.Connection:
         (str(uuid.uuid4()), 1, "spatial_integration", "(demo)", "latitude_wgs84",
          "46.2029", "46.2030", "update", "insp. Girard", "2026-03-15T09:12:00Z"))
 
+    # The self-description: DERIVED from the model, so the demo DB explains itself exactly
+    # as a real run DB does and cannot drift from the schema it illustrates.
+    from model_atlas.core.schema import model_description_rows
+    cx.execute("CREATE TABLE model_description ("
+               "table_name TEXT NOT NULL, field_name TEXT, type TEXT, unit TEXT, "
+               "matlas_enrichment INTEGER, description TEXT NOT NULL, "
+               "UNIQUE (table_name, field_name));")
+    cx.executemany("INSERT INTO model_description "
+                   "(table_name, field_name, type, unit, matlas_enrichment, description) "
+                   "VALUES (?,?,?,?,?,?);", model_description_rows())
+
     cx.commit()
     return cx
 
@@ -925,34 +941,43 @@ def build() -> sqlite3.Connection:
 # Demonstration queries — the Q1..Q10 story, new projection columns           #
 # --------------------------------------------------------------------------- #
 
+def local_clock(bound: str, alias: str = "ti") -> str:
+    """SQL that renders ONE bound as its local wall clock, in the query.
+
+    This is THE point of the two-column design: the case stores the canonical UTC µs and
+    the offset to local, and whoever displays a time adds them — so a report always shows
+    the currently configured zone rather than one frozen into the row at ingest. The `N/A`
+    branch keeps "no local zone is configured" visible instead of silently showing UTC as
+    if it were local.
+    """
+    us, off = f"{alias}.{bound}_unix_utc_us", f"{alias}.offset_to_local_hours_{bound}"
+    return (f"CASE WHEN {us} IS NULL THEN ''"
+            f" WHEN {off} = 'N/A'"
+            f" THEN datetime({us}/1000000, 'unixepoch') || ' N/A'"
+            f" ELSE datetime({us}/1000000 + CAST({off} AS REAL)*3600, 'unixepoch')"
+            f" || printf('%+03d:00', CAST({off} AS INTEGER)) END")
+
+
 # The flat projection (the flat CSV column contract): one line per observation. The BEARER
 # columns come from the SECOND entity join — storage orders by whose position it is, the
 # projection by who is under investigation, so a CDR line still names the phone while the
-# antenna arrives as a column. `is_presence` is DERIVED from spatial_link, never stored.
-# Context columns come from activity.context_json; datetime_iso columns are local
-# offset-tagged strings.
-FLAT = """
-SELECT substr(a.observation_id,1,8) AS row_uid,
+# antenna arrives as a column. Every column mATLAS ADDED rather than read from the trace
+# carries the `_matlas` suffix; a value derived from a trace datum in an obvious way
+# (`entity`, `lat`/`lon`) keeps its bare name. The times are RENDERED by the query from
+# the canonical UTC µs + the offset to local — there is no stored local-clock column.
+FLAT = f"""
+SELECT substr(a.observation_id,1,8) AS row_uid_matlas,
   e.identifier AS entity, e.raw_identifier, e.identifier_type, e.type AS entity_type,
-  a.activity_role AS role,
-  json_extract(act.context_json,'$.counterpart') AS counterpart,
-  json_extract(act.context_json,'$.callee') AS callee,
-  json_extract(act.context_json,'$.caller_imei') AS imei,
-  sx.referential AS spatial_referential,
-  a.entity_link, a.spatial_link, a.occupancy, a.attestation,
+  a.entity_link AS entity_link_matlas, a.spatial_link AS spatial_link_matlas,
+  a.temporal_link AS temporal_link_matlas,
   be.identifier AS bearer_entity, be.type AS bearer_entity_type,
-  -- Presence is now ONE test on ONE column. It used to take three tokens across two enums,
-  -- because negation was storable in two places at once with no rule for disagreement.
-  CASE WHEN a.spatial_link IN ('at','within','near') THEN 1
-       WHEN a.spatial_link IS NULL THEN NULL ELSE 0 END AS is_presence,
-  si.latitude_wgs84 AS lat, si.longitude_wgs84 AS lon, six.s2_cell_id,
-  ti.lower_datetime_iso AS t_lower, ti.upper_datetime_iso AS t_upper,
-  a.source_label
+  si.latitude_wgs84 AS lat, si.longitude_wgs84 AS lon,
+  six.s2_cell_id AS s2_cell_id_matlas,
+  {local_clock("lower")} AS t_lower, {local_clock("upper")} AS t_upper,
+  a.source_label AS source_label_matlas
 FROM observation a
 JOIN entity e ON e.entity_id=a.entity_id
 LEFT JOIN entity be ON be.entity_id=a.bearer_entity_id
-LEFT JOIN activity act ON act.activity_id=a.activity_id
-LEFT JOIN spatial_expression sx ON sx.spatial_expression_id=a.spatial_expression_id
 LEFT JOIN spatial_integration si ON si.spatial_expression_id=a.spatial_expression_id
 LEFT JOIN spatial_index six ON six.spatial_integration_id=si.spatial_integration_id
 LEFT JOIN timespan_integration ti ON ti.temporal_expression_id=a.temporal_expression_id
@@ -963,53 +988,56 @@ _HI = us_from_iso("2026-03-14 03:10:00+01")
 
 QUERIES = [
  ("Q1 - The flat projection (one line per placement); the whole example run",
-  FLAT + "ORDER BY ti.lower_unix_utc_us, a.source_label, row_uid"),
+  FLAT + "ORDER BY ti.lower_unix_utc_us, a.source_label, row_uid_matlas"),
 
  ("Q2 - Timeline of ONE identifier across every source (convergence by GROUP-able "
   "normalized identifier, no stored merge)",
   FLAT + "WHERE e.identifier_type='msisdn' AND e.identifier='+41791234567' "
-         "ORDER BY ti.lower_unix_utc_us, a.source_label, row_uid"),
+         "ORDER BY ti.lower_unix_utc_us, a.source_label, row_uid_matlas"),
 
- ("Q3 - WHO WAS AT THE SCENE 02:00-03:10? Presence only: referenced places AND the "
-  "negated alibi excluded by the model itself",
+ ("Q3 - WHO WAS AT THE SCENE 02:00-03:10? Positive claims with a contact verb only: "
+  "searched/shared/cached places AND the negated alibi excluded. (An explicit filter, "
+  "not the engine's presence predicate, which decision 55 left to design.)",
   FLAT + f"""WHERE si.latitude_wgs84 BETWEEN 46.198 AND 46.208
   AND si.longitude_wgs84 BETWEEN 6.133 AND 6.146
   AND ti.lower_unix_utc_us <= {_HI} AND ti.upper_unix_utc_us >= {_LO}
-  AND a.spatial_link IN ('at','within','near')
-ORDER BY ti.lower_unix_utc_us, a.source_label, row_uid"""),
+  AND a.temporal_link IN ('throughout','at_least_once')
+  AND a.spatial_link IN ('measured','registered','served','seen','used','stayed','located')
+ORDER BY ti.lower_unix_utc_us, a.source_label, row_uid_matlas"""),
 
- ("Q4 - ...and the REFERENCED pointers at the same place (leads, not presence)",
+ ("Q4 - ...and the places only searched, shared or cached at the same spot (leads, "
+  "not presence)",
   FLAT + """WHERE si.latitude_wgs84 BETWEEN 46.198 AND 46.208
   AND si.longitude_wgs84 BETWEEN 6.133 AND 6.146
-  AND a.spatial_link = 'references'
-ORDER BY row_uid"""),
+  AND a.spatial_link IN ('searched','shared','cached')
+ORDER BY row_uid_matlas"""),
 
  ("Q5 - Duplicate evidence findings (never merged, always reported; duplicates SURFACE)",
   "SELECT 'same file bytes' AS finding, fingerprint_sha256 AS digest, copies, files "
   "FROM duplicate_sources "
   "UNION ALL "
-  "SELECT 'possible same evidence (file-independent)', substr(claim_digest,1,16), "
+  "SELECT 'possible same evidence (file-independent)', substr(spatiotemporal_entity_hash,1,16), "
   "copies, files FROM possible_same_evidence ORDER BY finding, digest"),
 
  ("Q6 - Convergence by normalized identifier: every mention of +41791234567, with its "
   "VERBATIM raw_identifier surfaced (same working id, different source text)",
   """SELECT e.identifier, e.raw_identifier, e.identifier_type, e.type,
-     a.activity_role, a.source_label
+     a.source_label
 FROM observation a JOIN entity e ON e.entity_id=a.entity_id
 WHERE e.identifier_type='msisdn' AND e.identifier='+41791234567'
 ORDER BY a.source_label, e.raw_identifier"""),
 
  ("Q7 - Which identifiers used tower 228-01-2042-77341? (infrastructure archaeology; "
   "duplicates surface, no DISTINCT)",
-  """SELECT e.identifier AS entity, a.activity_role,
-     ti.lower_datetime_iso AS at_local, a.source_label, s.input_file_path
+  f"""SELECT e.identifier AS entity,
+     {local_clock("lower")} AS at_local, a.source_label, s.input_file_path
 FROM spatial_component sc
 JOIN spatial_expression sx ON sx.spatial_expression_id=sc.spatial_expression_id
 JOIN observation a ON a.spatial_expression_id=sx.spatial_expression_id
 JOIN entity e ON e.entity_id=a.entity_id
 JOIN timespan_integration ti ON ti.temporal_expression_id=a.temporal_expression_id
 JOIN raw_record r ON r.raw_record_id=a.raw_record_id
-JOIN source s ON s.source_id=r.source_id
+JOIN source_file s ON s.source_file_id=r.source_file_id
 WHERE sc.raw_value='228-01-2042-77341'
 ORDER BY ti.lower_unix_utc_us, s.input_file_path"""),
 
@@ -1024,15 +1052,16 @@ JOIN spatial_component sc ON sc.spatial_expression_id=sx.spatial_expression_id
 JOIN spatial_index six ON six.spatial_integration_id=si.spatial_integration_id
 JOIN observation a ON a.spatial_expression_id=sx.spatial_expression_id
 JOIN raw_record r ON r.raw_record_id=a.raw_record_id
-JOIN source s ON s.source_id=r.source_id
+JOIN source_file s ON s.source_file_id=r.source_file_id
 WHERE sc.raw_value='228-01-2042-77341'
   AND s.input_file_path LIKE '%operatorA_cdr.csv'"""),
 
- ("Q9 - The two per-bound temporal projections: stated offset (L1) vs applied "
-  "offset + local datetime_iso (L2), plus the ` N/A` assumed-UTC sentinel",
-  """SELECT a.source_label, tc.part, tc.stated_offset,
-     ti.utc_offset_hours_lower AS applied_lower, ti.utc_offset_hours_upper AS applied_upper,
-     ti.lower_datetime_iso, ti.upper_datetime_iso
+ ("Q9 - The two temporal facts side by side: the offset the SOURCE stated (L1, verbatim) "
+  "vs the offset to the CASE's local zone (L2) and the clock it renders",
+  f"""SELECT a.source_label, tc.part, tc.stated_offset,
+     ti.lower_unix_utc_us,
+     ti.offset_to_local_hours_lower, ti.offset_to_local_hours_upper,
+     {local_clock("lower")} AS lower_local, {local_clock("upper")} AS upper_local
 FROM observation a
 JOIN temporal_expression tx ON tx.temporal_expression_id=a.temporal_expression_id
 JOIN temporal_component tc ON tc.temporal_expression_id=tx.temporal_expression_id
@@ -1043,12 +1072,14 @@ LIMIT 12"""),
 
  ("Q10 - The analysis layer: the current ranker's verdict per observation (re-running a "
   "changed ranker ADDS rows, never mutates; the CSV projects the current method)",
-  """SELECT an.method, an.record_rank_type, an.record_rank, e.type AS entity_type,
+  """SELECT an.method, an.record_rank,
+     CASE WHEN an.record_rank = 1 THEN 'main' ELSE 'additional' END AS record_order,
+     e.type AS entity_type,
      a.source_label, COUNT(*) AS n
 FROM analysis an
 JOIN observation a ON a.observation_id=an.observation_id
 JOIN entity e ON e.entity_id=a.entity_id
-GROUP BY an.method, an.record_rank_type, an.record_rank, e.type, a.source_label
+GROUP BY an.method, an.record_rank, e.type, a.source_label
 ORDER BY an.method, a.source_label"""),
 ]
 
@@ -1066,6 +1097,40 @@ def print_queries(cx: sqlite3.Connection) -> None:
         print(f"\n({len(rows)} rows)")
 
 
+def write_flat_csv() -> None:
+    """Export the flat CSV beside the database, through the REAL exporter brick.
+
+    WHY the real brick and not a hand-rolled dump: the committed CSV is a reference for
+    what a run actually produces, so it has to come from the same projection and the same
+    writer an operator gets — a second, parallel dump would drift from the contract the
+    moment either changed, and would then teach the wrong shape.
+
+    WHY it is regenerated here rather than checked in independently: the database and its
+    projection must never disagree. Building one always rebuilds the other.
+
+    WHY it goes through ``build_flat_view`` + the exporter's own ``_write`` rather than
+    ``CsvFlatExporter.export``: that entry point takes a ``RunStore``, and
+    ``RunStore.open_persisted`` authenticates the file by its ``application_id`` /
+    ``user_version`` stamp — which this hand-built fixture deliberately does not carry, so
+    it is never mistaken for a real run database. The two calls below ARE the body of
+    ``export``: the same projection and the same writer, so the bytes are identical to a
+    real run's, without pretending the fixture is one.
+    """
+    import sqlite3
+
+    from model_atlas.core.flat_view import build_flat_view
+    from model_atlas.export.csv_flat import CsvFlatExporter
+
+    connection = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    try:
+        frame = build_flat_view(connection, include_source_columns=True, ranking_method=None)
+    finally:
+        connection.close()
+    written = CsvFlatExporter()._write(frame, CSV)
+    print(f"exported {written} ({len(frame)} rows, {len(frame.columns)} columns)",
+          file=sys.stderr)
+
+
 if __name__ == "__main__":
     cx = build()
     # A diagnostic to stderr; the queries table on stdout is the deliverable (a result,
@@ -1074,3 +1139,4 @@ if __name__ == "__main__":
     if "--queries" in sys.argv:
         print_queries(cx)
     cx.close()
+    write_flat_csv()

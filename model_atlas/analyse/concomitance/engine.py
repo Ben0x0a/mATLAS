@@ -125,8 +125,13 @@ loudly on the unconditional form.
 
 Presence exclusion (the worked examples' Q3/Q4 split)
 -----------------------------------------------------
-"Who was together" is a PRESENCE question, and it is now ONE predicate on ONE column:
-``spatial_link``, filtered by the non-presence members of ``SpatialLink.is_presence``.
+DISABLED (decision 55). "Who was together" is a PRESENCE question, and its predicate read
+the retired ``SpatialLink.is_presence`` (``at`` / ``within`` / ``near``). Under decision 55
+presence derives from all three links (the entity's role, what the observation does with the
+position, the temporal quantifier with its negation), and that predicate is not designed
+yet. Until it is, ``find_concomitant`` raises ``NotImplementedError`` rather than return
+matches built on a predicate that no longer exists. The history below is kept for the
+redesign.
 
 This used to take three tokens across two enums — ``entity_position_link = 'references'``
 plus ``never_during_interval`` on EITHER the entity-time or the spatial-temporal edge —
@@ -185,6 +190,7 @@ from model_atlas.analyse.concomitance.request import (
     MatchMode,
 )
 from model_atlas.analyse.helpers import CriterionKind, FROM_JOINS
+from model_atlas.core.local_time import render_local
 from model_atlas.core import vocabularies as V
 from model_atlas.integrate.spatial import s2_cell_to_stored
 
@@ -209,11 +215,11 @@ DEFAULT_MAX_CELLS = 8
 _S2_MIN_LEVEL = 0
 _S2_MAX_LEVEL = 30
 
-# --- the presence-exclusion tokens (from the vocabularies, never re-typed) ---
-# The tokens that are NOT presence, derived from the ONE predicate rather than listed by
-# hand — so a new SpatialLink member cannot silently start counting as presence.
-_NON_PRESENCE_TOKENS: tuple[str, ...] = tuple(
-    link.value for link in V.SpatialLink if not link.is_presence)
+# --- the presence-exclusion tokens ---
+# EMPTY while the engine is disabled (decision 55): the old derivation read
+# ``SpatialLink.is_presence``, which no longer exists. ``find_concomitant`` refuses to run,
+# so nothing executes the SQL built from this.
+_NON_PRESENCE_TOKENS: tuple[str, ...] = ()
 
 # Which vocabulary validates which criterion kind. An identifier is free text by
 # nature and stays unvalidated; the two token kinds must be checked (see _tokens).
@@ -411,7 +417,7 @@ class _Candidate:
     upper_us: int
     lower_accuracy_us: int
     upper_accuracy_us: int
-    time_start: str | None
+    time_start: str | None      # rendered by core.local_time, never a stored column
     time_end: str | None
     source: str | None
 
@@ -441,7 +447,7 @@ _CANDIDATE_COLUMNS = (
     " si.latitude_wgs84, si.longitude_wgs84, si.horizontal_accuracy_m,"
     " ti.lower_unix_utc_us, ti.upper_unix_utc_us,"
     " ti.lower_accuracy_us, ti.upper_accuracy_us,"
-    " ti.lower_datetime_iso, ti.upper_datetime_iso, a.source_label"
+    " ti.offset_to_local_hours_lower, ti.offset_to_local_hours_upper, a.source_label"
 )
 
 
@@ -505,7 +511,7 @@ def _load_candidates(connection: sqlite3.Connection,
     candidates: dict[str, _Candidate] = {}
     for (observation_id, identifier, identifier_type, entity_type,
          latitude, longitude, accuracy_m, lower_us, upper_us,
-         lower_acc_us, upper_acc_us, time_start, time_end, source) in rows:
+         lower_acc_us, upper_acc_us, off_lower, off_upper, source) in rows:
         candidates[observation_id] = _Candidate(
             observation_id=observation_id,
             identifier=identifier, identifier_type=identifier_type,
@@ -516,7 +522,11 @@ def _load_candidates(connection: sqlite3.Connection,
             # value (documented in the module docstring).
             lower_accuracy_us=lower_acc_us or 0,
             upper_accuracy_us=upper_acc_us or 0,
-            time_start=time_start, time_end=time_end, source=source)
+            # The displayed times are RENDERED here, not read from a stored ISO column:
+            # the case stores only the canonical UTC µs and the offset to local, so a report
+            # always shows the zone configured for THIS run rather than one frozen at ingest.
+            time_start=render_local(lower_us, off_lower),
+            time_end=render_local(upper_us, off_upper), source=source)
     return candidates
 
 
@@ -691,7 +701,15 @@ def find_concomitant(
     anchor. On cancel the loop stops and a ``RunSummary`` with ``cancelled=True`` and
     the partial count is returned — a forensic tool never discards completed work
     silently.
+
+    DISABLED (decision 55): raises ``NotImplementedError`` until the presence predicate is
+    redesigned over the new links — see the module docstring.
     """
+    # Refuse rather than run: matching on a presence predicate that no longer exists would
+    # produce co-location findings the links do not support.
+    raise NotImplementedError(
+        "concomitance is disabled until its presence predicate is redesigned for the "
+        "decision-55 links")
     # Invariant guards: a negative threshold or window has no geometric/temporal
     # meaning — proceeding would silently return an empty result that reads as
     # 'nothing found' rather than 'you asked an impossible question'.

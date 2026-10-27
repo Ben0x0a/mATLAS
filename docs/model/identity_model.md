@@ -77,7 +77,7 @@ exists because auditability requires exactly the property we lost.
 is addressed by the hash of its content, and two identical files share one blob — that is
 correct deduplication of *content*. But the *tree entry* records each path the file appears
 at, so Git never forgets that a file exists in two places. Our bug was deduplicating the
-tree entry, not just the blob. `content_hash` is our blob id; `observation_id` is our tree
+tree entry, not just the blob. `observation_content_hash` is our blob id; `observation_id` is our tree
 entry.
 
 **W3C PROV-O.** The traceability sidecar already speaks PROV. `run` is a PROV `Activity`,
@@ -105,23 +105,25 @@ hash, keep it queryable, and never let it be the key.
 | Table | Key | Kind | Scoped by / derived from |
 | --- | --- | --- | --- |
 | `run` | `run_id` | occurrence | this execution (`started_at` + input path) |
-| `source` | `source_id` | occurrence | **outer artefact** + inner path + subunit + preset |
-| `source_record` | `source_record_id` | occurrence | `source_id` + `line_no` |
-| `observation` | `observation_id` | occurrence | `source_record_id` + `output_ordinal` |
-| `entity` | `entity_id` | occurrence | observation natural key + **role tag** (`targeted` \| `bearer`) |
+| `source_file` | `source_file_id` | **random** | uuid4; the natural key lives in the UNIQUE (run_id, input_file_path, inner_path, subunit) |
+| `raw_record` | `raw_record_id` | **random** | uuid4; natural key UNIQUE(source_file_id, line_no) |
+| `observation` | `observation_id` | **random** | uuid4; NO natural key — several observations per (record, preset) are legal (decision 50) |
+| `entity` | `entity_id` | **random** | uuid4; the targeted/bearer distinction is the FK it sits on, not a key part |
 | `position` | `position_id` | occurrence | its own reading (owned via `observation.position_id UNIQUE`) |
 | `timespan` | `timespan_id` | occurrence | its own reading (owned via `observation.timespan_id UNIQUE`) |
 
 ### The observation is a pure link
 
 `observation` carries no measurements of its own. It takes one `entity`, one `position`, one
-`timespan`, one `source_record`, and records only the *metadata of the statement*: the three
-corner links (`entity_link`, `spatial_link`, `occupancy`), the statement-level `attestation`,
-`attribution_origin`, `deleted`, and the untangle ranks. The corners hang **off** the
-observation by foreign key.
+`timespan`, one `source_record`, and records only the *metadata of the statement*: one link
+per arm (`entity_link`, `spatial_link`, `temporal_link` — decision 55; the source link is the
+record chain itself), `attribution_origin`, `deleted`, and the untangle ranks. The corners
+hang **off** the observation by foreign key. The links feed **neither digest**: they are the
+preset author's statement about a record, not its content.
 
 **Two entity FKs, and neither is a content key.** An observation owns a *targeted* entity
-(`entity_id`) and, unless `entity_link = self`, a *position bearer* (`bearer_entity_id`).
+(`entity_id`) and a *position bearer* (`bearer_entity_id`): the entity itself for
+`entity_link = subject`, a second row for `party`, none for `unknown`.
 Both are per-observation occurrence rows: the same antenna appearing in 500 CDR rows is 500
 entity rows, never one shared row. The id therefore takes a **role tag** as the last part of
 its natural key — `uuid5(observation natural key ⟂ 'targeted' | 'bearer')` — because without
@@ -147,7 +149,7 @@ the same row even when their numbers match.
 
 Two further consequences worth stating plainly.
 
-`source_id` now includes the outermost artefact opened. Two zips holding a byte-identical
+`source_file_id` now includes the outermost artefact opened. Two zips holding a byte-identical
 database therefore produce **two** source rows, both recorded, both with their own
 `input_file_path` and `container_chain`. They share a `fingerprint_sha256`, which is how an
 examiner discovers they are the same evidence.
@@ -159,20 +161,20 @@ examiner discovers they are the same evidence.
 
 ## Where the portable digest lives
 
-`observation.content_hash` is the path-independent content address — today's `row_uid`
+`observation.observation_content_hash` is the path-independent content address — today's `row_uid`
 derivation, unchanged, demoted from key to column and indexed. It buys back every property
 the old scheme had, without the collision:
 
 ```sql
--- folder == zip parity: the same evidence yields the same content_hash
-SELECT content_hash FROM observation WHERE observation_id = ?;
+-- folder == zip parity: the same evidence yields the same observation_content_hash
+SELECT observation_content_hash FROM observation WHERE observation_id = ?;
 
 -- duplicate evidence becomes a finding, not a silent drop
-SELECT content_hash, COUNT(*) AS copies, GROUP_CONCAT(DISTINCT s.input_file_path)
+SELECT observation_content_hash, COUNT(*) AS copies, GROUP_CONCAT(DISTINCT s.input_file_path)
 FROM observation a
 JOIN source_record r ON r.source_record_id = a.source_record_id
-JOIN source s ON s.source_id = r.source_id
-GROUP BY content_hash HAVING copies > 1;
+JOIN source s ON s.source_file_id = r.source_file_id
+GROUP BY observation_content_hash HAVING copies > 1;
 
 -- the same source file acquired twice
 SELECT fingerprint_sha256, COUNT(*) FROM source
@@ -190,7 +192,7 @@ repo's existing unit-suffix habit:
 | Suffix | Meaning | Example |
 | --- | --- | --- |
 | `_id` | opaque surrogate occurrence key (uuid5) | `observation_id` |
-| `_hash` | content address; equal ⇒ equal content | `content_hash` |
+| `_hash` | content address; equal ⇒ equal content | `observation_content_hash` |
 | `_sha256` | a named hash algorithm over file bytes | `fingerprint_sha256` |
 | `_at` | ISO-8601 UTC instant | `started_at` |
 | `_count` | a cardinality | `record_count` |
@@ -198,7 +200,7 @@ repo's existing unit-suffix habit:
 | `_source_field` | which source column a value came from | `latitude_source_field` |
 
 A reader who sees `entity_id` knows it is opaque and joins somewhere. A reader who sees
-`content_hash` knows it may legitimately repeat. That is the whole point of the convention.
+`observation_content_hash` knows it may legitimately repeat. That is the whole point of the convention.
 
 ## Resilience
 
@@ -208,8 +210,8 @@ The schema is designed to fail loudly rather than lose data.
   duplicate insert anywhere else is a bug and must raise, not silently vanish. This is the
   single change that would have surfaced the original defect immediately.
 - **`UNIQUE` constraints on the natural keys** — `source(run_id, input_file_path,
-  raw_source_path, subunit, preset_id)`, `source_record(source_id, line_no)`,
-  `observation(source_record_id, output_ordinal)`, and `observation(position_id)` /
+  inner_path, subunit)`, `raw_record(source_file_id, line_no)`, and
+  `observation(position_id)` /
   `observation(timespan_id)` (the corner-ownership guard). The surrogate key is unique by
   construction; the natural key is unique by constraint. If the derivation ever drifts, the
   database says so.
@@ -217,23 +219,24 @@ The schema is designed to fail loudly rather than lose data.
   orphaned corner row is a corrupt record.
 - **`CHECK` constraints from the controlled vocabularies** in `model_atlas.core.vocabularies`,
   allowing `NULL` wherever the model allows it today.
-- **Indices** on `observation.content_hash` and `source.fingerprint_sha256`, so the duplicate
+- **Indices** on `observation.observation_content_hash` and `source_file.fingerprint_sha256`, so the duplicate
   queries above are cheap on a large run.
 
 ## Consequences for the flat output
 
 `row_uid` in the CSV becomes the occurrence key (`observation.observation_id`) — unique per
-output row, which is what the name always promised. A new `content_uid` column carries
-`observation.content_hash`, the portable digest.
+output row, which is what the name always promised. A new `observation_content_uid` column carries
+`observation.observation_content_hash`, the portable digest.
 
 This **intentionally changes `row_uid` values and adds a column**, so the golden CSVs are
 regenerated once, deliberately, and reviewed. Byte-parity with the pre-refactor output is
 retired as an oracle at this point; the parity that remains meaningful is that the same
-evidence read from a folder or a zip yields the same `content_uid`, which the folder==zip
+evidence read from a folder or a zip yields the same `observation_content_uid`, which the folder==zip
 test now asserts directly.
 
-`utc_offset_hours_lower` / `_upper` remain `TEXT`: each legitimately holds a float, `NULL`,
-or the `"N/A"` sentinel (`UTC_OFFSET_UNKNOWN`), and is re-coerced to a numeric dtype in the
+`offset_to_local_hours_lower` / `_upper` remain `TEXT`: each legitimately holds a float, `NULL`,
+or the `"N/A"` sentinel (`LOCAL_OFFSET_UNKNOWN`, meaning no local zone is configured), and
+is re-coerced to a numeric dtype in the
 frame builder (unless the sentinel is present) so CSV rendering is unchanged. The per-bound
 `lower_accuracy_us` / `upper_accuracy_us` are plain `INTEGER` (whole µs), read back as
 nullable `Int64`.

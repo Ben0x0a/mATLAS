@@ -104,8 +104,8 @@ def build_traceability_prov(
     if output_csv is not None:
         entities[output_id] = {"prov:label": str(output_csv), "matlas:type": "integration_model_csv"}
     for index, source in enumerate(sources):
-        source_id = f"matlas:source/{index}"
-        entities[source_id] = {
+        source_file_id = f"matlas:source/{index}"
+        entities[source_file_id] = {
             "prov:label": source.get("source_file"),
             "matlas:raw_source_path": source.get("raw_source_path"),
             "matlas:input_file_path": source.get("input_file_path"),
@@ -119,9 +119,9 @@ def build_traceability_prov(
             "matlas:preset": source.get("matched_preset"),
             "matlas:source_tier": source.get("source_tier"),
         }
-        used[f"matlas:_u{index}"] = {"prov:activity": "matlas:run", "prov:entity": source_id}
+        used[f"matlas:_u{index}"] = {"prov:activity": "matlas:run", "prov:entity": source_file_id}
         if output_csv is not None:
-            derived[f"matlas:_d{index}"] = {"prov:generatedEntity": output_id, "prov:usedEntity": source_id}
+            derived[f"matlas:_d{index}"] = {"prov:generatedEntity": output_id, "prov:usedEntity": source_file_id}
     return {
         "prefix": {"matlas": "https://github.com/model-atlas/ns#", "prov": "http://www.w3.org/ns/prov#"},
         "entity": entities,

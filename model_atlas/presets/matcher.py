@@ -5,11 +5,11 @@ Defines:    locate_candidates (the content-free stage: path/name pre-filter -> t
             returning matches + unsatisfied units) and resolve_force_selector (force-preset
             in-file sub-unit resolution).
 Used by:    the app-layer pipeline (``model_atlas.app.pipeline``).
-Depends on: ingest (SourceFile, pathmatch, format_detect, readers.xml_reader for the
+Depends on: ingest (DiscoveredFile, pathmatch, format_detect, readers.xml_reader for the
             namespace sniff), presets.spec, presets.fields (field_refs / make_resolver /
             required_fields / structural_score).
 
-Iteration is per file: each SourceFile is matched independently, so a selector that fans
+Iteration is per file: each DiscoveredFile is matched independently, so a selector that fans
 out (a ``name`` present in many folders, or a ``{uuid}`` path) applies the preset to each
 matching file. Same-role selectors are OR alternatives; the first to match supplies the
 reader params.
@@ -25,7 +25,7 @@ import logging
 import zipfile
 from typing import Callable
 
-from model_atlas.ingest.containers import SourceFile
+from model_atlas.ingest.containers import DiscoveredFile
 from model_atlas.ingest.format_detect import detect_source_format
 from model_atlas.ingest.pathmatch import name_matches, path_matches
 from model_atlas.presets.fields import (
@@ -38,17 +38,17 @@ from model_atlas.presets.spec import InputSelector, PresetSpec
 
 log = logging.getLogger(__name__)
 
-PeekFn = Callable[[SourceFile, InputSelector], "set[str] | None"]
+PeekFn = Callable[[DiscoveredFile, InputSelector], "set[str] | None"]
 # Force-mode sub-unit listing: the in-file units (tables / sheets / model types) of one
 # file, dispatched by the selector's format. Injected for the same reason as PeekFn.
-SubtablesFn = Callable[[SourceFile, InputSelector], "list[str]"]
+SubtablesFn = Callable[[DiscoveredFile, InputSelector], "list[str]"]
 
 # ``locate_candidates(detected=...)`` sentinel: None is a MEANINGFUL detected format
 # (an unrecognised file), so it cannot double as "not supplied — sniff it yourself".
 _UNDETECTED = "\x00undetected"
 
 
-def _file_namespace(file: SourceFile) -> str | None:
+def _file_namespace(file: DiscoveredFile) -> str | None:
     """Sniff the XML root namespace (the dialect discriminator) from the file's head."""
     from model_atlas.ingest.readers.xml_reader import sniff_namespace
 
@@ -61,7 +61,7 @@ def _file_namespace(file: SourceFile) -> str | None:
     return sniff_namespace(head)
 
 
-def _selector_location_matches(selector: InputSelector, file: SourceFile, root_prefix_depth: int) -> bool:
+def _selector_location_matches(selector: InputSelector, file: DiscoveredFile, root_prefix_depth: int) -> bool:
     if selector.name is not None:
         return name_matches(selector.name, file.logical_path)
     if selector.path is not None:
@@ -84,7 +84,7 @@ def _subunit_key(selector: InputSelector) -> tuple:
 
 
 def _tie_break(
-    group: list[tuple[PresetSpec, InputSelector]], file: SourceFile, peek: PeekFn | None
+    group: list[tuple[PresetSpec, InputSelector]], file: DiscoveredFile, peek: PeekFn | None
 ) -> tuple[PresetSpec, InputSelector]:
     """Pick the best (preset, selector) for one sub-unit by structural field fit."""
     if len(group) == 1 or peek is None:
@@ -103,7 +103,7 @@ def _tie_break(
 
 
 def _missing_required(
-    preset: PresetSpec, file: SourceFile, selector: InputSelector, peek: PeekFn | None
+    preset: PresetSpec, file: DiscoveredFile, selector: InputSelector, peek: PeekFn | None
 ) -> set[str]:
     """Required fields the preset maps that are absent from the source (empty if it fits).
 
@@ -124,7 +124,7 @@ def _missing_required(
 
 
 def locate_candidates(
-    file: SourceFile,
+    file: DiscoveredFile,
     presets: list[PresetSpec],
     *,
     root_prefix_depth: int = 1,
@@ -196,13 +196,13 @@ def locate_candidates(
 
 
 def match_files_detailed(
-    file: SourceFile,
+    file: DiscoveredFile,
     presets: list[PresetSpec],
     *,
     root_prefix_depth: int = 1,
     peek: PeekFn | None = None,
 ) -> tuple[list[tuple[PresetSpec, InputSelector]], list[tuple[PresetSpec, InputSelector, set[str]]]]:
-    """Match a SourceFile, returning (matches, unsatisfied).
+    """Match a DiscoveredFile, returning (matches, unsatisfied).
 
     1. Location pre-filter (name or path); 2. type/namespace guard; 3. applicability gate — a
     preset only matches if ALL its REQUIRED (mapped, non-optional) fields are present;
@@ -242,7 +242,7 @@ def match_files_detailed(
 
 
 def resolve_force_selector(
-    file: SourceFile,
+    file: DiscoveredFile,
     preset: PresetSpec,
     detected: str | None,
     *,

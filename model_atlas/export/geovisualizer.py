@@ -25,8 +25,8 @@ instant (lower == upper, or only one bound present) or TWO for a genuine interva
 
 What changed from the old exporter (relational-model column split)
 ----------------------------------------------------------------------
-The old flat model carried ONE ``utc_offset_hours`` column shared by both bounds; the
-relational model splits it into ``utc_offset_hours_lower`` / ``_upper``, so each
+The old flat model carried ONE ``offset_to_local_hours`` column shared by both bounds; the
+relational model splits it into ``offset_to_local_hours_lower`` / ``_upper``, so each
 emitted GeoVisualizer row now localises with, and warns on, ITS OWN bound's offset —
 strictly more correct than the old single-offset check (a row for the upper bound
 could previously report "offset known" while actually using the lower bound's value).
@@ -143,7 +143,7 @@ _DESCRIPTION_SEPARATOR = " | "
 
 
 def _time_emissions(row: dict) -> "list[tuple[Any, Any, Any, str | None]]":
-    """The (timestamp_us, source_field, utc_offset_hours, bound) tuples this projected
+    """The (timestamp_us, source_field, offset_to_local_hours, bound) tuples this projected
     row expands into.
 
     An instant (lower == upper, or only one bound present) yields ONE tuple with
@@ -154,7 +154,7 @@ def _time_emissions(row: dict) -> "list[tuple[Any, Any, Any, str | None]]":
     """
     lower_us, upper_us = row.get("time_lower_unix_utc_us"), row.get("time_upper_unix_utc_us")
     lower_field, upper_field = row.get("time_lower_source_field"), row.get("time_upper_source_field")
-    lower_offset, upper_offset = row.get("utc_offset_hours_lower"), row.get("utc_offset_hours_upper")
+    lower_offset, upper_offset = row.get("offset_to_local_hours_lower"), row.get("offset_to_local_hours_upper")
     lower_ok, upper_ok = not is_blank(lower_us), not is_blank(upper_us)
     if lower_ok and upper_ok:
         try:
@@ -242,7 +242,7 @@ class GeovisualizerExporter:
             # IMEI, ...) are shared by both.
             for timestamp_us, timestamp_field, offset_hours, bound in _time_emissions(row):
                 rows.append({
-                    "Target": clean(row.get("concerns")) or "",
+                    "Target": clean(row.get("entity")) or clean(row.get("raw_identifier")) or "",
                     "MSISDN": "",
                     "IMEI": _pick_imei(row.get("entity")),
                     "Timestamp (local)": _local_timestamp(timestamp_us, offset_hours),
@@ -254,7 +254,7 @@ class GeovisualizerExporter:
                     "Description": _geovis_description(row, timestamp_field, offset_hours, bound),
                     "Source": _geovis_source(row),
                     "orig. Time": "",
-                    "Type": clean(row.get("preset_name")) or "",   # preset name (should always be present)
+                    "Type": clean(row.get("preset_name_matlas")) or "",   # preset name (should always be present)
                     "Confidence": "",                    # reserved for the observation link (later)
                     "Precision": _num_or_blank(row.get("horizontal_accuracy_m")),
                 })

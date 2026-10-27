@@ -11,7 +11,7 @@ Design:
   format (same as pyproject.toml), no new dependency.
 - A single ``./matlas_config.toml`` (CWD). **Missing is not an error** — built-in defaults
   are used so library/package use just works; only an INFO line notes it. A missing
-  ``local_zone`` means the source's local zone is unknown -> ``utc_offset_hours`` is null.
+  ``local_zone`` means the source's local zone is unknown -> ``offset_to_local_hours`` is null.
 - A present-but-invalid value (a bad IANA zone, an unknown key) IS an error: a config typo
   must fail fast, never be silently ignored.
 - Security **safeguards** (zip-bomb guards) are deliberately NOT here; they stay as code
@@ -56,7 +56,7 @@ _DEFAULT_REDACT: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class TimezoneSettings:
-    # IANA name (e.g. "Europe/Paris"). None => unknown -> utc_offset_hours is null.
+    # IANA name (e.g. "Europe/Paris"). None => unknown -> offset_to_local_hours is null.
     local_zone: str | None = None
 
 
@@ -209,7 +209,7 @@ def load_settings(path: Path | None = None) -> Settings:
     config_path = Path(path) if path is not None else Path.cwd() / CONFIG_FILENAME
     if not config_path.is_file():
         log.info(
-            "No %s in %s; using built-in defaults (local timezone unknown -> utc_offset_hours null)",
+            "No %s in %s; using built-in defaults (local timezone unknown -> offset_to_local_hours null)",
             CONFIG_FILENAME, config_path.parent,
         )
         return Settings()

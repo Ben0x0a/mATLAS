@@ -71,7 +71,7 @@ class _NASentinel(str):
     or a template whose every placeholder was missing.
 
     It is a ``str`` subclass whose text is exactly ``N/A`` (the same spelling as the existing
-    ``UTC_OFFSET_UNKNOWN`` sentinel), chosen so it:
+    ``LOCAL_OFFSET_UNKNOWN`` sentinel), chosen so it:
     - STORES/SERIALISES as the plain TEXT ``N/A`` — SQLite-bindable, renders in the CSV, and
       ALWAYS distinguishable from None (the "field was never mapped" case, which is NULL);
     - keeps a distinct TYPE, so in-process resolution recognises it by IDENTITY

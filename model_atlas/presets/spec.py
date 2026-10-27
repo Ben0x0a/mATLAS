@@ -31,7 +31,7 @@ v3 layout (readable, examiner-first)::
       - position: {latitude: field(ZLATITUDE), longitude: field(ZLONGITUDE),
                    spatial_referential: const(epsg:4326)}
         time:     {instant: field(ZTIMESTAMP), epoch: cocoa, zone: UTC}
-        links:    {entity: self, spatial: at, temporal: once}
+        links:    {entity: subject, spatial: measured, temporal: at_least_once}
 
 A value is ONE explicit reference call (field/header/filename/param/const/format), an
 ``if / elif / else`` conditional chain over such calls, or a mapping
@@ -46,12 +46,12 @@ from pathlib import Path
 from typing import Any
 
 from model_atlas.core.vocabularies import (
+    PositionType,
     CANONICAL_UNIT,
-    ActivityRole,
-    Attestation,
     EntityLink,
-    Occupancy,
+    TemporalLink,
     RecordState,
+    RecoverySource,
     SourceTier,
     SpatialLink,
     unit_factor,
@@ -77,13 +77,8 @@ from model_atlas.presets.expr import (
 # them (e.g. AXIOM Source / Location) and the engine only fills a default when it does not.
 # Formerly derived from ``model.families.OUTPUT_COLUMNS``; with the flat model
 # retired, the preset language's target vocabulary is declared HERE, once. The extended L1
-# targets (activity_role, activity_kind, context.<key>, ...) that ingest.assemble consumes are
+# targets that ingest.assemble consumes are
 # admitted here too, so a real YAML preset can map them (not only the programmatic tests).
-
-# Keys under this prefix become entries in the activity's context object (one per party /
-# attribute the record mentions without positioning) — the key after the dot is free text,
-# so the assignable gate matches the PREFIX rather than a fixed name.
-CONTEXT_FIELD_PREFIX = "context."
 
 # The bareword a preset writes to STATE that it wants the engine-generated per-record UID —
 # ``source_record_uid: default``. It is not a reference call, so it is recognised before the
@@ -95,14 +90,14 @@ DEFAULT_RECORD_UID_TOKEN = "default"
 
 ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
     # entity
-    "entity", "entity_type", "concerns", "activity_role", "identifier_type",
+    "entity", "entity_type", "concerns", "identifier_type",
     "bearer_entity", "bearer_entity_type", "bearer_identifier_type",
     # temporal (assignable subset). time_accuracy_us_lower / _upper are the source-stated
     # per-bound timing uncertainties (µs) — the temporal analogue of the spatial corner's
     # accuracy, split per bound like temporal_part_lower/_upper: ingest.assemble writes each
     # as a verbatim `<side>_accuracy` component and integrate.temporal reads it through to
     # timespan_integration.<side>_accuracy_us, None when unmapped (never invented).
-    "utc_offset_hours", "temporal_source", "temporal_referential",
+    "stated_utc_offset", "temporal_source", "temporal_referential",
     "temporal_part_lower", "temporal_part_upper",
     "time_accuracy_us_lower", "time_accuracy_us_upper",
     # spatial. The two angle targets are DATUM-AGNOSTIC (``latitude`` / ``longitude`` — the
@@ -112,38 +107,42 @@ ASSIGNABLE_FIELDS: frozenset[str] = frozenset({
     "position_source", "horizontal_accuracy_m", "vertical_accuracy_m",
     "horizontal_speed_kmh", "vertical_speed_kmh", "horizontal_speed_accuracy_kmh",
     "vertical_speed_accuracy_kmh", "heading_deg", "heading_accuracy_deg",
-    "beam_azimuth_deg", "beam_width_deg", "spatial_referential",
+    "beam_azimuth_deg", "beam_width_deg", "spatial_referential", "position_type",
     # activity
-    "activity_kind", "multiplicity",
     # bindings
-    "entity_link", "spatial_link", "occupancy", "attestation", "recorded_at",
+    "entity_link", "spatial_link", "temporal_link",
     # provenance (assignable subset)
     "raw_source_path", "data_source", "input_record_id", "source_label", "source_tier",
-    "deleted",
+    # Only a SECONDARY preset may state these: they then hold what the TOOL's export
+    # reports. On a primary source our own parsing owns them and a mapping is ignored
+    # (assemble warns). They replaced the retired `deleted` field.
+    "recovery_state", "recovery_source",
 })
 
 
 def is_assignable(model_field: str) -> bool:
-    """Whether a preset may map ``model_field``: a listed target, or a ``context.<key>``
-    (whose free key names one entry of the activity context object)."""
-    return model_field in ASSIGNABLE_FIELDS or model_field.startswith(CONTEXT_FIELD_PREFIX)
+    """Whether a preset may map ``model_field``: it must be a listed target.
+
+    ``context.<key>`` was accepted until decision 51 removed activity; the antenna it
+    carried is the position bearer now, so there is no free-key escape hatch any more."""
+    return model_field in ASSIGNABLE_FIELDS
 
 # Fields whose constant value must belong to a controlled vocabulary.
 _ENUM_FIELDS: dict[str, frozenset[str]] = {
     "entity_link": frozenset(e.value for e in EntityLink),
     "spatial_link": frozenset(e.value for e in SpatialLink),
-    "occupancy": frozenset(e.value for e in Occupancy),
-    "attestation": frozenset(e.value for e in Attestation),
-    "activity_role": frozenset(e.value for e in ActivityRole),
+    "temporal_link": frozenset(e.value for e in TemporalLink),
+    "position_type": frozenset(e.value for e in PositionType),
     "source_tier": frozenset(e.value for e in SourceTier),
-    "deleted": frozenset(e.value for e in RecordState),
+    "recovery_state": frozenset(e.value for e in RecordState),
+    "recovery_source": frozenset(e.value for e in RecoverySource),
 }
 
-# The three `links:` keys map to these model columns — one per corner.
+# The three `links:` keys map to these model columns — one per arm (decision 55).
 LINK_FIELDS: dict[str, str] = {
     "entity": "entity_link",
     "spatial": "spatial_link",
-    "temporal": "occupancy",
+    "temporal": "temporal_link",
 }
 
 _TIME_STRUCTURAL_KEYS = frozenset({"instant", "interval", "epoch", "format", "zone"})
@@ -158,7 +157,7 @@ DURATION_BOUND_NAME = "duration_sec"
 
 # The CLOSED set of admitted top-level keys. WHY closed rather than "read what I know and
 # ignore the rest": an assignable field written at the top level instead of under ``common:``
-# (``input_record_id:``, ``context.antenna:``) parses as an unknown key and its whole mapping
+# (``input_record_id:``) parses as an unknown key and its whole mapping
 # is DROPPED — evidence silently lost, with no warning anywhere in the run. A misplaced key
 # must fail at load, where the author can still fix it.
 TOP_LEVEL_KEYS = frozenset({
@@ -290,7 +289,10 @@ class TimeSpec:
     upper: Ref
     epoch: str | None = None
     format: str | None = None
-    zone: FieldSpec | None = None   # const or header(...) -> utc_offset_hours, applied to parsing
+    # const or header(...) -> the `stated_utc_offset` field, i.e. what the SOURCE says its
+    # clocks mean. Applied to parsing, and stored verbatim as each bound's stated_offset.
+    # NOT the DB's offset_to_local_hours_*, which is derived from settings (decision 47).
+    zone: FieldSpec | None = None
     overrides: tuple[FieldSpec, ...] = ()  # other temporal model fields (accuracy, ...)
     # Optional per-bound substring selection (pattern_name, group) — e.g. pulling "14:00"
     # out of a free-text witness statement. A selection of verbatim source characters, so it
@@ -316,9 +318,10 @@ class TimeSpec:
 
 @dataclass(frozen=True)
 class Links:
-    """One link per corner: entity (the interaction), spatial (how close), temporal
-    (how much of the interval). The attribute names match the `links:` YAML keys, and
-    ``LINK_FIELDS`` maps each to its observation column."""
+    """One link per arm (decision 55): entity (its role), spatial (what the observation does
+    with the position), temporal (how the interval is referenced, negation included). The
+    attribute names match the `links:` YAML keys, and ``LINK_FIELDS`` maps each to its
+    observation column."""
 
     entity: str | None = None
     spatial: str | None = None
@@ -573,7 +576,7 @@ def _parse_time(raw: Any, path: Path, patterns: dict[str, str]) -> TimeSpec:
             unit_factor(str(duration.unit), DURATION_BOUND_NAME)   # raises on an unknown unit
             upper, upper_extract = duration.ref, duration.extract
             duration_unit = str(duration.unit)
-    zone = _parse_field("utc_offset_hours", raw["zone"], path, patterns) if "zone" in raw else None
+    zone = _parse_field("stated_utc_offset", raw["zone"], path, patterns) if "zone" in raw else None
     _validate_zone_const(zone, path)
     overrides = tuple(
         _parse_field(key, value, path, patterns)

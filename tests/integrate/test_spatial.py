@@ -23,7 +23,7 @@ from model_atlas.integrate.spatial import (
     S2_LEAF_LEVEL,
     CellRegisterLookup,
     GeocodeAddress,
-    GeocodePlaceName,
+    DecodeGridReference,
     PassthroughWgs84,
     SpatialExpressionInput,
     UnitConvert,
@@ -97,15 +97,17 @@ def test_close_points_share_low_level_ancestor_far_points_do_not() -> None:
 
 # --- L1 fixtures -------------------------------------------------------------
 
-def _write_expression(store: RunStore, tag: str, referential: str,
-                      parts: list[tuple[str, str | None]]) -> str:
+def _write_expression(store: RunStore, tag: str, referential: str | None,
+                      parts: list[tuple[str, str | None]],
+                      position_type: str = V.PositionType.COORDINATE.value) -> str:
     """Write one spatial_expression + its verbatim components; return its id."""
-    expression_id = ids.spatial_expression_id((f"record-{tag}", "preset-x", 0))
+    expression_id = ids.new_id()
     store.write_spatial_expression(V.SpatialExpression(
-        spatial_expression_id=expression_id, referential=referential))
+        spatial_expression_id=expression_id,
+        position_type=position_type, referential=referential))
     for ordinal, (part, raw_value) in enumerate(parts):
         store.write_spatial_component(V.SpatialComponent(
-            spatial_component_id=ids.spatial_component_id(expression_id, ordinal),
+            spatial_component_id=ids.new_id(),
             spatial_expression_id=expression_id,
             ordinal=ordinal,
             part=part,
@@ -156,7 +158,8 @@ def test_passthrough_and_unit_conversions_write_one_stamped_row() -> None:
         integration_id, method, lat, lon, alt, speed, heading = row
         # The stored method string names every applied rule, in method-set order.
         assert method == "passthrough_wgs84/1.0+unit_convert/1.0"
-        assert integration_id == ids.spatial_integration_id(expression_id, method)
+        assert integration_id            # random (decision 50); one row per expression
+                                         # is what UNIQUE(spatial_expression_id) enforces
         assert (lat, lon) == (46.2030, 6.1430)
         assert alt == pytest.approx(30.48)     # 100 ft * 0.3048
         assert speed == pytest.approx(36.0)    # 10 m/s * 3.6
@@ -171,15 +174,13 @@ def test_passthrough_and_unit_conversions_write_one_stamped_row() -> None:
 
 
 def test_unknown_source_unit_raises_loudly() -> None:
-    expression = SpatialExpressionInput(
-        "sx-test", "unknown", {"horizontal_speed_kmh": "10"})
+    expression = SpatialExpressionInput("sx-test", "unknown", {"horizontal_speed_kmh": "10"}, position_type="coordinate")
     with pytest.raises(ValueError):
         UnitConvert({"horizontal_speed_kmh": "furlong/fortnight"}).integrate(expression)
 
 
 def test_non_numeric_raw_value_raises_loudly() -> None:
-    expression = SpatialExpressionInput(
-        "sx-test", "epsg:4326", {"latitude": "pres de la gare"})
+    expression = SpatialExpressionInput("sx-test", "epsg:4326", {"latitude": "pres de la gare"}, position_type="coordinate")
     with pytest.raises(ValueError):
         PassthroughWgs84().integrate(expression)
 
@@ -188,8 +189,7 @@ def test_non_numeric_raw_value_raises_loudly() -> None:
 def test_non_finite_metric_raw_value_raises_not_bogus_magnitude(raw: str) -> None:
     # Some devices emit 'inf' for an unknown speed/accuracy: bare float() would parse it
     # and silently stamp horizontal_speed_kmh = inf as evidence. It must raise instead.
-    expression = SpatialExpressionInput(
-        "sx-test", "unknown", {"horizontal_speed_kmh": raw})
+    expression = SpatialExpressionInput("sx-test", "unknown", {"horizontal_speed_kmh": raw}, position_type="coordinate")
     with pytest.raises(ValueError):
         UnitConvert().integrate(expression)
 
@@ -198,8 +198,7 @@ def test_non_finite_metric_raw_value_raises_not_bogus_magnitude(raw: str) -> Non
 def test_non_finite_coordinate_raises_before_s2sphere(raw: str) -> None:
     # 'nan'/'inf' under a coordinate must raise the documented ValueError HERE, not crash
     # deep in s2sphere.from_lat_lng (an AssertionError that would abort the whole pass).
-    expression = SpatialExpressionInput(
-        "sx-test", "epsg:4326", {"latitude": raw, "longitude": "6.14"})
+    expression = SpatialExpressionInput("sx-test", "epsg:4326", {"latitude": raw, "longitude": "6.14"}, position_type="coordinate")
     with pytest.raises(ValueError):
         PassthroughWgs84().integrate(expression)
 
@@ -235,8 +234,9 @@ def test_every_integration_row_is_method_stamped() -> None:
 def test_no_coordinates_means_no_index_row() -> None:
     with RunStore() as store:
         # An address not yet geocoded: NO method applies -> no integration, no index.
-        _write_expression(store, "addr", "address",
-                          [("raw_position", "12 rue de la Gare, Geneve")])
+        _write_expression(store, "addr", None,
+                          [("raw_position", "12 rue de la Gare, Geneve")],
+                          position_type=V.PositionType.STREET_ADDRESS.value)
         # A metric-only expression: an integration WITHOUT coordinates -> no index.
         speed_expression = _write_expression(store, "speed", "unknown",
                                              [("vertical_speed_kmh", "12")])
@@ -258,18 +258,23 @@ def test_composer_returns_none_when_nothing_applies() -> None:
         expression, (PassthroughWgs84(), UnitConvert())) is None
 
 
-def test_stubs_recognise_their_referentials_but_refuse_to_integrate() -> None:
+def test_stubs_recognise_their_position_types_but_refuse_to_integrate() -> None:
+    """Dispatch is on the TYPE, not the referential — the point of the split.
+
+    A BSSID is a MAC address with no referential to match on, so a mechanism that dispatched
+    on the referential could never be added for it without inventing a fake one.
+    """
     cases = [
-        (GeocodeAddress(), "address"),
-        (GeocodePlaceName(), "place_name"),
-        (GeocodePlaceName(), "region"),
-        (CellRegisterLookup(), "cell_ref"),
+        (GeocodeAddress(), "street_address"),
+        (DecodeGridReference(), "grid_reference"),
+        (CellRegisterLookup(), "cell_id"),
     ]
-    for method, referential in cases:
-        expression = SpatialExpressionInput("sx-test", referential)
+    for method, position_type in cases:
+        expression = SpatialExpressionInput(
+            "sx-test", None, position_type=position_type)
         assert method.applies_to(expression)
-        assert not method.applies_to(
-            SpatialExpressionInput("sx-test", "epsg:4326"))
+        assert not method.applies_to(SpatialExpressionInput(
+            "sx-test", "epsg:4326", position_type="coordinate"))
         with pytest.raises(NotImplementedError):
             method.integrate(expression)
 
@@ -283,3 +288,85 @@ def test_duplicate_interpretable_part_raises() -> None:
         ])
         with pytest.raises(ValueError):
             integrate_spatial(store)
+
+
+# --- position_raw: the evidence behind a derived coordinate --------------------
+
+def test_position_raw_records_the_reprojection_inputs() -> None:
+    """A reprojection reads the two angle parts, so those are what it evidences."""
+    expression = SpatialExpressionInput(
+        spatial_expression_id="sx-repro", referential=V.SpatialReferential.EPSG_4326.value,
+        position_type=V.PositionType.COORDINATE.value,
+        part_values={"latitude": "46.193000", "longitude": "6.129000",
+                     "altitude_m": "375"},
+        part_source_fields={"latitude": "ZLATITUDE", "longitude": "ZLONGITUDE",
+                            "altitude_m": "ZALTITUDE"})
+    row = integrate_expression(
+        expression, [PassthroughWgs84(), UnitConvert()])
+    assert row.position_raw == "ZLATITUDE:46.193000 | ZLONGITUDE:6.129000"
+    # The altitude was converted in the same row but had NO part in producing the
+    # coordinate, so it is deliberately absent from the evidence.
+    assert "ZALTITUDE" not in row.position_raw
+
+
+def test_position_raw_follows_the_mechanism_not_the_angle_parts() -> None:
+    """The readiness guard for geocoding / cell / BSSID lookups.
+
+    ``position_raw`` is scoped to the information that ALLOWED the computation, not to the
+    latitude and longitude components — the two coincide only while reprojection is the
+    sole mechanism. A method producing the same two canonical columns from an ADDRESS must
+    evidence the address, with no change to the composer. If this test ever has to be
+    edited to make a new mechanism pass, the scope has silently narrowed back.
+    """
+    class _FakeGeocoder:
+        name, version = "geocode_address", "test"
+
+        def applies_to(self, expression):
+            return expression.position_type == V.PositionType.STREET_ADDRESS.value
+
+        def integrate(self, expression):
+            return {"latitude_wgs84": 46.2030, "longitude_wgs84": 6.1400}
+
+        def coordinate_inputs(self, expression):
+            return [p for p in ("raw_position",) if p in expression.part_values]
+
+    expression = SpatialExpressionInput(
+        spatial_expression_id="sx-geo", referential=None,
+        position_type=V.PositionType.STREET_ADDRESS.value,
+        part_values={"raw_position": "Rue du Stand 15, Geneve", "altitude_m": "375"},
+        part_source_fields={"raw_position": "ZSTREET", "altitude_m": "ZALTITUDE"})
+    row = integrate_expression(
+        expression, [_FakeGeocoder(), UnitConvert()])
+    assert row.latitude_wgs84 == 46.2030
+    assert row.position_raw == "ZSTREET:Rue du Stand 15, Geneve"
+
+
+def test_position_raw_absent_when_no_coordinate_was_produced() -> None:
+    """Metrics alone evidence nothing: position_raw exists to back a COORDINATE."""
+    expression = SpatialExpressionInput(
+        spatial_expression_id="sx-metrics", referential=V.SpatialReferential.UNKNOWN.value,
+        position_type=V.PositionType.COORDINATE.value,
+        part_values={"altitude_m": "375"}, part_source_fields={"altitude_m": "ZALTITUDE"})
+    row = integrate_expression(expression, [UnitConvert()])
+    assert row is not None and row.altitude_m == 375.0
+    assert row.position_raw is None
+
+
+def test_expression_input_refuses_a_fourth_positional_argument() -> None:
+    """A new field can never silently rebind ``part_values``.
+
+    The three-argument positional form is used throughout this file, so any field added
+    after ``part_values`` would, if it were positional, swallow the parts dict: the Method
+    would then see an expression with NO components and quietly produce nothing — turning
+    the "must raise" tests below into passes. That is a green suite hiding a broken guard,
+    and it happened twice before the fields were made keyword-only.
+
+    A comment cannot enforce an ordering constraint. This test pins the enforcement.
+    """
+    expression = SpatialExpressionInput("sx", "epsg:4326", {"latitude": "46.2"}, position_type="coordinate")
+    assert expression.part_values == {"latitude": "46.2"}
+    assert expression.part_source_fields == {}   # not rebound by the positional dict
+
+    with pytest.raises(TypeError):
+        SpatialExpressionInput(          # type: ignore[misc]
+            "sx", "epsg:4326", {"latitude": "46.2"}, {"latitude": "ZLATITUDE"})

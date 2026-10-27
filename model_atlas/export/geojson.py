@@ -15,8 +15,7 @@ The data access is ONE query — ``core.flat_view.build_flat_view``. Every canon
 except the two coordinates becomes a GeoJSON ``properties`` entry (a blank/NaN/NA cell
 becomes ``null``, matching the old exporter), so a GIS consumer sees the same
 attribute set the old exporter exposed (extended with the relational model's new
-canonical columns — the mandatory ``spatial_referential`` / ``locates`` / ``spatial_method`` /
-``temporal_method`` among them).
+canonical columns — the three ``*_link_matlas`` columns and the bearer block among them).
 
 Encoding — a documented DEVIATION from the old exporter
 -----------------------------------------------------------

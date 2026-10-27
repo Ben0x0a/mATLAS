@@ -10,7 +10,7 @@ gate the old engine until the switch task.
 
 Byte-parity with the pre-refactor CSV is retired (row_uid/source_record_uid values change
 by design — docs/csv_migration.md); the parity that remains is folder==zip -> equal
-content_uid / claim_digest, exercised here directly.
+observation_content_uid / spatiotemporal_entity_hash, exercised here directly.
 
 To intentionally update the new goldens after a reviewed change:
     MATLAS_REGEN_GOLDEN=1 .venv/bin/python -m pytest tests/export/test_csv_flat.py
@@ -23,8 +23,8 @@ Covers the Verify bullets:
     per-run orig_<col> tail;
   * one file per format: multiple presets land in the single CSV, the preset_id column
     separating their rows;
-  * a folder run and a zip run of the same evidence agree on content_uid (and
-    claim_digest).
+  * a folder run and a zip run of the same evidence agree on observation_content_uid (and
+    spatiotemporal_entity_hash).
 """
 from __future__ import annotations
 
@@ -63,10 +63,10 @@ def _export_merged(store: RunStore, out_dir: Path) -> Path:
 def _path_derived_placeholders(store: RunStore) -> dict[str, str]:
     """Map every id the run derived FROM the input path to a location-free placeholder.
 
-    WHY this exists at all: ``ids.source_id`` is uuid5(input_file_path ⟂ …) — by design
+    WHY this exists at all: ``ids.source_file_id`` is uuid5(input_file_path ⟂ …) — by design
     (§2c: from PATHS, never the fingerprint) — and the whole id chain hangs off it:
-    ``raw_record_id`` = uuid5(source_id ⟂ line_no), ``observation_id`` =
-    uuid5(raw_record_id ⟂ preset key ⟂ output_ordinal), ``activity_id`` =
+    ``raw_record_id`` = uuid5(source_file_id ⟂ line_no), ``observation_id`` =
+    a random uuid4 (decision 50), ``activity_id`` =
     uuid5(raw_record_id ⟂ ordinal). So running the SAME fixture from a git worktree, a
     second clone or a CI layout yields DIFFERENT uuids in ``source_record_uid`` /
     ``row_uid`` / ``activity_id``, and a golden that froze those uuids only reproduces at
@@ -74,54 +74,40 @@ def _path_derived_placeholders(store: RunStore) -> dict[str, str]:
     not enough: the path leaks into the CSV a second time, hashed.
 
     HOW: each id is looked up with its own NATURAL KEY — the location-free half of what
-    it was derived from (format, line_no, preset key, output_ordinal) — and mapped to a
+    it belongs to (format, line_no, preset key, insertion order) — and mapped to a
     placeholder spelling that key out. So the golden still pins the identity relation
     (this row IS line 2's observation for preset X), and still distinguishes every row; it
     just stops pinning the one machine-dependent rendering of it. Only these ids are
     replaced — never a blanket uuid-shaped regex, which would also blank the
-    content_uid/claim_digest the golden legitimately freezes (those are content-derived
+    observation_content_uid/spatiotemporal_entity_hash the golden legitimately freezes (those are content-derived
     and path-free — see test_folder_run_equals_zip_run_on_digests).
 
     The id is NOT changed at the source: it feeds record identity and reproducibility, so
     re-deriving it path-free would be an identity change with a real blast radius.
     """
     placeholders: dict[str, str] = {}
-    for row in _rows(store, "SELECT source_id, format FROM source ORDER BY format"):
-        placeholders[row["source_id"]] = f"<source_uid:{row['format']}>"
+    for row in _rows(store, "SELECT source_file_id, format FROM source_file ORDER BY format"):
+        placeholders[row["source_file_id"]] = f"<source_uid:{row['format']}>"
     for row in _rows(
         store,
         "SELECT r.raw_record_id, r.line_no, s.format FROM raw_record r "
-        "JOIN source s ON s.source_id = r.source_id ORDER BY s.format, r.line_no",
+        "JOIN source_file s ON s.source_file_id = r.source_file_id ORDER BY s.format, r.line_no",
     ):
         placeholders[row["raw_record_id"]] = (
             f"<record_uid:{row['format']}/{row['line_no']}>")
     for row in _rows(
         store,
-        "SELECT a.observation_id, a.output_ordinal, p.key, r.line_no, s.format "
+        "SELECT a.observation_id, a.rowid AS ord, p.key, r.line_no, s.format "
         "FROM observation a "
         "JOIN raw_record r ON r.raw_record_id = a.raw_record_id "
-        "JOIN source s ON s.source_id = r.source_id "
+        "JOIN source_file s ON s.source_file_id = r.source_file_id "
         "JOIN preset p ON p.preset_id = a.preset_id "
-        "ORDER BY s.format, r.line_no, p.key, a.output_ordinal",
+        "ORDER BY s.format, r.line_no, p.key, a.rowid",
     ):
         placeholders[row["observation_id"]] = (
             f"<row_uid:{row['format']}/{row['line_no']}/{row['key']}"
-            f"/{row['output_ordinal']}>")
-    # activity is a bonus grouping table (no ordinal column of its own), so an activity is
-    # keyed by its EARLIEST linked record plus a rank over its content — both location-free.
-    # The golden fixtures currently produce none; covering it keeps the invariant ("no
-    # path-derived id survives into the golden") true the day a preset does emit one.
-    for rank, row in enumerate(_rows(
-        store,
-        "SELECT ac.activity_id, MIN(s.format) AS format, MIN(r.line_no) AS line_no "
-        "FROM activity ac "
-        "JOIN activity_record ar ON ar.activity_id = ac.activity_id "
-        "JOIN raw_record r ON r.raw_record_id = ar.raw_record_id "
-        "JOIN source s ON s.source_id = r.source_id "
-        "GROUP BY ac.activity_id ORDER BY format, line_no, ac.kind, ac.context_json",
-    )):
-        placeholders[row["activity_id"]] = (
-            f"<activity_uid:{row['format']}/{row['line_no']}/{rank}>")
+            f"/{row['ord']}>")
+    # No activity placeholder: nothing writes the table (decision 51).
     return placeholders
 
 
@@ -202,21 +188,18 @@ def test_mandatory_r6_columns_present_and_distinguishing() -> None:
         run_relational_pipeline(
             store, _GOLDEN_SRC / "cached.csv", [spec], concerns=_CONCERNS)
         projected = build_flat_view(store.connection)
-    for column in ("spatial_referential", "is_presence", "spatial_method",
-                   "temporal_method"):
+    # spatial_referential / is_presence / the two method columns left the projection: the
+    # referential is already named in the integration column titles (`latitude_wgs84`) and
+    # the methods live in the run DB.
+    for column in ("entity_link_matlas", "spatial_link_matlas", "temporal_link_matlas"):
         assert column in projected.columns
     first = projected.iloc[0]
-    # A GNSS fix: WGS84 referential, a passthrough spatial method, a tz-localise temporal
-    # method, self-location — each concrete, so encodings/derivations stay distinguishable.
-    assert first["spatial_referential"] == "epsg:4326"
-    # A device's own GNSS cache: it holds its own position, so `self` leaves no bearer and
-    # the spatial link is a presence claim.
-    assert str(first["is_presence"]) == "True"
-    assert first["entity_link"] == "self"
-    # `self` holds its own position, so there is no bearer row and the column is empty.
-    assert first["bearer_entity"] in (None, "")
-    assert first["spatial_method"].startswith("passthrough_wgs84/")
-    assert first["temporal_method"].startswith("tz_localize/")
+    # A device's own GNSS cache: it is the `subject`, the position was `measured`.
+    assert first["spatial_link_matlas"] == "measured"
+    assert first["entity_link_matlas"] == "subject"
+    # The subject IS its own bearer (decision 55), so the bearer columns repeat the entity.
+    assert first["bearer_entity_type"] == first["entity_type"]
+
 
 
 # --- one file per format: every preset's rows in the single CSV ---------------
@@ -243,14 +226,14 @@ def test_multiple_presets_land_in_one_file(tmp_path: Path) -> None:
         assert sum(f'"{preset_key}"' in line for line in body) == 2
 
 
-# --- folder == zip -> equal content_uid / claim_digest -----------------------
+# --- folder == zip -> equal observation_content_uid / spatiotemporal_entity_hash -----------------------
 
 def _digest_pairs(input_path: Path, spec: PresetSpec) -> set[tuple[str, str]]:
     with RunStore() as store:
         run_relational_pipeline(store, input_path, [spec], concerns=_CONCERNS)
         return {
-            (row["content_hash"], row["claim_digest"])
-            for row in _rows(store, "SELECT content_hash, claim_digest FROM observation")
+            (row["observation_content_hash"], row["spatiotemporal_entity_hash"])
+            for row in _rows(store, "SELECT observation_content_hash, spatiotemporal_entity_hash FROM observation")
         }
 
 
@@ -271,6 +254,6 @@ def test_folder_run_equals_zip_run_on_digests(tmp_path: Path) -> None:
     folder_digests = _digest_pairs(folder, spec)
     zip_digests = _digest_pairs(zip_path, spec)
     # Two disclosures (a folder and a zip), but no path reaches a digest — so both the
-    # content_uid and the claim_digest of every observation agree (R5 same-evidence finding).
+    # observation_content_uid and the spatiotemporal_entity_hash of every observation agree (R5 same-evidence finding).
     assert len(folder_digests) == 2
     assert folder_digests == zip_digests

@@ -28,7 +28,7 @@ Design decisions
 * **Two walks, one read.** ``ingest_input`` owns the walk that READS evidence (it
   fingerprints, materialises and persists every file it opens — the rows it writes are
   preset-free: a source is *what was opened*). Matching then re-walks the SAME container
-  tree only to enumerate ``SourceFile``s for the path/name selectors; its column peeks are
+  tree only to enumerate ``DiscoveredFile``s for the path/name selectors; its column peeks are
   answered FROM THE STORE (the first raw_record's keys), so no source file is ever opened
   twice for reading.
 * **L0 opens what the presets can target.** Preset-free describes the ROWS, not the scope:
@@ -70,7 +70,7 @@ from model_atlas.export import traceability_path_for, warnings_path_for, write_j
 from model_atlas.export.csv_flat import ExportContext
 from model_atlas.export.registry import get_exporter, load_builtin_exporters, run_exporters
 from model_atlas.ingest.assemble import assemble_source
-from model_atlas.ingest.containers import SourceFile
+from model_atlas.ingest.containers import DiscoveredFile
 from model_atlas.ingest.discover import FileFound, walk
 from model_atlas.ingest.format_detect import detect_path_format, detect_source_format
 from model_atlas.ingest.readers.base import RawRecord
@@ -147,15 +147,15 @@ class ProcessResult:
 
 # --- small derivations shared across the run ---------------------------------
 
-def _file_identity(file: SourceFile) -> tuple[str, str | None]:
+def _file_identity(file: DiscoveredFile) -> tuple[str, str | None]:
     """The (input_file_path, inner_path) pair of one walked file — the SAME derivation
-    the L0 writer used, so ``ids.source_id`` re-derives the identical source row id."""
+    the L0 writer used, so it matches the source row's stored natural key."""
     input_file_path = canonical_path(str(opened_input_path(file).resolve()))
     inner_path = container_inner_path(file.inner_chain)
     return input_file_path, inner_path
 
 
-def _file_label(file: SourceFile) -> str:
+def _file_label(file: DiscoveredFile) -> str:
     """A human-readable locator for the matched/unmatched report lines: the
     chain-inclusive inner path for an archived file, the logical path otherwise."""
     chain = file.inner_chain
@@ -233,11 +233,16 @@ def _read_case_id(store: RunStore) -> str:
 def _preset_target_fn(specs: list[PresetSpec], root_prefix_depth: int) -> TargetFn:
     """The L0 target filter: which walked files the selected presets could possibly read.
 
-    HOW: run the matcher's content-free stage (location pre-filter + format/namespace guard)
+    HOW: run the matcher's pre-record stages (location pre-filter + format/namespace guard)
     over the file and keep the surviving selectors; a file with none is declined, and one with
     selectors is restricted to the sub-units they declare. A selector that names no sub-unit
     (``sql:``, or a whole-file format) widens the file back to every unit — the caller cannot
     know up front which table such a selector will touch.
+
+    The format is deliberately NOT passed in: ``locate_candidates`` sniffs it lazily, and only
+    once its content-free location test has kept at least one selector. So a file no selector's
+    path can reach is declined without a single byte being read — which on a full-filesystem
+    acquisition is the difference between opening a quarter of a million files and opening one.
 
     WHY the pre-filter is exactly the matcher's own first two steps: any file this declines
     would also have been declined at match time, so nothing that could produce an observation is
@@ -247,9 +252,9 @@ def _preset_target_fn(specs: list[PresetSpec], root_prefix_depth: int) -> Target
 
     ``warn=False``: the mismatch warnings belong to the real matching pass, which runs later
     over the same files; emitting them here too would double every line."""
-    def target(file: SourceFile, fmt: "str | None") -> "Target | None":
+    def target(file: DiscoveredFile) -> "Target | None":
         candidates = locate_candidates(
-            file, specs, root_prefix_depth=root_prefix_depth, detected=fmt, warn=False)
+            file, specs, root_prefix_depth=root_prefix_depth, warn=False)
         if not candidates:
             return None
         read_params = _agreed_read_params(candidates, file)
@@ -261,7 +266,7 @@ def _preset_target_fn(specs: list[PresetSpec], root_prefix_depth: int) -> Target
     return target
 
 
-def _agreed_read_params(candidates: list, file: SourceFile) -> dict:
+def _agreed_read_params(candidates: list, file: DiscoveredFile) -> dict:
     """The reader options the candidate selectors agree on — the file's declared dialect.
 
     HOW: collect each candidate selector's ``reader_params()`` and keep them only when every
@@ -281,20 +286,25 @@ def _agreed_read_params(candidates: list, file: SourceFile) -> dict:
     return {}
 
 
-def _store_peek_fn(store: RunStore) -> Callable[[SourceFile, InputSelector], "set[str] | None"]:
+def _store_peek_fn(store: RunStore) -> Callable[[DiscoveredFile, InputSelector], "set[str] | None"]:
     """A matcher ``peek`` answered from the run store: the first raw_record's keys.
 
     Returns None (— "cannot verify", which the matcher treats as no disqualification)
     for a ``sql:`` selector, a source ingest could not read, or an empty unit."""
-    def peek(file: SourceFile, selector: InputSelector) -> "set[str] | None":
+    def peek(file: DiscoveredFile, selector: InputSelector) -> "set[str] | None":
         if selector.sql:
             return None
         input_file_path, inner_path = _file_identity(file)
-        source_id = ids.source_id(input_file_path, inner_path, selector.subunit())
+        # Look the source row up by its NATURAL KEY. Re-deriving the id is no longer
+        # possible: evidence-chain ids are random (decision 50), so the only way back to a
+        # row written in an earlier pass is the key the schema already enforces UNIQUE.
         rows = _rows(
             store,
-            "SELECT raw_json FROM raw_record WHERE source_id = ? ORDER BY line_no LIMIT 1",
-            source_id,
+            "SELECT r.raw_json FROM raw_record r "
+            "JOIN source_file s ON s.source_file_id = r.source_file_id "
+            "WHERE s.input_file_path = ? AND s.inner_path IS ? AND s.subunit IS ? "
+            "ORDER BY r.line_no LIMIT 1",
+            input_file_path, inner_path, selector.subunit(),
         )
         if not rows:
             return None
@@ -303,14 +313,14 @@ def _store_peek_fn(store: RunStore) -> Callable[[SourceFile, InputSelector], "se
     return peek
 
 
-def _store_subtables_fn(store: RunStore) -> Callable[[SourceFile, InputSelector], "list[str]"]:
+def _store_subtables_fn(store: RunStore) -> Callable[[DiscoveredFile, InputSelector], "list[str]"]:
     """The matcher's force-mode sub-unit listing, answered from the run store: every
     persisted subunit of the file's source rows (tables / sheets / model types)."""
-    def subtables(file: SourceFile, selector: InputSelector) -> list[str]:
+    def subtables(file: DiscoveredFile, selector: InputSelector) -> list[str]:
         input_file_path, inner_path = _file_identity(file)
         rows = _rows(
             store,
-            "SELECT subunit FROM source WHERE input_file_path = ? AND inner_path IS ?",
+            "SELECT subunit FROM source_file WHERE input_file_path = ? AND inner_path IS ?",
             input_file_path, inner_path,
         )
         return [row["subunit"] for row in rows if row["subunit"] is not None]
@@ -353,7 +363,7 @@ def _integrate_temporal_for_preset(store: RunStore, spec: PresetSpec, local_zone
             expression=V.TemporalExpression(**expression),
             components=tuple(V.TemporalComponent(**component) for component in components),
         )
-        integrate_expression(store, bundle, methods)
+        integrate_expression(store, bundle, methods, local_zone=local_zone)
 
 
 # --- the run -----------------------------------------------------------------
@@ -497,9 +507,6 @@ def process(
                  if isinstance(event, FileFound)]
 
         sources_meta: list[dict[str, Any]] = []
-        # activity ids are record-scoped (preset-free), so ONE ordinal registry is
-        # shared across every assemble call of the run (assemble_source's contract).
-        activity_ordinals: dict[str, int] = {}
 
         for file in files:
             label = _file_label(file)
@@ -532,7 +539,6 @@ def process(
                     store, file, preset, selector, label,
                     run_id=ingest_report.run_id,
                     entity=entity, concerns=concerns,
-                    activity_ordinals=activity_ordinals,
                     warnings=warnings, matched=matched, unmatched=unmatched,
                     sources_meta=sources_meta,
                 ):
@@ -613,7 +619,7 @@ def process(
 
 def _assemble_match(
     store: RunStore,
-    file: SourceFile,
+    file: DiscoveredFile,
     preset: PresetSpec,
     selector: InputSelector,
     label: str,
@@ -621,7 +627,6 @@ def _assemble_match(
     run_id: str,
     entity: str | None,
     concerns: str | None,
-    activity_ordinals: dict[str, int],
     warnings: list[str],
     matched: list[str],
     unmatched: list[str],
@@ -644,11 +649,13 @@ def _assemble_match(
 
     input_file_path, inner_path = _file_identity(file)
     subunit = selector.subunit()
-    source_id = ids.source_id(input_file_path, inner_path, subunit)
+    # By natural key, not by re-derivation (decision 50) — UNIQUE(run_id, input_file_path,
+    # inner_path, subunit) is what makes this a single row.
     source_rows = _rows(
         store,
-        "SELECT source_id, run_id, fingerprint_sha256, record_count FROM source WHERE source_id = ?",
-        source_id,
+        "SELECT source_file_id, run_id, fingerprint_sha256, record_count FROM source_file "
+        "WHERE input_file_path = ? AND inner_path IS ? AND subunit IS ?",
+        input_file_path, inner_path, subunit,
     )
     if not source_rows:
         message = (f"{label}: matched {preset.name} but no ingested source unit "
@@ -659,6 +666,7 @@ def _assemble_match(
         return False
 
     source = source_rows[0]
+    source_file_id = source["source_file_id"]
     # APPEND idempotency: this source is already in the case from an EARLIER run (ingest
     # skipped re-writing it, so the row still carries the prior run_id). Its observations already
     # exist — re-assembling would collide — so skip it. Not an error and not a new match: the
@@ -667,48 +675,65 @@ def _assemble_match(
         log.info(f"{label}: {preset.name} — source already in the case; not re-assembled")
         return False
     records = [
-        RawRecord(line_no=row["line_no"], fields=json.loads(row["raw_json"]))
+        RawRecord(line_no=row["line_no"], fields=json.loads(row["raw_json"]),
+                  raw_record_id=row["raw_record_id"],
+                  recovery_state=row["recovery_state"],
+                  recovery_source=row["recovery_source"])
         for row in _rows(
             store,
-            "SELECT line_no, raw_json FROM raw_record WHERE source_id = ? ORDER BY line_no",
-            source_id,
+            "SELECT raw_record_id, line_no, raw_json, recovery_state, recovery_source "
+            "FROM raw_record WHERE source_file_id = ? ORDER BY line_no",
+            source_file_id,
         )
     ]
     matched.append(f"{label} -> {preset.name}")
 
     report = assemble_source(
         records, preset, store,
-        source_id=source_id,
+        source_file_id=source_file_id,
         fingerprint_sha256=source["fingerprint_sha256"],
         source_file_name=file.name,
         source_file_path=str(file.logical_path),
         selector=selector,
         entity=entity,
         concerns=concerns,
-        activity_ordinals=activity_ordinals,
     )
     warnings.extend(report.warnings)
-    # assemble only REPORTS the source-grain data_source; the L0 owner —
-    # this pipeline — sets it on the source row (digests are unaffected: data_source is
-    # source-grain, outside both digests, so folder==zip parity holds).
+    # assemble only REPORTS the source-grain reported_data_source; the L0 owner — this
+    # pipeline — sets it on the source row (digests are unaffected: it is source-grain,
+    # outside both digests, so folder==zip parity holds).
+    #
+    # PRIMARY sources are excluded, not merely expected to leave it unmapped. The column
+    # holds a path a SECONDARY tool REPORTS about the device it parsed — a second-hand
+    # claim we cannot check. On a primary acquisition we read the device ourselves, so
+    # ``input_file_path`` already IS the true location; letting a preset also write a
+    # reported path there would put an unverifiable claim beside a verified one under the
+    # same name. A preset that maps it on a primary source is telling us its tier is wrong.
     if report.data_source is not None:
-        store.connection.execute(
-            "UPDATE source SET data_source = ? WHERE source_id = ?",
-            (report.data_source, source_id),
-        )
+        if preset.source_tier == V.SourceTier.PRIMARY.value:
+            warnings.append(
+                f"{label}: preset {preset.name} maps a data source path on a PRIMARY "
+                f"acquisition; ignored — input_file_path is the verified location")
+        else:
+            store.connection.execute(
+                "UPDATE source_file SET reported_data_source = ? WHERE source_file_id = ?",
+                (report.data_source, source_file_id),
+            )
     # source_tier is declared by the preset (the author knows the source's nature), but the
     # L0 writer is preset-free and defaults it to 'primary'; now that a preset has matched,
     # write its tier back. Also source-grain, outside both digests — parity is unaffected.
     store.connection.execute(
-        "UPDATE source SET source_tier = ? WHERE source_id = ?",
-        (preset.source_tier, source_id),
+        "UPDATE source_file SET source_tier = ? WHERE source_file_id = ?",
+        (preset.source_tier, source_file_id),
     )
     log.info(f"{label}: {len(records)} source row(s) -> {report.observation_count} observation(s)")
 
     source_fields = list(records[0].fields.keys()) if records else []
     sources_meta.append({
         "source_file": file.name,
-        "raw_source_path": report.data_source or str(file.logical_path),
+        "raw_source_path": (report.data_source
+                            if preset.source_tier != V.SourceTier.PRIMARY.value
+                            else None) or str(file.logical_path),
         "input_file_path": input_file_path,
         "input_file_name": Path(input_file_path).name,
         "container_chain": file.zip_labels,

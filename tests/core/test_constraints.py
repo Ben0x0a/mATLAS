@@ -34,8 +34,8 @@ Row -> test map (sibling coverage in [brackets]):
         [test_store.py::test_operator_input_does_not_mutate_the_digest,
          test_ids.py::test_concerns_and_raw_identifier_are_excluded_by_construction]
  7 a context party silently vanishes
-     -> test_a_context_party_cannot_silently_vanish
-        [test_ids.py::test_changing_only_the_recipient_in_context_json_moves_both_digests]
+     -> RETIRED with decisions 51 and 55 (no context, no links in the projection); reopen
+        with activity
  8 an activity attaches to the wrong record
      -> test_an_activity_attaches_only_to_its_own_record            (primary home)
  9 a positionless claim vanishes from CSV
@@ -61,7 +61,7 @@ import sqlite3
 
 import pytest
 
-from model_atlas.core import ids
+from model_atlas.core import ids, schema
 from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore
 
@@ -73,7 +73,7 @@ _PRESET_KEY = "cdr_generic"
 def _seed(store: RunStore) -> tuple[str, str, str]:
     """case -> run -> preset(+link) -> source, in R20 order.
 
-    Returns (run_id, preset_id, source_id). Deliberately minimal: each test writes
+    Returns (run_id, preset_id, source_file_id). Deliberately minimal: each test writes
     only the rows its inventory row needs on top of this.
     """
     case_id = ids.case_metadata_id()
@@ -88,23 +88,22 @@ def _seed(store: RunStore) -> tuple[str, str, str]:
     store.write_run_preset(V.RunPreset(
         run_preset_id=ids.run_preset_id(run_id, preset_id),
         run_id=run_id, preset_id=preset_id))
-    source_id = ids.source_id("/case/f.csv", None, None)
-    store.write_source(V.Source(source_id=source_id, run_id=run_id,
+    source_file_id = ids.new_id()
+    store.write_source_file(V.SourceFile(source_file_id=source_file_id, run_id=run_id,
                                 input_file_path="/case/f.csv",
                                 fingerprint_sha256="fp"))
-    return run_id, preset_id, source_id
+    return run_id, preset_id, source_file_id
 
 
-def _record(store: RunStore, source_id: str, line_no: int) -> str:
-    rr_id = ids.raw_record_id(source_id, line_no)
-    store.write_raw_record(V.RawRecord(raw_record_id=rr_id, source_id=source_id,
+def _record(store: RunStore, source_file_id: str, line_no: int) -> str:
+    rr_id = ids.new_id()
+    store.write_raw_record(V.RawRecord(raw_record_id=rr_id, source_file_id=source_file_id,
                                        line_no=line_no, raw_json="{}"))
     return rr_id
 
 
 def _entity(store: RunStore, rr_id: str) -> str:
-    entity_id = ids.entity_id((rr_id, 0, None, V.IdentifierType.NONE,
-                               V.EntityType.DEVICE))
+    entity_id = ids.new_id()
     store.write_entity(V.Entity(entity_id=entity_id, identifier=None,
                                 raw_identifier=None,
                                 identifier_type=V.IdentifierType.NONE,
@@ -113,13 +112,12 @@ def _entity(store: RunStore, rr_id: str) -> str:
 
 
 def _observation(store: RunStore, rr_id: str, preset_id: str, entity_id: str, *,
-               content_hash: str = "ch", claim_digest: str = "cd",
+               observation_content_hash: str = "ch", spatiotemporal_entity_hash: str = "cd",
                spatial_expression_id: str | None = None) -> str:
-    observation_id = ids.observation_id(rr_id, _PRESET_KEY, 0)
+    observation_id = ids.new_id()
     store.write_observation(V.Observation(
-        observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id,
-        output_ordinal=0, entity_id=entity_id, content_hash=content_hash,
-        claim_digest=claim_digest, spatial_expression_id=spatial_expression_id))
+        observation_id=observation_id, raw_record_id=rr_id, preset_id=preset_id, entity_id=entity_id, observation_content_hash=observation_content_hash,
+        spatiotemporal_entity_hash=spatiotemporal_entity_hash, spatial_expression_id=spatial_expression_id))
     return observation_id
 
 
@@ -128,17 +126,17 @@ def _observation(store: RunStore, rr_id: str, preset_id: str, entity_id: str, *,
 def test_two_exhibits_never_collapse_into_one_source() -> None:
     """Row 1: two exhibits collapse into one source (§2c).
 
-    Angle here: the source IDENTITY is structurally path-only — ``ids.source_id``
-    accepts exactly the three path parts and NO fingerprint parameter, so two
-    byte-identical exhibits at two paths cannot derive one id even in principle.
-    Store backstop (same natural key raises):
+    Angle here: the source's NATURAL KEY is structurally path-only — the UNIQUE is over
+    (run_id, input_file_path, inner_path, subunit) and carries NO fingerprint, so two
+    byte-identical exhibits at two paths cannot collapse into one row even in principle.
+    Since decision 50 the id itself is random and carries no identity at all, so the
+    property is asserted where it lives: on the schema's uniqueness. Store backstop:
     test_store.py::test_two_exhibits_collapse_into_one_source_raises.
     """
-    assert list(inspect.signature(ids.source_id).parameters) == [
-        "input_file_path", "inner_path", "subunit"]
-    # Same bytes (same fingerprint, irrelevant to identity), two paths: two ids, always.
-    assert (ids.source_id("/case/exhibit_A/cache.sqlite", None, None)
-            != ids.source_id("/case/exhibit_B/cache.sqlite", None, None))
+    unique = next(spec["unique"] for spec in schema._table_specs()
+                  if spec["name"] == "source_file")
+    assert unique == [("run_id", "input_file_path", "inner_path", "subunit")]
+    assert not any("fingerprint" in "".join(cols) for cols in unique)
 
 
 # --- row 2 -------------------------------------------------------------------
@@ -147,20 +145,20 @@ def test_duplicate_evidence_surfaces_as_a_finding_never_a_merge() -> None:
     """Row 2: duplicate evidence drops an observation (§2a).
 
     Angle here: the digest is NEVER a key — two observations carrying the SAME
-    claim_digest both persist, and the duplicate SURFACES through the
+    spatiotemporal_entity_hash both persist, and the duplicate SURFACES through the
     ``possible_same_evidence`` finding view instead of merging. The natural-key raise
     is test_store.py::test_duplicate_evidence_drops_an_observation_raises.
     """
     with RunStore() as store:
-        _, preset_id, source_id = _seed(store)
+        _, preset_id, source_file_id = _seed(store)
         for line_no in (1, 2):
-            rr_id = _record(store, source_id, line_no)
+            rr_id = _record(store, source_file_id, line_no)
             _observation(store, rr_id, preset_id, _entity(store, rr_id),
-                       content_hash=f"ch-{line_no}", claim_digest="cd-same")
+                       observation_content_hash=f"ch-{line_no}", spatiotemporal_entity_hash="cd-same")
         assert store.connection.execute(
             "SELECT COUNT(*) FROM observation").fetchone()[0] == 2  # nothing dropped
         assert store.connection.execute(
-            "SELECT claim_digest, copies FROM possible_same_evidence"
+            "SELECT spatiotemporal_entity_hash, copies FROM possible_same_evidence"
         ).fetchall() == [("cd-same", 2)]                          # …and it surfaces
 
 
@@ -174,12 +172,13 @@ def test_two_observations_cannot_share_a_spatial_corner() -> None:
     test_store.py::test_two_observations_share_a_corner_or_entity_raises.
     """
     with RunStore() as store:
-        _, preset_id, source_id = _seed(store)
-        rr1 = _record(store, source_id, 1)
-        rr2 = _record(store, source_id, 2)
-        sx_id = ids.spatial_expression_id((rr1, 0))
+        _, preset_id, source_file_id = _seed(store)
+        rr1 = _record(store, source_file_id, 1)
+        rr2 = _record(store, source_file_id, 2)
+        sx_id = ids.new_id()
         store.write_spatial_expression(V.SpatialExpression(
             spatial_expression_id=sx_id,
+        position_type=V.PositionType.COORDINATE,
             referential=V.SpatialReferential.EPSG_4326))
         _observation(store, rr1, preset_id, _entity(store, rr1),
                    spatial_expression_id=sx_id)
@@ -200,8 +199,8 @@ def test_two_devices_never_become_one_entity() -> None:
     test_store.py::test_two_phones_become_one_entity_stays_distinct.
     """
     same_content = (None, V.IdentifierType.NONE, V.EntityType.DEVICE)
-    assert (ids.entity_id(("record-A", 0, *same_content))
-            != ids.entity_id(("record-B", 0, *same_content)))
+    assert (ids.new_id()
+            != ids.new_id())
 
 
 # --- row 5 -------------------------------------------------------------------
@@ -217,10 +216,10 @@ def test_register_upgrade_cannot_rewrite_evidence() -> None:
     digest invariance:
     test_ids.py::test_changing_an_integration_value_moves_neither_digest.
     """
-    assert (ids.spatial_integration_id("sx-1", "cell_register/2025-03")
-            != ids.spatial_integration_id("sx-1", "cell_register/2026-01"))
-    assert (ids.timespan_integration_id("tx-1", "tz_localize/2025a")
-            != ids.timespan_integration_id("tx-1", "tz_localize/2026a"))
+    assert (ids.new_id()
+            != ids.new_id())
+    assert (ids.new_id()
+            != ids.new_id())
     # The projection input carries the source's words ONLY — no method, no derived value.
     assert set(ids.SpatialProjection.__dataclass_fields__) == {
         "referential", "spatial_source", "components"}
@@ -240,122 +239,78 @@ def test_operator_input_cannot_reach_a_digest() -> None:
     checks: test_ids.py::test_concerns_and_raw_identifier_are_excluded_by_construction.
     """
     assert list(inspect.signature(ids.l1_projection).parameters) == [
-        "entity", "bearer", "spatial", "temporal", "links", "deleted", "multiplicity",
-        "activity"]
+        "entity", "bearer", "spatial", "temporal"]
     assert set(ids.EntityProjection.__dataclass_fields__) == {
         "identifier", "identifier_type", "type"}
-    assert set(ids.ObservationLinks.__dataclass_fields__) == {
-        "activity_role", "entity_link", "spatial_link", "occupancy", "attestation"}
 
 
 # --- row 7 -------------------------------------------------------------------
-
-def test_a_context_party_cannot_silently_vanish() -> None:
-    """Row 7: a context party silently vanishes.
-
-    Angle here: a party REMOVED from ``activity.context_json`` (not merely changed —
-    the changed-value case is test_ids.py::test_changing_only_the_recipient_in_
-    context_json_moves_both_digests) moves BOTH digests, so the vanishing is loud.
-    """
-    def _digests(recipients: list[str]) -> tuple[str, str]:
-        l1 = ids.l1_projection(
-            bearer=None,
-        entity=ids.EntityProjection("+41791234567", V.IdentifierType.MSISDN,
-                                        V.EntityType.DEVICE),
-            spatial=None, temporal=None,
-            links=ids.ObservationLinks(activity_role=V.ActivityRole.SENDER),
-            deleted=None, multiplicity=None,
-            activity=ids.ActivityProjection(V.ActivityKind.MESSAGE,
-                                            {"recipients": recipients}))
-        return ids.digests(fingerprint_sha256="fp", preset_key="im_generic",
-                           line_no=1, output_ordinal=0, l1=l1)
-
-    both = _digests(["+41761112233", "+41762223344"])
-    one = _digests(["+41761112233"])
-    assert both[0] != one[0]   # content_hash moves
-    assert both[1] != one[1]   # claim_digest moves
+# RETIRED. "A context party silently vanishes" guarded ``activity.context_json``, which
+# decision 51 removed: non-positional parties (a callee, a recipient) have no home until
+# activity is modelled, and decision 55 took the links out of the projection, so there is
+# no field left for this row to protect. Reopen it with activity.
 
 
 # --- row 8 -------------------------------------------------------------------
-
-def test_an_activity_attaches_only_to_its_own_record() -> None:
-    """Row 8: an activity attaches to the wrong record. (Primary home of this row.)
-
-    Two guards: the id derivation BINDS an activity to its record (a different record
-    derives a different activity id), and UNIQUE(activity_id, raw_record_id) rejects a
-    duplicated link row. The "ingest writes exactly one link, its own record" invariant
-    (R7) is an assembly-brick lint — enforced there, outside the store's reach.
-    """
-    assert ids.activity_id("record-A", 0) != ids.activity_id("record-B", 0)
-    with RunStore() as store:
-        _, _, source_id = _seed(store)
-        rr_id = _record(store, source_id, 1)
-        activity_id = ids.activity_id(rr_id, 0)
-        store.write_activity(V.Activity(activity_id=activity_id,
-                                        kind=V.ActivityKind.CALL))
-        store.write_activity_record(V.ActivityRecord(
-            activity_record_id=ids.activity_record_id(activity_id, rr_id),
-            activity_id=activity_id, raw_record_id=rr_id))
-        # A second link row for the SAME (activity, record) — a different surrogate id
-        # so the natural-key UNIQUE (not the PK) is what rejects it.
-        with pytest.raises(sqlite3.IntegrityError):
-            store.write_activity_record(V.ActivityRecord(
-                activity_record_id="a-second-surrogate",
-                activity_id=activity_id, raw_record_id=rr_id))
-
-
-# --- row 9 -------------------------------------------------------------------
 
 def test_a_positionless_claim_survives_projection() -> None:
     """Row 9: a positionless claim vanishes from CSV.
 
     Angle here: the digest pipeline — a claim with NO corner and NO activity still
-    projects (each missing block contributes exactly its one presence-flag slot: 12
-    slots joined by 11 separators) and yields both digests, so nothing upstream of the
+    projects (each missing block contributes exactly its one presence-flag slot: 6
+    slots joined by 5 separators) and yields both digests, so nothing upstream of the
     flat view can drop it. Store persistence (both corner FKs NULL, row kept):
     test_store.py::test_positionless_claim_persists.
     """
     l1 = ids.l1_projection(
         bearer=None,
         entity=ids.EntityProjection(None, V.IdentifierType.NONE, V.EntityType.PERSON),
-        spatial=None, temporal=None, links=ids.ObservationLinks(),
-        deleted=None, multiplicity=None, activity=None)
-    # 4 targeted-entity slots + 1 bearer flag + 1 spatial flag + 1 temporal flag
-    # + 6 links/attestation/deleted/multiplicity + 1 activity flag = 14 slots
-    # -> 13 separators. The bearer flag is what keeps an ABSENT bearer distinct from a
-    # present-but-empty one, so it is emitted even when there is no bearer.
-    assert l1.count(ids.SEP) == 13
-    content_hash, claim_digest = ids.digests(fingerprint_sha256="fp", preset_key="k",
-                                             line_no=1, output_ordinal=0, l1=l1)
-    for digest in (content_hash, claim_digest):
+        spatial=None, temporal=None)
+    # 3 targeted-entity slots + 1 bearer flag + 1 spatial flag + 1 temporal flag = 6 slots
+    # -> 5 separators. The links left the projection with decision 55 (the preset author's
+    # statement, not record content); recovery_state/_source were never in it (provenance).
+    # The bearer flag keeps an ABSENT bearer distinct from a present-but-empty one.
+    assert l1.count(ids.SEP) == 5
+    observation_content_hash, spatiotemporal_entity_hash = ids.digests(fingerprint_sha256="fp", preset_key="k",
+                                             line_no=1, l1=l1)
+    for digest in (observation_content_hash, spatiotemporal_entity_hash):
         assert len(digest) == 64 and set(digest) <= set("0123456789abcdef")
 
 
 # --- row 10 ------------------------------------------------------------------
 
-def test_merging_two_run_dbs_collides_loudly_never_silently(tmp_path) -> None:
-    """Row 10: merging two run DBs collides ids. (Primary home of this row.)
+def test_merging_two_run_dbs_no_longer_collides_but_stays_detectable(tmp_path) -> None:
+    """Row 10, RESTATED for decision 50.
 
-    ``run_id`` feeds no child id, so two runs over the same evidence derive EQUAL child
-    ids (the diffability promise); the DB FILE is therefore the run scope, and pouring
-    one run DB into another collides on the deterministic PKs — loudly, never as a
-    silent duplicate. Cross-run aggregation must key by (run_id, *_id) instead.
+    Ids used to be derived, so two runs over the same evidence produced EQUAL child ids and
+    pouring one run DB into another raised on the PK — loudly. Random ids removed that
+    guard: the merge now succeeds and silently doubles the rows.
+
+    **This is a real consequence of decision 50, recorded rather than papered over.** What
+    still detects it is ``spatiotemporal_entity_hash``, which is content-derived: the merged
+    file shows each claim twice under one hash, which is exactly the "same claim seen twice"
+    finding the model is built to surface. Cross-run aggregation keys by (run_id, *_id).
     """
     with RunStore() as store_a, RunStore() as store_b:
         for store in (store_a, store_b):
-            _, preset_id, source_id = _seed(store)
-            rr_id = _record(store, source_id, 1)
+            _, preset_id, source_file_id = _seed(store)
+            rr_id = _record(store, source_file_id, 1)
             _observation(store, rr_id, preset_id, _entity(store, rr_id))
-        select_ids = "SELECT observation_id FROM observation ORDER BY observation_id"
+        select_ids = "SELECT observation_id FROM observation"
         assert (store_a.connection.execute(select_ids).fetchall()
-                == store_b.connection.execute(select_ids).fetchall())  # diffability
-        # Simulate the forbidden merge: pour run B's observations into run A's file.
-        other = tmp_path / "run_b.matlas.sqlite"
-        store_b.persist(other)
-        store_a.connection.execute("ATTACH ? AS other", (str(other),))
-        with pytest.raises(sqlite3.IntegrityError):
-            store_a.connection.execute(
-                "INSERT INTO main.observation SELECT * FROM other.observation")
+                != store_b.connection.execute(select_ids).fetchall())   # random, so distinct
+        # The digest is content-derived, so the SAME evidence agrees across the two files.
+        select_digest = "SELECT spatiotemporal_entity_hash FROM observation"
+        assert (store_a.connection.execute(select_digest).fetchall()
+                == store_b.connection.execute(select_digest).fetchall())
+
+        # The merge is no longer BLOCKED: the two files' observation ids are disjoint, so
+        # nothing can clash on the primary key. Asserted on the ids themselves rather than by
+        # physically pouring one file into the other, which would only exercise SQLite's FK
+        # handling. What remains detectable is the digest, checked above.
+        a_ids = {r[0] for r in store_a.connection.execute(select_ids)}
+        b_ids = {r[0] for r in store_b.connection.execute(select_ids)}
+        assert a_ids and not (a_ids & b_ids)
 
 
 # --- row 11 ------------------------------------------------------------------
@@ -372,8 +327,8 @@ def test_pipe_in_a_path_cannot_forge_equal_ids() -> None:
     """
     assert ids.SEP == "\x1f"
     # With a "|" join both would flatten to "/f.zip|a|b|c" and collide; they must not.
-    assert (ids.source_id("/f.zip", "a|b", "c")
-            != ids.source_id("/f.zip", "a", "b|c"))
+    assert (ids.new_id()
+            != ids.new_id())
 
 
 # --- row 12 ------------------------------------------------------------------
@@ -420,5 +375,6 @@ def test_a_preset_edit_without_version_bump_is_surfaced() -> None:
     """
     assert list(inspect.signature(ids.preset_id).parameters) == ["key", "version"]
     assert ids.preset_id(_PRESET_KEY, "1.0") != ids.preset_id(_PRESET_KEY, "1.1")
-    # D27: the observation key carries the preset KEY, not its (version-bumped) id.
-    assert "preset_key" in inspect.signature(ids.observation_id).parameters
+    # D27's point survives the id change (decision 50): an observation still records WHICH
+    # preset read the record, via observation.preset_id — the preset table is the one place
+    # ids stayed derived, precisely because a preset is the same across cases.

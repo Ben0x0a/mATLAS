@@ -2,12 +2,12 @@
 
 Defines:    ``detect_format`` — a magic-first ladder that classifies a file's head bytes
             (with an optional zip central-directory peek) into a format string; and the
-            two wrappers that feed it — ``detect_source_format`` (a ``SourceFile``) and
+            two wrappers that feed it — ``detect_source_format`` (a ``DiscoveredFile``) and
             ``detect_path_format`` (an on-disk ``Path``). The single source of truth for
             magic detection inside the ingest engine.
 Used by:    ``model_atlas.ingest.discover`` (an archive-vs-leaf test during traversal)
             and ``model_atlas.ingest.writer`` (choosing a reader for a leaf file).
-Depends on: ``model_atlas.ingest.containers`` (``SourceFile``) and the standard library
+Depends on: ``model_atlas.ingest.containers`` (``DiscoveredFile``) and the standard library
             only.
 
 Ported verbatim from ``sources/format_detect.py``: magic bytes always win;
@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, BinaryIO, Callable
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from model_atlas.ingest.containers import SourceFile
+    from model_atlas.ingest.containers import DiscoveredFile
 
 log = logging.getLogger(__name__)
 
@@ -123,8 +123,8 @@ def _zip_names(open_fn: Callable[[], BinaryIO]) -> list[str]:
         return []
 
 
-def detect_source_format(file: "SourceFile") -> str | None:
-    """Open a claimed SourceFile once and magic-detect its format (head + zip-entry peek)."""
+def detect_source_format(file: "DiscoveredFile") -> str | None:
+    """Open a claimed DiscoveredFile once and magic-detect its format (head + zip-entry peek)."""
     container = file.container
     try:
         with container.open(file) as fh:

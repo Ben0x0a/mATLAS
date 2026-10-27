@@ -139,6 +139,22 @@ def zone_standard_offset_hours(zone_name: str) -> float:
     return dt.datetime(2025, 1, 15, tzinfo=z).utcoffset().total_seconds() / 3600
 
 
+def zone_offset_hours_at(zone_name: str, unix_us: int) -> float:
+    """The offset of ``zone_name`` in hours AT the instant ``unix_us``, DST resolved.
+
+    The UTC -> local direction, and the twin of ``local_naive_to_utc_us``'s local -> UTC.
+    WHY per instant and not a run-level constant: Europe/Paris is +1 in January and +2 in
+    July, so a single stored number would be wrong for half a case. There is no anomaly
+    return here because this direction cannot be ambiguous — every UTC instant maps to
+    exactly one local wall clock, which is precisely why the offset TO local is always
+    answerable while the offset FROM a naive local clock sometimes is not.
+    """
+    from zoneinfo import ZoneInfo
+
+    instant = _UNIX_EPOCH + dt.timedelta(microseconds=unix_us)
+    return instant.astimezone(ZoneInfo(zone_name)).utcoffset().total_seconds() / 3600
+
+
 def local_naive_to_utc_us(naive: dt.datetime, zone_name: str) -> tuple[int, float, str | None]:
     """Convert a naive LOCAL datetime in ``zone_name`` to (unix_us, offset_hours, anomaly),
     DST-aware. ``anomaly`` is ``'ambiguous'`` (DST fall-back overlap — the wall-clock occurs

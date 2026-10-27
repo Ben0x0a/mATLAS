@@ -5,6 +5,16 @@ CREATE TABLE matlas_meta (
     stemming_ruleset TEXT
 );
 
+CREATE TABLE model_description (
+    table_name TEXT NOT NULL,
+    field_name TEXT,
+    type TEXT,
+    unit TEXT,
+    matlas_enrichment INTEGER,
+    description TEXT NOT NULL,
+    UNIQUE (table_name, field_name)
+);
+
 CREATE TABLE case_metadata (
     case_id TEXT PRIMARY KEY NOT NULL,
     case_number TEXT NOT NULL,
@@ -42,12 +52,12 @@ CREATE TABLE run_archive (
     UNIQUE (run_id, archive_id)
 );
 
-CREATE TABLE source (
-    source_id TEXT PRIMARY KEY NOT NULL,
+CREATE TABLE source_file (
+    source_file_id TEXT PRIMARY KEY NOT NULL,
     run_id TEXT NOT NULL REFERENCES run(run_id),
     input_file_path TEXT NOT NULL,
     inner_path TEXT,
-    data_source TEXT,
+    reported_data_source TEXT,
     format TEXT,
     subunit TEXT,
     fingerprint_sha256 TEXT,
@@ -58,7 +68,7 @@ CREATE TABLE source (
     UNIQUE (run_id, input_file_path, inner_path, subunit)
 );
 
-CREATE INDEX ix_source_fp ON source(fingerprint_sha256);
+CREATE INDEX ix_source_fp ON source_file(fingerprint_sha256);
 
 CREATE TABLE preset (
     preset_id TEXT PRIMARY KEY NOT NULL,
@@ -78,26 +88,18 @@ CREATE TABLE run_preset (
 
 CREATE TABLE raw_record (
     raw_record_id TEXT PRIMARY KEY NOT NULL,
-    source_id TEXT NOT NULL REFERENCES source(source_id),
+    source_file_id TEXT NOT NULL REFERENCES source_file(source_file_id),
     line_no INTEGER NOT NULL,
     raw_json TEXT NOT NULL,
     native_record_uid TEXT,
-    recovery_state TEXT CHECK (recovery_state IN ('live', 'intact', 'deleted', 'recovered', 'unknown') OR recovery_state IS NULL),
-    recovery_source TEXT CHECK (recovery_source IN ('live', 'wal', 'journal', 'freelist', 'freespace', 'unknown') OR recovery_source IS NULL),
-    UNIQUE (source_id, line_no)
+    recovery_state TEXT CHECK (recovery_state IN ('live', 'recovered') OR recovery_state IS NULL),
+    recovery_source TEXT CHECK (recovery_source IN ('wal', 'journal', 'freelist', 'freespace', 'unknown') OR recovery_source IS NULL),
+    UNIQUE (source_file_id, line_no)
 );
 
 CREATE TABLE activity (
     activity_id TEXT PRIMARY KEY NOT NULL,
-    kind TEXT CHECK (kind IN ('call', 'message', 'trip', 'transaction', 'stay', 'observation', 'unknown') OR kind IS NULL),
-    context_json TEXT
-);
-
-CREATE TABLE activity_record (
-    activity_record_id TEXT PRIMARY KEY NOT NULL,
-    activity_id TEXT NOT NULL REFERENCES activity(activity_id),
-    raw_record_id TEXT NOT NULL REFERENCES raw_record(raw_record_id),
-    UNIQUE (activity_id, raw_record_id)
+    kind TEXT CHECK (kind IN ('call', 'message', 'trip', 'transaction', 'stay', 'observation', 'unknown') OR kind IS NULL)
 );
 
 CREATE TABLE entity (
@@ -117,7 +119,8 @@ CREATE INDEX ix_entity_concerns ON entity(concerns_uid);
 
 CREATE TABLE spatial_expression (
     spatial_expression_id TEXT PRIMARY KEY NOT NULL,
-    referential TEXT NOT NULL CHECK (referential IN ('epsg:4326', 'geohash', 'mgrs', 'address', 'place_name', 'cell_ref', 'asset_ref', 'region', 'unknown') OR referential IS NULL),
+    position_type TEXT NOT NULL CHECK (position_type IN ('coordinate', 'grid_reference', 'street_address', 'cell_id', 'bssid', 'unknown') OR position_type IS NULL),
+    referential TEXT CHECK (referential IN ('epsg:4326', 'geohash', 'mgrs', 'plus_code', 'unknown') OR referential IS NULL),
     spatial_source TEXT
 );
 
@@ -154,32 +157,30 @@ CREATE TABLE observation (
     observation_id TEXT PRIMARY KEY NOT NULL,
     raw_record_id TEXT NOT NULL REFERENCES raw_record(raw_record_id),
     preset_id TEXT NOT NULL REFERENCES preset(preset_id),
-    output_ordinal INTEGER NOT NULL,
     entity_id TEXT NOT NULL UNIQUE REFERENCES entity(entity_id),
-    content_hash TEXT NOT NULL,
-    claim_digest TEXT NOT NULL,
+    observation_content_hash TEXT NOT NULL,
+    spatiotemporal_entity_hash TEXT NOT NULL,
     bearer_entity_id TEXT UNIQUE REFERENCES entity(entity_id),
-    entity_origin TEXT CHECK (entity_origin IN ('preset_mapped', 'operator_param') OR entity_origin IS NULL),
     activity_id TEXT REFERENCES activity(activity_id),
     spatial_expression_id TEXT UNIQUE REFERENCES spatial_expression(spatial_expression_id),
     temporal_expression_id TEXT UNIQUE REFERENCES temporal_expression(temporal_expression_id),
-    activity_role TEXT CHECK (activity_role IN ('caller', 'callee', 'sender', 'recipient', 'unknown') OR activity_role IS NULL),
-    entity_link TEXT CHECK (entity_link IN ('self', 'served_by', 'seen_by', 'used_at', 'stayed_at', 'searched_for', 'shared', 'cached', 'unknown') OR entity_link IS NULL),
-    spatial_link TEXT CHECK (spatial_link IN ('at', 'within', 'near', 'references', 'absent', 'unknown') OR spatial_link IS NULL),
-    occupancy TEXT CHECK (occupancy IN ('continuous', 'once', 'sporadic', 'unknown') OR occupancy IS NULL),
-    attestation TEXT CHECK (attestation IN ('instrument', 'system_record', 'person', 'third_party_register', 'unknown') OR attestation IS NULL),
-    recorded_at TEXT,
-    deleted TEXT CHECK (deleted IN ('live', 'intact', 'deleted', 'recovered', 'unknown') OR deleted IS NULL),
-    multiplicity INTEGER,
+    entity_link TEXT CHECK (entity_link IN ('subject', 'party', 'mentioned', 'unknown') OR entity_link IS NULL),
+    spatial_link TEXT CHECK (spatial_link IN ('measured', 'registered', 'served', 'seen', 'used', 'stayed', 'located', 'searched', 'shared', 'cached', 'unknown') OR spatial_link IS NULL),
+    temporal_link TEXT CHECK (temporal_link IN ('throughout', 'at_least_once', 'never', 'not_throughout', 'unknown') OR temporal_link IS NULL),
+    recovery_state TEXT CHECK (recovery_state IN ('live', 'recovered') OR recovery_state IS NULL),
+    recovery_source TEXT CHECK (recovery_source IN ('wal', 'journal', 'freelist', 'freespace', 'unknown') OR recovery_source IS NULL),
     source_label TEXT,
     input_record_id TEXT,
     source_record_uid TEXT,
-    UNIQUE (raw_record_id, preset_id, output_ordinal)
+    CHECK ((entity_link IS 'subject') = (bearer_entity_id IS entity_id)),
+    CHECK (entity_link IS NOT 'party' OR (bearer_entity_id IS NOT NULL AND bearer_entity_id IS NOT entity_id)),
+    CHECK (entity_link IS NOT 'unknown' OR bearer_entity_id IS NULL),
+    CHECK (spatial_expression_id IS NOT NULL OR spatial_link IS NULL)
 );
 
-CREATE INDEX ix_observation_ch ON observation(content_hash);
+CREATE INDEX ix_observation_ch ON observation(observation_content_hash);
 
-CREATE INDEX ix_observation_cd ON observation(claim_digest);
+CREATE INDEX ix_observation_cd ON observation(spatiotemporal_entity_hash);
 
 CREATE INDEX ix_observation_act ON observation(activity_id);
 
@@ -187,6 +188,7 @@ CREATE TABLE spatial_integration (
     spatial_integration_id TEXT PRIMARY KEY NOT NULL,
     spatial_expression_id TEXT NOT NULL UNIQUE REFERENCES spatial_expression(spatial_expression_id),
     method TEXT NOT NULL,
+    position_raw TEXT,
     referential TEXT,
     spatial_source TEXT,
     latitude_wgs84 REAL,
@@ -217,16 +219,13 @@ CREATE TABLE timespan_integration (
     timespan_integration_id TEXT PRIMARY KEY NOT NULL,
     temporal_expression_id TEXT NOT NULL UNIQUE REFERENCES temporal_expression(temporal_expression_id),
     method TEXT NOT NULL,
+    kind TEXT,
+    referential TEXT,
+    temporal_source TEXT,
     lower_unix_utc_us INTEGER,
     upper_unix_utc_us INTEGER,
-    lower_datetime_iso TEXT,
-    upper_datetime_iso TEXT,
-    lower_date INTEGER,
-    upper_date INTEGER,
-    lower_time INTEGER,
-    upper_time INTEGER,
-    utc_offset_hours_lower TEXT,
-    utc_offset_hours_upper TEXT,
+    offset_to_local_hours_lower TEXT,
+    offset_to_local_hours_upper TEXT,
     lower_accuracy_us INTEGER,
     upper_accuracy_us INTEGER
 );
@@ -236,7 +235,7 @@ CREATE TABLE analysis (
     observation_id TEXT NOT NULL REFERENCES observation(observation_id),
     method TEXT NOT NULL,
     record_rank INTEGER,
-    record_rank_type TEXT,
+    record_rank_type TEXT CHECK (record_rank_type IN ('main', 'additional') OR record_rank_type IS NULL),
     UNIQUE (observation_id, method)
 );
 
@@ -256,12 +255,12 @@ CREATE TABLE edit_log (
 CREATE VIEW duplicate_sources AS
     SELECT fingerprint_sha256, COUNT(*) AS copies,
            GROUP_CONCAT(input_file_path, ' | ') AS files
-    FROM source GROUP BY fingerprint_sha256 HAVING COUNT(*) > 1;
+    FROM source_file GROUP BY fingerprint_sha256 HAVING COUNT(*) > 1;
 
 CREATE VIEW possible_same_evidence AS
-    SELECT a.claim_digest, COUNT(*) AS copies,
+    SELECT a.spatiotemporal_entity_hash, COUNT(*) AS copies,
            GROUP_CONCAT(s.input_file_path, ' | ') AS files
     FROM observation a
     JOIN raw_record r ON r.raw_record_id = a.raw_record_id
-    JOIN source s ON s.source_id = r.source_id
-    GROUP BY a.claim_digest HAVING COUNT(*) > 1;
+    JOIN source_file s ON s.source_file_id = r.source_file_id
+    GROUP BY a.spatiotemporal_entity_hash HAVING COUNT(*) > 1;

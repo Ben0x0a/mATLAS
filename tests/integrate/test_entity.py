@@ -138,8 +138,8 @@ def _seed_l0(store: RunStore) -> None:
         preset_id=ids.preset_id(PRESET_KEY, PRESET_VERSION),
         key=PRESET_KEY, name=None, version=PRESET_VERSION,
         definition_digest="d" * 64))
-    store.write_source(V.Source(
-        source_id=ids.source_id(INPUT_PATH, None, None),
+    store.write_source_file(V.SourceFile(
+        source_file_id=ids.new_id(),
         run_id=run_id, input_file_path=INPUT_PATH,
         fingerprint_sha256=FINGERPRINT))
     # Remember the run id for helpers that need it (module-level state avoided).
@@ -164,13 +164,15 @@ def _write_mention(
     so the digest recomputation must rebuild the full projection, not just the entity
     block. Returns (entity_id, observation_id).
     """
-    source_id = ids.source_id(INPUT_PATH, None, None)
-    raw_record_id = ids.raw_record_id(source_id, line_no)
+    # The seeded source row's id, looked up — ids are random now (decision 50), so minting
+    # a second one here would point the FK at a source that does not exist.
+    source_file_id = store.connection.execute(
+        "SELECT source_file_id FROM source_file").fetchone()[0]
+    raw_record_id = ids.new_id()
     store.write_raw_record(V.RawRecord(
-        raw_record_id=raw_record_id, source_id=source_id, line_no=line_no,
+        raw_record_id=raw_record_id, source_file_id=source_file_id, line_no=line_no,
         raw_json="{}"))
-    natural_key = (raw_record_id, PRESET_KEY, 0)
-    entity_id = ids.entity_id(natural_key)
+    entity_id = ids.new_id()
     store.write_entity(V.Entity(
         entity_id=entity_id,
         identifier=None,                      # T23 leaves identifier NULL for T32
@@ -188,17 +190,18 @@ def _write_mention(
     spatial_expression_id = None
     temporal_expression_id = None
     activity_id = None
-    links = ids.ObservationLinks()
+    entity_link = spatial_link = temporal_link = bearer_entity_id = None
     if with_corners:
-        spatial_expression_id = ids.spatial_expression_id(natural_key)
+        spatial_expression_id = ids.new_id()
         store.write_spatial_expression(V.SpatialExpression(
             spatial_expression_id=spatial_expression_id,
+        position_type=V.PositionType.COORDINATE,
             referential="epsg:4326", spatial_source="gnss"))
         spatial_parts = (("latitude", "lat", "46.2030"),
                          ("longitude", "lon", "6.1430"))
         for ordinal, (part, source_field, raw_value) in enumerate(spatial_parts):
             store.write_spatial_component(V.SpatialComponent(
-                spatial_component_id=ids.spatial_component_id(spatial_expression_id, ordinal),
+                spatial_component_id=ids.new_id(),
                 spatial_expression_id=spatial_expression_id, ordinal=ordinal,
                 part=part,
                 source_field=source_field, raw_value=raw_value))
@@ -207,12 +210,12 @@ def _write_mention(
             tuple(ids.SpatialComponentProjection(part, "vicinity", raw_value)
                   for part, _, raw_value in spatial_parts))
 
-        temporal_expression_id = ids.temporal_expression_id(natural_key)
+        temporal_expression_id = ids.new_id()
         store.write_temporal_expression(V.TemporalExpression(
             temporal_expression_id=temporal_expression_id,
             kind="instant", referential="unix_epoch_s"))
         store.write_temporal_component(V.TemporalComponent(
-            temporal_component_id=ids.temporal_component_id(temporal_expression_id, 0),
+            temporal_component_id=ids.new_id(),
             temporal_expression_id=temporal_expression_id, ordinal=0,
             part="lower", stated_offset="+01:00",
             source_field="ts", raw_value="1700000000"))
@@ -220,40 +223,28 @@ def _write_mention(
             "instant", "unix_epoch_s",
             (ids.TemporalComponentProjection("lower", "+01:00", "1700000000"),))
 
-        activity_id = ids.activity_id(raw_record_id, 0)
-        context = {"callee": "+41791234568"}
-        store.write_activity(V.Activity(
-            activity_id=activity_id, kind="call",
-            context_json=ids.canonical_json(context)))
-        store.write_activity_record(V.ActivityRecord(
-            activity_record_id=ids.activity_record_id(activity_id, raw_record_id),
-            activity_id=activity_id, raw_record_id=raw_record_id))
-        activity_projection = ids.ActivityProjection("call", context)
-        links = ids.ObservationLinks("unknown", "self", "at", "once", "instrument")
+        # A GNSS-shaped subject row: its bearer IS the entity, which projects no bearer block.
+        entity_link, spatial_link, temporal_link = "subject", "measured", "at_least_once"
+        bearer_entity_id = entity_id
 
     l1 = ids.l1_projection(
         bearer=None,
         entity=ids.EntityProjection(None, identifier_type, entity_type),
-        spatial=spatial_projection, temporal=temporal_projection,
-        links=links, deleted=None, multiplicity=None,
-        activity=activity_projection)
-    content_hash, claim_digest = ids.digests(
+        spatial=spatial_projection, temporal=temporal_projection)
+    observation_content_hash, spatiotemporal_entity_hash = ids.digests(
         fingerprint_sha256=FINGERPRINT, preset_key=PRESET_KEY,
-        line_no=line_no, output_ordinal=0, l1=l1)
-    observation_id = ids.observation_id(raw_record_id, PRESET_KEY, 0)
+        line_no=line_no, l1=l1)
+    observation_id = ids.new_id()
     store.write_observation(V.Observation(
         observation_id=observation_id, raw_record_id=raw_record_id,
-        preset_id=ids.preset_id(PRESET_KEY, PRESET_VERSION), output_ordinal=0,
-        entity_id=entity_id, content_hash=content_hash, claim_digest=claim_digest,
-        entity_origin=V.Origin.PRESET_MAPPED,
-        activity_id=activity_id,
+        preset_id=ids.preset_id(PRESET_KEY, PRESET_VERSION),
+        entity_id=entity_id, observation_content_hash=observation_content_hash, spatiotemporal_entity_hash=spatiotemporal_entity_hash,
         spatial_expression_id=spatial_expression_id,
         temporal_expression_id=temporal_expression_id,
-        activity_role=links.activity_role,
-        entity_link=links.entity_link,
-        spatial_link=links.spatial_link,
-        attestation=links.attestation,
-        occupancy=links.occupancy))
+        bearer_entity_id=bearer_entity_id,
+        entity_link=entity_link,
+        spatial_link=spatial_link,
+        temporal_link=temporal_link))
     return entity_id, observation_id
 
 
@@ -265,7 +256,7 @@ def _entity_row(store: RunStore, entity_id: str) -> tuple:
 
 def _digests(store: RunStore, observation_id: str) -> tuple:
     return store.connection.execute(
-        "SELECT content_hash, claim_digest FROM observation WHERE observation_id = ?",
+        "SELECT observation_content_hash, spatiotemporal_entity_hash FROM observation WHERE observation_id = ?",
         (observation_id,)).fetchone()
 
 
@@ -387,13 +378,10 @@ def test_normalised_entity_digests_recomputed_refused_unchanged(store: RunStore)
              ids.SpatialComponentProjection("longitude", None, "6.1430"))),
         temporal=ids.TemporalProjection(
             "instant", "unix_epoch_s",
-            (ids.TemporalComponentProjection("lower", "+01:00", "1700000000"),)),
-        links=ids.ObservationLinks("unknown", "self", "at", "once", "instrument"),
-        deleted=None, multiplicity=None,
-        activity=ids.ActivityProjection("call", {"callee": "+41791234568"}))
+            (ids.TemporalComponentProjection("lower", "+01:00", "1700000000"),)))
     assert after_normalised == ids.digests(
         fingerprint_sha256=FINGERPRINT, preset_key=PRESET_KEY,
-        line_no=1, output_ordinal=0, l1=expected_l1)
+        line_no=1, l1=expected_l1)
 
     # The refused entity's digests are BYTE-IDENTICAL: refusal changes nothing the
     # projection hashes (identifier stays NULL, the claimed kind is preserved) — even
@@ -419,11 +407,10 @@ def test_recomputation_handles_cornerless_observations(store: RunStore) -> None:
     expected_l1 = ids.l1_projection(
         bearer=None,
         entity=ids.EntityProjection("john.doe@example.com", "email", "unknown"),
-        spatial=None, temporal=None, links=ids.ObservationLinks(),
-        deleted=None, multiplicity=None, activity=None)
+        spatial=None, temporal=None)
     assert after == ids.digests(
         fingerprint_sha256=FINGERPRINT, preset_key=PRESET_KEY,
-        line_no=1, output_ordinal=0, l1=expected_l1)
+        line_no=1, l1=expected_l1)
 
 
 # --- rule-set stamps + report -----------------------------------------------------

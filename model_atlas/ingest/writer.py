@@ -61,10 +61,10 @@ from model_atlas.core.vocabularies import (
     Run,
     RunArchive,
     RunPreset,
-    Source,
+    SourceFile,
     SourceTier,
 )
-from model_atlas.ingest.containers import SourceFile, ZipContainer
+from model_atlas.ingest.containers import DiscoveredFile, ZipContainer
 from model_atlas.ingest.discover import ArchiveFound, FileFound, walk
 from model_atlas.ingest.format_detect import TARGETABLE_FORMATS, detect_source_format
 from model_atlas.ingest.readers import Reader, get_reader
@@ -103,15 +103,22 @@ class Target:
     read_params: dict[str, Any] = field(default_factory=dict)  # mutable default — shared if = {}
 
 
-# The preset-scoped L0 target filter, INJECTED by the app layer: ``(file, format) ->
-# Target | None``, where None means "no selected preset can target this file — do not open
-# it". WHY injected rather than imported: presets depend on ingest, never the reverse, so
-# the writer must not know what a selector is. WHY it exists at all: without it an L0 walk
-# opens and fully reads every file of an acquisition (every table of every SQLite db) even
-# when one preset targets one table — minutes of work for one file's worth of evidence.
+# The preset-scoped L0 target filter, INJECTED by the app layer: ``file -> Target | None``,
+# where None means "no selected preset can target this file — do not open it". WHY injected
+# rather than imported: presets depend on ingest, never the reverse, so the writer must not
+# know what a selector is. WHY it exists at all: without it an L0 walk opens and fully reads
+# every file of an acquisition (every table of every SQLite db) even when one preset targets
+# one table — minutes of work for one file's worth of evidence.
+#
+# WHY it takes the file ALONE and not a pre-detected format: the filter's first stage is a
+# content-free location test, so a file no selector's path can reach is declined without its
+# bytes ever being touched. Handing it a format would mean sniffing every walked file up
+# front — 512 bytes each, but one seek + one decompress-start per file inside an archive,
+# which on a full-filesystem acquisition is a quarter of a million reads to answer a question
+# the path already settled. The filter sniffs on its own, for the few files it located.
 # None (no filter) reads every file: the writer's own default, and what the pipeline passes
 # in force-preset mode, where location matching is bypassed by design.
-TargetFn = Callable[[SourceFile, "str | None"], "Target | None"]
+TargetFn = Callable[[DiscoveredFile], "Target | None"]
 
 
 @dataclass
@@ -179,7 +186,7 @@ def _preset_signature(presets: tuple[Preset, ...]) -> str:
     return canonical_json(triples)
 
 
-def opened_input_path(file: SourceFile) -> Path:
+def opened_input_path(file: DiscoveredFile) -> Path:
     """The outermost on-disk artefact opened for ``file``: the first archive with an
     on-disk path in its container chain, else the loose file's own path.
 
@@ -346,24 +353,23 @@ def _write_archive(
 
 
 def _ingest_file(
-    store: RunStore, run_id: str, file: SourceFile, exhibit_ref: str | None,
+    store: RunStore, run_id: str, file: DiscoveredFile, exhibit_ref: str | None,
     report: IngestReport, target: TargetFn | None = None,
 ) -> None:
     """Open one leaf file as one-or-more sources (one per subunit) and write its records."""
-    fmt = detect_source_format(file)
-
-    # The preset-scoped filter runs FIRST — before the no-reader report below and before any
-    # hashing/materialisation — so an acquisition's thousands of untargeted files cost one
-    # head-bytes sniff each instead of a full read, and produce a count rather than a warning
-    # per file. WHY it may run at all: which files a run OPENS is an operator choice recorded
-    # in run.settings_json + run_preset; what a source IS once opened stays preset-free
+    # The preset-scoped filter runs FIRST — before the format sniff, before the no-reader
+    # report below, and before any hashing/materialisation — so an acquisition's thousands of
+    # untargeted files are never opened at all, and produce a count rather than a warning per
+    # file. WHY it may run at all: which files a run OPENS is an operator choice recorded in
+    # run.settings_json + run_preset; what a source IS once opened stays preset-free
     # (paths-only id, one row per unit) — decision 27 governs identity, not scope.
-    wanted = target(file, fmt) if target is not None else Target(subunits=None)
+    wanted = target(file) if target is not None else Target(subunits=None)
     if wanted is None:
         report.not_targeted += 1
         log.debug("not targeted by any selected preset: %s", file.logical_path)
         return
 
+    fmt = detect_source_format(file)
     if fmt not in TARGETABLE_FORMATS:
         # plist / archive-at-depth / unknown: no reader ships, so nothing is read. Surfaced
         # (a run must never silently drop an input) but not an error — it is simply opaque.
@@ -400,7 +406,7 @@ def _ingest_file(
 
 
 def _subunits_to_read(
-    reader: Reader, path: Path, file: SourceFile, wanted: Target, report: IngestReport,
+    reader: Reader, path: Path, file: DiscoveredFile, wanted: Target, report: IngestReport,
 ) -> list[str | None]:
     """The sub-units of one opened file this run reads: those the target names and the file
     actually has, or every one it has when the target names none.
@@ -433,22 +439,24 @@ def _subunits_to_read(
 
 def _ingest_subunit(
     store: RunStore, run_id: str, reader: Reader, path: Path, subunit: str | None,
-    file: SourceFile, input_file_path: str, inner_path: str | None,
+    file: DiscoveredFile, input_file_path: str, inner_path: str | None,
     fingerprint: str, sibling_json: str | None, exhibit_ref: str | None,
     report: IngestReport, read_params: dict[str, Any] | None = None,
 ) -> None:
     """Write one ``source`` row (paths-only id) plus its verbatim ``raw_record`` rows."""
-    # source id from PATHS ONLY (§2c): the fingerprint is a plain indexed column,
-    # so byte-identical exhibits at two paths stay two rows sharing fingerprint_sha256.
-    source_id = ids.source_id(input_file_path, inner_path, subunit)
-
     # APPEND idempotency: a source already in the case from an EARLIER run must not be
     # re-ingested — its observations already exist and a second write would collide. Skip it and
     # RECORD the skip (no silent loss); the assemble loop skips it too (run_id mismatch). A
     # within-run duplicate (same run_id) is a DIFFERENT matter: the discover dedup should have
-    # prevented it, so it falls through to write_source and raises, surfacing the breach loudly.
+    # prevented it, so it falls through to write_source_file and raises, surfacing the breach.
+    #
+    # Looked up by the NATURAL KEY, not by re-deriving the id: evidence-chain ids are random
+    # (decision 50). UNIQUE(run_id, input_file_path, inner_path, subunit) is what the schema
+    # enforces, and it is the same tuple, so this check is exactly as strong as before.
     existing = store.connection.execute(
-        "SELECT run_id FROM source WHERE source_id = ?", (source_id,)).fetchone()
+        "SELECT run_id FROM source_file "
+        "WHERE input_file_path = ? AND inner_path IS ? AND subunit IS ?",
+        (input_file_path, inner_path, subunit)).fetchone()
     if existing is not None and existing[0] != run_id:
         report.sources_already_in_case += 1
         message = (f"{file.logical_path} (subunit {subunit!r}) is already in the case from an "
@@ -456,6 +464,8 @@ def _ingest_subunit(
         log.info(message)
         report.warnings.append(message)
         return
+
+    source_file_id = ids.new_id()
 
     try:
         # The selectors' declared dialect (a CSV's delimiter/encoding/header_row/skip_rows).
@@ -469,10 +479,11 @@ def _ingest_subunit(
         report.warnings.append(message)
         records = []
 
-    store.write_source(
-        Source(
-            source_id=source_id, run_id=run_id, input_file_path=input_file_path,
-            inner_path=inner_path, data_source=None, format=reader.format, subunit=subunit,
+    store.write_source_file(
+        SourceFile(
+            source_file_id=source_file_id, run_id=run_id, input_file_path=input_file_path,
+            inner_path=inner_path, reported_data_source=None,
+            format=reader.format, subunit=subunit,
             fingerprint_sha256=fingerprint, sibling_fingerprints_json=sibling_json,
             # L0 is preset-free, so tier defaults to 'primary'; the app writes the matched
             # preset's declared tier back onto the source row after matching.
@@ -484,8 +495,8 @@ def _ingest_subunit(
     for record in records:
         store.write_raw_record(
             RawRecord(
-                raw_record_id=ids.raw_record_id(source_id, record.line_no),
-                source_id=source_id, line_no=record.line_no,
+                raw_record_id=ids.new_id(),
+                source_file_id=source_file_id, line_no=record.line_no,
                 # SOURCE column order, not sorted: the exported orig_<col> passthrough follows
                 # the source's own order (feeds no digest — safe to differ from canonical).
                 raw_json=source_order_json(record.fields),

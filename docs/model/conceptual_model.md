@@ -8,30 +8,28 @@ follows this document. The identity discipline it obeys is
 
 ## The model in one sentence
 
-> **A record says that some entity was somewhere at some time — naming through what
-> interaction we know it, how closely it holds, how much of the interval it covers, and
-> who asserts it. Every corner is stored in the source's own words; every normalisation
-> the tool performs is attached to the corner, never substituted for it.**
+> **A record says that some entity was (or was not) somewhere at some time — naming the
+> entity's role, what the record does with the position, and how the interval is
+> referenced, and tracing back to the source that says so. Every corner is stored in the
+> source's own words; every normalisation the tool performs is attached to the corner,
+> never substituted for it.**
 
-### Content and link, per corner
+### Content and link, per arm (decision 55)
 
-Each corner carries two different things, and collapsing them is what made the earlier
-vocabulary resist qualification:
+The observation is the centre, and each arm carries two different things — collapsing them
+is what made the earlier vocabulary resist qualification. Each link says, at a technical
+level, how the observation is tied to that component; none states what the observation is
+worth:
 
-| Corner | Content | Link |
+| Arm | Content | Link |
 | --- | --- | --- |
-| **Entity** | **who / what** | **how we know** — through what interaction |
-| **Spatial** | **where** | **how close** — at / within / near / references / absent |
-| **Temporal** | **when** | **how much of it** — □ throughout / ◇ at some point |
+| **Entity** | **who / what** (+ the bearer) | **role** — subject / party / mentioned / unknown |
+| **Spatial** | **where** | **how the position is used** — measured / registered / served / seen / used / stayed / located / searched / shared / cached / unknown |
+| **Temporal** | **when** | **how the interval is referenced** — □P throughout / ◇P at least once / □¬P never / ◇¬P not throughout |
+| **Source** | **who says so** | the record chain itself (source file, record, preset) — no vocabulary |
 
-Plus one statement-level qualifier: **who says so** (`attestation`) — which qualifies the
-whole statement rather than one argument of it, the correct structure for a reified ternary
-relation.
-
-Note the entity link reads as both *what happened* (`used_at`, `stayed_at`) and *how we
-know*. That is not a conflation: in forensic data the interaction **is** the epistemic route
-— the trace exists because the interaction happened. It is also why the verb alone decides
-whether there is a spatial claim at all (`cached` leaves none).
+The spatial verb alone decides whether the record claims contact with a place: `searched`,
+`shared` and `cached` do not.
 
 The entity–space–time triangle survives as the shape of a claim, though "triangle" flatters
 it: the observation is a reified **ternary relation**, and its links are qualifiers of the
@@ -61,11 +59,12 @@ A **claim** is extracted from exactly one record. It carries:
   identifier *as written* (`+33612…`, `device`, a name on a booking) plus its kind
   (msisdn, imei, email, descriptive label, plate, account, …).
   - the **targeted** entity is the one under investigation — the one the flat CSV names
-    on its line, and the one carrying an `activity_role` (`caller`, `callee`, `sender`,
-    `recipient`);
-  - the **bearer** is the entity whose position the spatial corner actually states: for a
-    CDR the antenna, for an ANPR read the camera, for an ATM withdrawal the terminal. It is
-    absent exactly when the entity holds its own position (`entity_link = self`).
+    on its line;
+  - the **bearer** is the entity whose position the spatial arm states: for a CDR the
+    antenna, for an ANPR read the camera, for an ATM withdrawal the terminal. The
+    `entity_link` fixes it: `subject` — the entity holds its own position, so it IS the
+    bearer; `party` — another entity holds it; `unknown` — no bearer at all, because a
+    placeholder would manufacture a presence claim the source never made.
 
   So **storage orders by whose position it is, while the projection orders by who is under
   investigation**: the CSV line still names the phone, joining `entity` twice, and the
@@ -79,41 +78,21 @@ A **claim** is extracted from exactly one record. It carries:
 - **A place, as expressed.** A **spatial expression** with a *kind*: direct
   coordinates, address, place name, cell/antenna reference, region, or none. Whose position
   it is no longer needs deriving: the bearer *is* the answer. What the **spatial link**
-  adds is how closely that geometry binds the targeted entity — `at`, `within`, `near`,
-  `references`, `absent`, `unknown`. This is stored, not derived from the interaction verb,
-  because the same verb yields different relations depending on the geometry's granularity:
-  `self` + a GNSS fix is `at` a point, `self` + an IP geolocation is `within` a city
-  polygon; `used_at` an ATM is `at`, `used_at` a card record naming only "SHELL FRANCE" is
-  `within`.
-
-  **The three negatives are distinct and must stay so**: `references` = no presence claim
-  but a deliberate connection (the entity was *interested* in the place — a nav search);
-  `absent` = a positive claim of non-presence (an alibi); `unknown` = no claim either way,
-  which must be *surfaced for review*, never silently dropped.
+  adds is what the record does with that position — a position `measured` for the bearer
+  (GNSS, fingerprinting), one a register `registered` (IP geolocation), the place of an
+  antenna that `served` the entity, a place `searched` for… It carries no precision (that
+  is the geometry's accuracy) and no negation (that is the temporal link).
 - **A time, as expressed.** A **temporal expression**: the raw value(s), the stated
   calendar/offset (or the fact that none was stated), the granularity, and whether it
   is an instant, an interval, or an open bound.
-- **The three corner links** (`entity_link`, `spatial_link`, `occupancy`) and, at statement
-  level, **`attestation`**.
-
-  *Superseded (owner decision, 2026-07-11, reversed): that decision folded the epistemic
-  qualifier INTO the link vocabularies rather than giving it a column. It could not work,
-  because the axis is orthogonal to all three links — `served_by` from an operator CDR is a
-  `system_record`, the same `served_by` asserted by a witness is a `person`. One verb, two
-  attestors. Folding it multiplied enum members and still lost combinations, and the derived
-  views `Genesis`/`Locates` then existed only to project one axis back out of the resulting
-  conflation, lossily. Both views are deleted.*
-
-  **`attestation` records who asserts, never what it is worth**: `instrument` |
-  `system_record` | `person` | `third_party_register` | `unknown`. Evidential weight,
-  credibility and admissibility are **court questions and the model must not state them**.
-  The intelligence/admiralty grading (source reliability × information credibility) is
-  deliberately not adopted for the same reason; if ever wanted it belongs to an analyst
-  layer, attributed to whoever graded it, never to ingest.
-
-  `third_party_register` names a provenance the model previously had no vocabulary for: a
-  location-cache coordinate comes from neither the source nor our engine but from a
-  commercial database of unknown vintage. `source_tier` describes *our* processing, not that.
+- **The three stored links** (`entity_link`, `spatial_link`, `temporal_link`), stated by
+  the preset author and therefore marked as enrichment. They feed **no digest**: two
+  readings of one record that disagree on a link still converge, and the disagreement stays
+  visible.
+- **The source link** is the record chain itself — source file, record, preset — with no
+  vocabulary. Evidential weight, credibility and admissibility are **court questions and the
+  model must not state them**; the intelligence/admiralty grading is deliberately not adopted
+  for that reason.
 
 ### Layer 2 — Interpretation (derived, attached, re-runnable)
 
@@ -170,7 +149,7 @@ own line only when the record gives it its own placement; every other party the
 record names attaches to an existing line as a *context mention* and appears as a
 column, never a row.
 
-- a GPS fix → one line (targeted = the device, `entity_link = self`, no bearer);
+- a GPS fix → one line (targeted = the device, `entity_link = subject`, its own bearer);
 - a one-legged CDR → **one line** (caller at antenna X; the callee and the caller's
   IMEI are context mentions — counterpart and facet columns, **no invented
   position**);
@@ -180,7 +159,7 @@ column, never a row.
   promises no automatic pairing;
 - an ANPR read → one line (targeted = the plate, **bearer = the camera**, which now has a
   real row instead of being dissolved into an asset reference); a witness statement → one
-  line with `attestation = person`; a police register entry → one line whose event reference
+  line traced to the statement file; a police register entry → one line whose event reference
   IS the entity itself (type `event`, identifier == concerns);
 - a claim with no placement at all (a login) → a line without coordinates, never
   dropped.
@@ -221,9 +200,11 @@ change is argued against them rather than against taste:
 Condition 2 is the one that bites. It is not satisfied by losing nuance gracefully; it is
 violated outright when the model *manufactures* a claim. The worked case: a prefetched
 location-cache row (a device holding an almanac tile it was told about, not one it saw)
-must not assert device presence. `entity_link = cached` with `spatial_link = unknown` is
-what makes that expressible — the device is a participant with no positional claim, and any
-"plausibly within range" inference becomes an explicit, attributed, deletable analysis act.
+must not assert device presence. `entity_link = party` with `spatial_link = cached` is
+what makes that expressible — the tile holds the position, the device only stored it, and
+any "plausibly within range" inference becomes an explicit, attributed, deletable analysis
+act. Likewise a Waze trace of unknown nature is `entity_link = unknown` with no bearer, never
+a placeholder that would read as presence.
 
 ### Direction: the two corner algebras
 
@@ -232,7 +213,7 @@ family:
 
 | | Stored | Derived at query time |
 | --- | --- | --- |
-| **Temporal** | interval `[lower, upper]` + `occupancy` (□/◇) | **Allen's interval algebra**, the 13 relations |
+| **Temporal** | interval `[lower, upper]` + `temporal_link` (□/◇, ±) | **Allen's interval algebra**, the 13 relations |
 | **Spatial** | region (point / disc / wedge / polygon) + `spatial_link` | **RCC-8** / DE-9IM |
 
 Neither relation family is ever stored — both are computable from the bounds and the
@@ -247,18 +228,16 @@ geometry is a later pass**; the vocabulary is only kept from precluding it.
    plural, v1 stores the chosen one (with its method) and may add alternatives later.
 2. **WGS84 latitude/longitude** is the chosen geometry form for all spatial kinds.
 3. **UTC microseconds** is the chosen temporal position form.
-4. Closed vocabularies (expression kinds, the three corner links, attestation) are
-   enumerated at implementation in `core/vocabularies.py`, which stays the single declaration.
-   `EntityLink` is deliberately **reviewed-extensible** rather than frozen: the 2026-08-30
-   removal of `spatial_role`/`temporal_role` is the precedent — two shipped presets needed
-   values the CHECK rejected.
-5. **Negative claims** are representable as `spatial_link = absent`, and polarity lives on
-   the spatial corner *only*. This is forced, not stylistic: modal duality gives
-   ¬◇P ≡ □¬P, so allowing negation on both the spatial and temporal corners would let one
-   fact be written two ways — which is exactly the bug `never_during_interval` caused by
-   existing on two enums at once with no rule for disagreement. The cross-product then
-   yields four distinct statements where there was one lumped token, including
-   `absent` + ◇ ("left at some point"), which the previous model could not express.
+4. Closed vocabularies (expression kinds, the three stored links) are enumerated at
+   implementation in `core/vocabularies.py`, which stays the single declaration.
+   `SpatialLink` is deliberately an **open list**: a verb is added when a real source needs
+   one, then the list is reviewed to minimise it (decision 55).
+5. **Negative claims** are representable as `temporal_link = never` (□¬P, an alibi) or
+   `not_throughout` (◇¬P, "left home at some point"), and negation lives on the temporal
+   link *only*. This is forced, not stylistic: modal duality gives ¬◇P ≡ □¬P, so negation
+   storable on two arms would let one fact be written two ways — exactly the bug
+   `never_during_interval` caused by existing on two enums at once. A negation needs the
+   source to STATE it; a missing record is never one.
 6. **Event grouping** is defined now, populated when a multi-leg source (CDR) ships.
 7. **Identity resolution** ships with one cheap deterministic method (identifier-kind
    mentions with equal kind+value resolve to one identity); descriptive labels are

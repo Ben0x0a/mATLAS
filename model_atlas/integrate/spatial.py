@@ -109,10 +109,32 @@ class SpatialExpressionInput:
     referential: str
     # mutable default — shared across instances if = {} were used
     part_values: dict[str, str] = field(default_factory=dict)
-    # Kept LAST so the positional (id, referential, part_values) form callers already use
-    # keeps working — inserting it before ``part_values`` silently rebound every such call,
-    # which made four "must raise" tests stop raising rather than fail loudly.
-    spatial_source: str | None = None
+
+    # ------------------------------------------------------------------------
+    # EVERYTHING BELOW IS KEYWORD-ONLY, and that is a structural guard, not a style
+    # choice. The three fields above are the positional form used throughout the tests
+    # (``SpatialExpressionInput("sx", "epsg:4326", {"latitude": "46.2"})``). Adding a
+    # field ANYWHERE above this line silently rebinds those positional arguments: the
+    # part_values dict lands in the new field, the Method sees an expression with no
+    # parts, and a "must raise" test stops raising rather than failing loudly — a green
+    # suite hiding a broken guard.
+    #
+    # This happened twice. The first time, a comment was added saying "keep new fields
+    # last"; the second time that comment was read and the mistake made anyway. A comment
+    # cannot enforce an ordering constraint, so the constraint is now enforced by the
+    # language: ``kw_only=True`` makes declaration order irrelevant below this line, and a
+    # positional 4th argument is a TypeError at the call site instead of a silent rebind.
+    # tests/integrate/test_spatial.py pins this.
+    # ------------------------------------------------------------------------
+
+    # part -> the SOURCE COLUMN the value came from. Carried so ``position_raw`` can name
+    # the column beside the value, which is what makes an integrated coordinate auditable
+    # back to the artefact. Mutable default, same reason as above.
+    part_source_fields: dict[str, str] = field(default_factory=dict, kw_only=True)
+    spatial_source: str | None = field(default=None, kw_only=True)
+    # WHAT KIND of locator this is — the axis Methods dispatch on. Defaults to the type the
+    # referential implies, so a caller predating the split still resolves correctly.
+    position_type: str | None = field(default=None, kw_only=True)
 
 
 # The parts the v1 Methods interpret. The two angles are DATUM-AGNOSTIC L1 parts
@@ -132,7 +154,12 @@ _PART_TO_COLUMN: dict[str, str] = {
     _LONGITUDE_PART_NAME: "longitude_wgs84",
 }
 _METRIC_PARTS: frozenset[str] = frozenset(V.CANONICAL_UNIT)
+# The two canonical columns whose derivation ``position_raw`` evidences. Derived from the
+# part->column map so a renamed column cannot leave the check silently matching nothing.
 _INTERPRETABLE_PARTS: frozenset[str] = _ANGLE_PARTS | _METRIC_PARTS
+# The two canonical columns whose derivation ``position_raw`` evidences. Derived from the
+# part->column map so a renamed column cannot leave the check silently matching nothing.
+_COORDINATE_COLUMNS: frozenset[str] = frozenset(_PART_TO_COLUMN.values())
 
 
 def _parse_float(part: str, raw_value: str) -> float:
@@ -170,6 +197,18 @@ class SpatialMethod(Protocol):
     view of the one integration row — the composer merges the method set's disjoint
     contributions), or None when it has nothing. ``name``/``version`` (+ any
     reference data an instance carries) form its stored method-string fragment.
+
+    ``coordinate_inputs`` names the L1 parts this method READ to produce
+    ``latitude_wgs84``/``longitude_wgs84``, in the order they should be recorded. The
+    composer turns them into ``position_raw`` — the verbatim evidence behind the derived
+    coordinate. A method that produces no coordinates returns an empty sequence.
+
+    WHY the method declares it rather than the composer guessing: the inputs differ per
+    MECHANISM, and only the method knows its own. A reprojection reads the two angle parts;
+    a geocoder reads a postal address; a cell-register or BSSID lookup reads an identifier.
+    Hard-coding "the latitude and longitude parts" here would silently produce an EMPTY
+    ``position_raw`` the day the first non-reprojection method ships, which is exactly the
+    class of silent loss this model exists to prevent.
     """
 
     name: str
@@ -178,6 +217,9 @@ class SpatialMethod(Protocol):
     def applies_to(self, expression: SpatialExpressionInput) -> bool: ...
 
     def integrate(self, expression: SpatialExpressionInput) -> dict[str, float] | None: ...
+
+    def coordinate_inputs(
+        self, expression: SpatialExpressionInput) -> Sequence[str]: ...
 
 
 class PassthroughWgs84:
@@ -196,7 +238,11 @@ class PassthroughWgs84:
     version = "1.0"
 
     def applies_to(self, expression: SpatialExpressionInput) -> bool:
-        return (expression.referential == V.SpatialReferential.EPSG_4326.value
+        # BOTH conditions: the locator must be a coordinate AND stated in WGS84. The type
+        # says a transformation (not a lookup) can reach WGS84; the referential says the
+        # components already ARE WGS84 degrees, so adopting them is a pass-through.
+        return (expression.position_type == V.PositionType.COORDINATE.value
+                and expression.referential == V.SpatialReferential.EPSG_4326.value
                 and any(part in expression.part_values for part in _ANGLE_PARTS))
 
     def integrate(self, expression: SpatialExpressionInput) -> dict[str, float] | None:
@@ -209,6 +255,11 @@ class PassthroughWgs84:
             if part in expression.part_values
         }
         return columns or None
+
+    def coordinate_inputs(self, expression: SpatialExpressionInput) -> Sequence[str]:
+        """The angle parts adopted, in latitude-then-longitude order."""
+        return [part for part in (_LATITUDE_PART_NAME, _LONGITUDE_PART_NAME)
+                if part in expression.part_values]
 
 
 class UnitConvert:
@@ -232,6 +283,10 @@ class UnitConvert:
     def applies_to(self, expression: SpatialExpressionInput) -> bool:
         return any(part in expression.part_values for part in _METRIC_PARTS)
 
+    def coordinate_inputs(self, expression: SpatialExpressionInput) -> Sequence[str]:
+        """None: a unit conversion produces metrics, never a coordinate."""
+        return ()
+
     def integrate(self, expression: SpatialExpressionInput) -> dict[str, float] | None:
         columns: dict[str, float] = {}
         for part, raw_value in expression.part_values.items():
@@ -254,10 +309,21 @@ class _NotAvailableMethod:
 
     name = ""
     version = "0"
-    _referentials: frozenset[str] = frozenset()
+    # The POSITION TYPES this mechanism will serve. Dispatching on the type rather than the
+    # referential is the point of the split: a BSSID has no referential to match on.
+    _position_types: frozenset[str] = frozenset()
+    # The L1 part each mechanism will READ to produce a coordinate. Declared now so
+    # ``position_raw`` records the right evidence the day the method is implemented —
+    # an address for a geocoder, a cell or BSSID identifier for a location-service lookup —
+    # rather than the angle parts a reprojection happens to use.
+    _coordinate_input_parts: tuple[str, ...] = ("raw_position",)
 
     def applies_to(self, expression: SpatialExpressionInput) -> bool:
-        return expression.referential in self._referentials
+        return expression.position_type in self._position_types
+
+    def coordinate_inputs(self, expression: SpatialExpressionInput) -> Sequence[str]:
+        return [part for part in self._coordinate_input_parts
+                if part in expression.part_values]
 
     def integrate(self, expression: SpatialExpressionInput) -> dict[str, float] | None:
         raise NotImplementedError(
@@ -274,20 +340,22 @@ class GeocodeAddress(_NotAvailableMethod):
     """
 
     name = "geocode_address"
-    _referentials = frozenset({V.SpatialReferential.ADDRESS.value})
+    _position_types = frozenset({V.PositionType.STREET_ADDRESS.value})
 
 
-class GeocodePlaceName(_NotAvailableMethod):
-    """Stub: resolve a place-name / region expression to a CENTROID (later task).
+class DecodeGridReference(_NotAvailableMethod):
+    """Stub: decode a grid-cell code (geohash, MGRS, Plus Code) to WGS84 (later task).
 
-    The produced method string must NAME the substitution — a centroid standing
-    in for the true position is ``place_centroid/<register>`` or
-    ``region_centroid/<register>``, never a bare ``geocode/...`` that hides it.
+    Self-contained arithmetic — no register, no gazetteer — which is why it sits beside the
+    reprojection rather than with the lookups. The referential names WHICH grid.
+
+    The implemented method must NAME the substitution it makes: a grid code denotes a CELL,
+    so standing its centre in for the true position is ``grid_centre/<system>``, never a
+    bare ``decode/...`` that hides an area behind a point.
     """
 
-    name = "geocode_place_name"
-    _referentials = frozenset({V.SpatialReferential.PLACE_NAME.value,
-                               V.SpatialReferential.REGION.value})
+    name = "decode_grid_reference"
+    _position_types = frozenset({V.PositionType.GRID_REFERENCE.value})
 
 
 class CellRegisterLookup(_NotAvailableMethod):
@@ -299,7 +367,38 @@ class CellRegisterLookup(_NotAvailableMethod):
     """
 
     name = "cell_register_lookup"
-    _referentials = frozenset({V.SpatialReferential.CELL_REF.value})
+    _position_types = frozenset({V.PositionType.CELL_ID.value})
+
+
+def _position_raw(expression: SpatialExpressionInput, parts: Sequence[str]) -> str | None:
+    """The VERBATIM information that allowed ``latitude_wgs84``/``longitude_wgs84``.
+
+    Rendered ``<source column>:<verbatim value>``, joined by `` | `` — e.g.
+    ``ZLOCATIONLATITUDE:46.475 | ZLOCATIONLONGITUDE:6.418`` for a reprojection, and
+    ``ZSTREET:12 Rue du Stand`` once a geocoder produces the same two columns from an
+    address instead.
+
+    ``parts`` comes from the PRODUCING method's ``coordinate_inputs``, so the scope is "what
+    allowed the computation", not "the latitude and longitude components". The two coincide
+    only while reprojection is the sole mechanism; a geocoder, a cell-register lookup or a
+    BSSID location service each consume something else entirely and this records that
+    instead, with no change here.
+
+    WHY it lives on the INTEGRATION and not the expression: it records what THIS derivation
+    consumed, so a reader can check the canonical coordinate against the exact source words
+    behind it. An expression's other components — an altitude, an accuracy — had no part in
+    producing the coordinate and are deliberately absent.
+
+    A part with no source column renders its value alone, so nothing is silently dropped.
+    """
+    pairs = []
+    for part in parts:
+        value = expression.part_values.get(part)
+        if value is None:
+            continue
+        column = expression.part_source_fields.get(part)
+        pairs.append(f"{column}:{value}" if column else value)
+    return " | ".join(pairs) or None
 
 
 # --- the composer: one integration row per expression -------------------------
@@ -321,6 +420,7 @@ def integrate_expression(
     """
     columns: dict[str, float] = {}
     fragments: list[str] = []
+    coordinate_inputs: list[str] = []
     for method in methods:
         if not method.applies_to(expression):
             continue
@@ -332,14 +432,20 @@ def integrate_expression(
             raise ValueError(
                 f"methods overlap on columns {sorted(overlap)} for expression "
                 f"{expression.spatial_expression_id}: one value, two derivations")
+        # Only the method that actually produced a coordinate contributes the evidence
+        # behind it: whatever mechanism it used, position_raw records ITS inputs.
+        if _COORDINATE_COLUMNS & set(produced):
+            coordinate_inputs.extend(method.coordinate_inputs(expression))
         columns.update(produced)
         fragments.append(f"{method.name}/{method.version}")
     if not columns:
         return None
     method_string = "+".join(fragments)
     return V.SpatialIntegration(
-        spatial_integration_id=ids.spatial_integration_id(
-            expression.spatial_expression_id, method_string),
+        # Empty unless a coordinate was produced: position_raw evidences THAT derivation,
+        # so an expression yielding only metrics carries none.
+        position_raw=_position_raw(expression, coordinate_inputs),
+        spatial_integration_id=ids.new_id(),
         spatial_expression_id=expression.spatial_expression_id,
         method=method_string,
         referential=expression.referential,
@@ -393,7 +499,7 @@ def integrate_spatial(
         if (integration.latitude_wgs84 is not None
                 and integration.longitude_wgs84 is not None):
             store.write_spatial_index(V.SpatialIndex(
-                spatial_index_id=ids.spatial_index_id(integration.spatial_integration_id),
+                spatial_index_id=ids.new_id(),
                 spatial_integration_id=integration.spatial_integration_id,
                 s2_cell_id=s2_leaf_cell_id(
                     integration.latitude_wgs84, integration.longitude_wgs84),
@@ -419,20 +525,23 @@ def _load_expressions(connection: sqlite3.Connection) -> list[SpatialExpressionI
     """
     expressions = {
         row[0]: SpatialExpressionInput(
-            spatial_expression_id=row[0], referential=row[1], spatial_source=row[2])
+            spatial_expression_id=row[0], referential=row[1], spatial_source=row[2],
+            position_type=row[3])
         for row in connection.execute(
-            "SELECT spatial_expression_id, referential, spatial_source "
+            "SELECT spatial_expression_id, referential, spatial_source, position_type "
             "FROM spatial_expression "
             "WHERE spatial_expression_id NOT IN "
             "(SELECT spatial_expression_id FROM spatial_integration) "
             "ORDER BY spatial_expression_id")
     }
     component_rows = connection.execute(
-        "SELECT spatial_expression_id, part, raw_value FROM spatial_component "
+        "SELECT spatial_expression_id, part, raw_value, source_field FROM spatial_component "
         "ORDER BY spatial_expression_id, ordinal")
-    for expression_id, part, raw_value in component_rows:
+    for expression_id, part, raw_value, source_field in component_rows:
         if raw_value is None or expression_id not in expressions:
             continue   # NULL value, or a component of an already-integrated expression
+        if source_field is not None:
+            expressions[expression_id].part_source_fields.setdefault(part, source_field)
         part_values = expressions[expression_id].part_values
         if part in part_values:
             if part in _INTERPRETABLE_PARTS:

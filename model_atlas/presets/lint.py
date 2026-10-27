@@ -137,7 +137,6 @@ def lint_spec(spec: PresetSpec, *, preset_label: str | None = None) -> list[Lint
         _check_multi_role,
         _check_free_text_vocabularies,
         _check_coordinates_have_a_referential,
-        _check_context_needs_an_activity,
         _check_zone_and_duration_shape,
         _check_record_uid_declared,
     ):
@@ -399,30 +398,43 @@ def _check_observations(spec: PresetSpec, label: str) -> list[LintFinding]:
         # An observation's three corner links are its semantics; a missing one leaves that
         # corner's meaning undefined. Keyed by the `links:` YAML key, with the column each
         # maps to (LINK_FIELDS) — so the message names what the author actually writes.
-        _link_example = {"entity": "self", "spatial": "at", "temporal": "once"}
+        # A template with no position (in it or in `common:`) has no position whose use a
+        # spatial link could describe (decision 55): one is neither expected nor kept.
+        has_position = any(f.model_field in V.STANDARD_SPATIAL_PARTS
+                            for f in (*spec.common, *tmpl.fields))
+        _link_example = {"entity": "subject", "spatial": "measured", "temporal": "at_least_once"}
         for key, column in LINK_FIELDS.items():
+            if column == "spatial_link" and not has_position:
+                if column in fields:
+                    out.append(LintFinding(
+                        WARNING, "spatial-link-without-position",
+                        "observation maps no position, so its spatial link describes nothing "
+                        "and ingest drops it — remove it, or map the position", label,
+                        f"{where}.links"))
+                continue
             if column not in fields:
                 out.append(LintFinding(
                     WARNING, "missing-link",
                     f"observation declares no {key} link — that corner's meaning is undefined; "
                     f"add it under links (e.g. {key}: {_link_example[key]}) so the row is "
                     "interpretable", label, f"{where}.links"))
-        # A bearer without the verb that licenses it, or a verb that needs one without it.
-        # The invariant is EntityLink.needs_bearer: a bearer row exists iff the link is not
-        # `self`. Ingest enforces it; saying so here catches the preset that would produce
-        # a row asserting a position whose owner it never names.
-        # ``fields`` is the set of mapped model-field NAMES, so the link's VALUE is read
-        # from the template's field specs rather than from the set.
+        # Bearer fields the entity link will never write (decision 55): `subject` uses the
+        # targeted entity itself, `unknown` has no bearer by definition. Ingest drops them;
+        # saying so here catches the preset whose author meant a different link.
+        # The link's VALUE is read from the field specs, and both it and the bearer fields
+        # may be mapped in `common:` as well as in the template.
         entity_link = next(
-            (f.ref.arg for f in tmpl.fields
-             if f.model_field == "entity_link" and f.ref.kind == "const"), None)
-        bearer_mapped = any(f.startswith("bearer_") for f in fields)
-        if entity_link == V.EntityLink.SELF.value and bearer_mapped:
+            (f.ref.arg for f in (*tmpl.fields, *spec.common)
+             if f.model_field == "entity_link" and f.ref is not None and f.ref.kind == "const"),
+            None)
+        bearer_mapped = any(f.model_field.startswith("bearer_")
+                            for f in (*spec.common, *tmpl.fields))
+        if bearer_mapped and entity_link in (V.EntityLink.SUBJECT.value,
+                                             V.EntityLink.UNKNOWN.value):
             out.append(LintFinding(
-                WARNING, "bearer-without-verb",
-                "entity link is `self`, so the entity holds its own position and no bearer "
-                "is written — the mapped bearer_* fields will be silently dropped",
-                label, f"{where}.links"))
+                WARNING, "bearer-without-party",
+                f"entity link is `{entity_link}`, so no separate bearer is written — the "
+                "mapped bearer_* fields will be silently dropped", label, f"{where}.links"))
         # A naive strptime parsed as UTC is a silent trap for non-UTC exports.
         for time in tmpl.temporal:
             if time.format and time.zone is None and "%z" not in time.format:
@@ -581,22 +593,6 @@ def _check_coordinates_have_a_referential(spec: PresetSpec, label: str) -> list[
             label, f"observations[{index}].position",
             suggestion="spatial_referential: const(epsg:4326)"))
     return out
-
-
-def _check_context_needs_an_activity(spec: PresetSpec, label: str) -> list[LintFinding]:
-    """``context.<key>`` entries live on the activity, and ``activity_kind`` in ``common:`` is
-    what CREATES it. Without it no activity row is written and every context entry is dropped
-    on the floor — mapped, resolved, and then discarded."""
-    context_keys = sorted(f.model_field for f in spec.common
-                          if f.model_field.startswith("context."))
-    if not context_keys or any(f.model_field == "activity_kind" for f in spec.common):
-        return []
-    return [LintFinding(
-        WARNING, "context-without-activity",
-        f"{context_keys} are mapped but no activity_kind is; without it no activity row is "
-        f"created and the context entries are silently discarded", label, "common",
-        suggestion="activity_kind: const(observation)   # or call | message | trip | "
-                   "transaction | stay")]
 
 
 def _check_zone_and_duration_shape(spec: PresetSpec, label: str) -> list[LintFinding]:

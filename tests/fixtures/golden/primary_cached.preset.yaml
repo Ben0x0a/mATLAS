@@ -28,13 +28,13 @@ common:
   entity_type:     const(device)
   source_label:    const(ZRTCLLOCATIONMO)
   position_source: const(GNSS)
-  attestation:     const(instrument)
   raw_source_path: field(Source)
 
 observations:
   - position:
       latitude:              field(Latitude)
       longitude:             field(Longitude)
+      position_type:        const(coordinate)
       spatial_referential:   const(epsg:4326)   # the datum for the coordinates
       horizontal_accuracy_m: { from: 'field("Accuracy (m)")', unit: m }
       horizontal_speed_kmh:  { from: 'field("Speed (m/s)")', unit: m/s }
@@ -43,10 +43,8 @@ observations:
       format:  "%d.%m.%Y %H:%M:%S.%f"
       zone:    const(UTC+00:00)
     links:
-      # A device's OWN GNSS cache: the position is the device's, so there is no bearer
-      # (`self`), it is at the point, and the fix is a single observation over a degenerate
-      # interval. `observed_at` is gone — when the record was written is now `recorded_at`,
-      # and who measured it is `attestation`.
-      entity:   self
-      spatial:  at
-      temporal: once
+      # A device's OWN GNSS cache: the device holds its own position (`subject`, so it is
+      # its own bearer), the position was measured, and an instant is `at_least_once`.
+      entity:   subject
+      spatial:  measured
+      temporal: at_least_once

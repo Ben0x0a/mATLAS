@@ -120,9 +120,10 @@ def test_canonical_path_nfc_unifies_platform_encodings() -> None:
     decomposed = "/case/cafe\u0301/f.csv"   # e + combining acute (NFD, macOS)
     assert composed != decomposed            # sanity: the inputs really differ
     assert determinism.canonical_path(composed) == determinism.canonical_path(decomposed)
-    # …and therefore ONE source identity, not two, for the same exhibit.
-    assert (ids.source_id(determinism.canonical_path(composed), None, None)
-            == ids.source_id(determinism.canonical_path(decomposed), None, None))
+    # …and therefore ONE source row, not two, for the same exhibit: the source's identity
+    # is now its NATURAL KEY (UNIQUE on input_file_path/inner_path/subunit), and the
+    # canonical path is what goes into it. Ids themselves are random (decision 50), so the
+    # property is asserted where it now lives — on the key, not on a derived uuid.
 
 
 def test_canonical_path_normalises_separators_and_requires_absolute() -> None:
@@ -141,23 +142,22 @@ def test_container_inner_path_is_chain_inclusive() -> None:
 
 def test_container_join_is_injective_a_bang_in_a_segment_cannot_be_forged() -> None:
     # The forgeable "!" join: archive "a.zip!b" -> member "c" and archive "a.zip" ->
-    # member "b!c" must NOT flatten to one inner_path (and one source_id). Escaping the
+    # member "b!c" must NOT flatten to one inner_path (and one source_file_id). Escaping the
     # within-segment "!" keeps the join reversible, so the two chains stay distinct.
     left_inner = determinism.container_inner_path(("a.zip!b", "c"))
     right_inner = determinism.container_inner_path(("a.zip", "b!c"))
+    # Two DIFFERENT inner paths, so two different natural keys and two source rows — the
+    # separator is not forgeable into a collision.
     assert left_inner != right_inner
-    assert (ids.source_id("/case/x", left_inner, None)
-            != ids.source_id("/case/x", right_inner, None))
 
 
 def test_posix_backslash_is_kept_literal_and_does_not_collide_with_slash() -> None:
     # On POSIX a literal "\" is a legal filename byte: /dir/a\b and /dir/a/b are two
-    # different files and must derive two source_ids (an unconditional \->/ fold collapses
+    # different files and must derive two source_file_ids (an unconditional \->/ fold collapses
     # them into one — the ID4 collision).
     kept = determinism.canonical_path("/dir/a\\b")
+    # A backslash is KEPT, so "/dir/a\\b" and "/dir/a/b" stay two distinct natural keys.
     assert "\\" in kept and kept != "/dir/a/b"
-    assert (ids.source_id(determinism.canonical_path("/dir/a\\b"), None, None)
-            != ids.source_id(determinism.canonical_path("/dir/a/b"), None, None))
 
 
 def test_non_ascii_letter_is_not_accepted_as_a_drive_root() -> None:
@@ -224,16 +224,15 @@ def _build_run(store: RunStore, *, input_file_path: str,
 
     path = determinism.canonical_path(input_file_path)
     inner = determinism.container_inner_path(container_chain)
-    source_id = ids.source_id(path, inner, None)
-    store.write_source(V.Source(source_id=source_id, run_id=run_id,
+    source_file_id = ids.new_id()
+    store.write_source_file(V.SourceFile(source_file_id=source_file_id, run_id=run_id,
                                 input_file_path=path, inner_path=inner, format="csv",
                                 fingerprint_sha256=fingerprint))
-    rr_id = ids.raw_record_id(source_id, 1)
-    store.write_raw_record(V.RawRecord(raw_record_id=rr_id, source_id=source_id,
+    rr_id = ids.new_id()
+    store.write_raw_record(V.RawRecord(raw_record_id=rr_id, source_file_id=source_file_id,
                                        line_no=1,
                                        raw_json='{"a_party":"+41791234567"}'))
-    entity_id = ids.entity_id((rr_id, 0, "+41791234567", V.IdentifierType.MSISDN,
-                               V.EntityType.DEVICE))
+    entity_id = ids.new_id()
     store.write_entity(V.Entity(entity_id=entity_id, identifier="+41791234567",
                                 raw_identifier="+41 79 123 45 67",
                                 identifier_type=V.IdentifierType.MSISDN,
@@ -242,22 +241,27 @@ def _build_run(store: RunStore, *, input_file_path: str,
         bearer=None,
         entity=ids.EntityProjection("+41791234567", V.IdentifierType.MSISDN,
                                     V.EntityType.DEVICE),
-        spatial=None, temporal=None,
-        links=ids.ObservationLinks(activity_role=V.ActivityRole.CALLER),
-        deleted=None, multiplicity=None, activity=None)
-    content_hash, claim_digest = ids.digests(fingerprint_sha256=fingerprint,
-                                             preset_key="cdr_generic", line_no=1,
-                                             output_ordinal=0, l1=l1)
+        spatial=None, temporal=None)
+    observation_content_hash, spatiotemporal_entity_hash = ids.digests(fingerprint_sha256=fingerprint,
+                                             preset_key="cdr_generic", line_no=1, l1=l1)
+    observation_id = ids.new_id()
     store.write_observation(V.Observation(
-        observation_id=ids.observation_id(rr_id, "cdr_generic", 0), raw_record_id=rr_id,
-        preset_id=preset_id, output_ordinal=0, entity_id=entity_id,
-        content_hash=content_hash, claim_digest=claim_digest,
-        activity_role=V.ActivityRole.CALLER))
+        observation_id=observation_id, raw_record_id=rr_id,
+        preset_id=preset_id, entity_id=entity_id,
+        observation_content_hash=observation_content_hash, spatiotemporal_entity_hash=spatiotemporal_entity_hash,
+        ))
     store.write_edit_log(V.EditLog(edit_id=edit_id, ordinal=1,
                                    edit_kind=V.EditKind.UPDATE,
                                    edited_at="2026-03-15T09:00:00Z"))
+    # EVERY evidence-chain id is masked, not just the run-carrying ones: since decision 50
+    # they are all random uuid4. What the dump comparison still proves is that everything
+    # DERIVED from content — both digests, every projected value, the whole row shape — is
+    # byte-identical across two independent runs. That is the property that matters; the
+    # ids were never the evidence.
     return {"case_id": case_id, "run_id": run_id, "edit_id": edit_id,
-            "run_preset_id": run_preset_id}
+            "run_preset_id": run_preset_id, "source_file_id": source_file_id,
+            "raw_record_id": rr_id, "entity_id": entity_id,
+            "observation_id": observation_id}
 
 
 def test_folder_and_zip_disclosures_share_digests_end_to_end() -> None:
@@ -272,10 +276,10 @@ def test_folder_and_zip_disclosures_share_digests_end_to_end() -> None:
         _build_run(zip_store, input_file_path="/case/exhibit_A.zip",
                    container_chain=("exhibit_A.zip", "cdr.csv"),
                    fingerprint="fp-same-bytes")
-        digest_sql = "SELECT content_hash, claim_digest FROM observation"
+        digest_sql = "SELECT observation_content_hash, spatiotemporal_entity_hash FROM observation"
         assert (folder_store.connection.execute(digest_sql).fetchall()
                 == zip_store.connection.execute(digest_sql).fetchall())
-        source_sql = "SELECT source_id FROM source"
+        source_sql = "SELECT source_file_id FROM source_file"
         assert (folder_store.connection.execute(source_sql).fetchall()
                 != zip_store.connection.execute(source_sql).fetchall())
 
@@ -283,9 +287,10 @@ def test_folder_and_zip_disclosures_share_digests_end_to_end() -> None:
 def _masked_dump(connection: sqlite3.Connection, masks: dict[str, str]) -> str:
     """The full SQL dump with each run-carrying id replaced by its name.
 
-    WHY masking is legitimate: case/run/edit ids are uuid4 BY DESIGN (D10/D28/D34) and
-    run_preset_id is uuid5 OVER run_id — the doc's diffability rule exempts exactly
-    these; every other byte of the dump must match.
+    WHY masking is legitimate: case/run/edit ids are uuid4 BY DESIGN (D10/D28/D34),
+    run_preset_id is uuid5 OVER run_id, and since decision 50 every EVIDENCE-CHAIN id is
+    uuid4 too. Masking them leaves the digests and every content-derived value unmasked —
+    and those must still match byte for byte.
     """
     text = "\n".join(connection.iterdump())
     for name, value in masks.items():
@@ -307,16 +312,17 @@ def test_double_run_dumps_are_byte_identical_modulo_run_columns() -> None:
 
 
 def test_pipe_in_a_path_survives_canonicalisation_unforged() -> None:
-    """Rule 4 + the id scheme: a real ``|`` in a path is kept VERBATIM by
-    canonicalisation (never escaped into some collapsible form), and canonicalised
-    chain keys cannot be pipe-forged: with a ``|`` join both keys below would flatten
-    to the same "/evid/a|b|c.zip!f.csv" string. Sibling forgery tests:
-    test_ids.py::test_pipe_in_path_does_not_forge_a_different_split and
-    test_constraints.py::test_pipe_in_a_path_cannot_forge_equal_ids.
+    """Rule 4: a real ``|`` in a path is kept VERBATIM by canonicalisation, never escaped
+    into some collapsible form.
+
+    The forgery this used to guard against — two different (path, inner_path) pairs joining
+    to one uuid5 input — cannot happen at all since decision 50: a source is found by its
+    natural key, and the key is TWO SEPARATE COLUMNS compared column-wise in SQL. There is
+    no join, so there is nothing to forge. The property is asserted on the key itself.
     """
     assert "|" in determinism.canonical_path("/evid/a|b")
-    left = ids.source_id(determinism.canonical_path("/evid/a|b"),
-                         determinism.container_inner_path(("c.zip", "f.csv")), None)
-    right = ids.source_id(determinism.canonical_path("/evid/a"),
-                          determinism.container_inner_path(("b|c.zip", "f.csv")), None)
+    left = (determinism.canonical_path("/evid/a|b"),
+            determinism.container_inner_path(("c.zip", "f.csv")))
+    right = (determinism.canonical_path("/evid/a"),
+             determinism.container_inner_path(("b|c.zip", "f.csv")))
     assert left != right

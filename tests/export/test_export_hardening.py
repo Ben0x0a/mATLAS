@@ -47,13 +47,13 @@ def test_xlsx_preserves_large_s2_cell_id_exactly(tmp_path: Path) -> None:
             spatial_index_id="sidx-instant", spatial_integration_id="si-instant",
             s2_cell_id=_INT64_MAX, s2_level=30))
         frame = build_flat_view(store.connection, include_source_columns=False)
-        assert frame["s2_cell_id"].dtype == "Int64"   # nullable-Int64 (the corruption route)
+        assert frame["s2_cell_id_matlas"].dtype == "Int64"   # nullable-Int64 (the corruption route)
         written = XlsxExporter().export(
             store, ExportContext(output_dir=tmp_path, base_name="merged"))
 
     worksheet = load_workbook(written[0]).active
     header = [cell.value for cell in worksheet[1]]
-    column_index = header.index("s2_cell_id") + 1
+    column_index = header.index("s2_cell_id_matlas") + 1
     planted = [
         worksheet.cell(row=row, column=column_index).value
         for row in range(2, worksheet.max_row + 1)
@@ -88,7 +88,8 @@ def test_csv_flat_neutralises_formula_and_round_trips(tmp_path: Path) -> None:
                                  include_source_columns=False))
 
     records = _reread(written[0])
-    cells = [row["entity"] for row in records] + [row["concerns"] for row in records]
+    cells = ([row["entity"] for row in records]
+             + [row["raw_identifier"] for row in records])
     guarded = [value for value in cells if value.startswith(FORMULA_GUARD)]
     assert guarded, "the formula cell should be apostrophe-guarded"
     for value in guarded:

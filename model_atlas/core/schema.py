@@ -46,9 +46,9 @@ from model_atlas.core import vocabularies as V
 # self-ingestion stamp: discovery reads it to refuse/flag a mATLAS run DB fed back
 # in as evidence. The value 0x6D41_744C spells the ASCII bytes "mAtL" (mATLAS) — an
 # arbitrary but memorable, documented constant, chosen once and never reused elsewhere.
-SCHEMA_VERSION = "2"
-FAMILIES_VERSION = "2"
-USER_VERSION = 2
+SCHEMA_VERSION = "5"
+FAMILIES_VERSION = "5"
+USER_VERSION = 5
 APPLICATION_ID = 0x6D41_744C  # b"mAtL" — the mATLAS run-DB self-ingestion stamp
 
 # The normalisation / stemming rule-set versions recorded once per run.
@@ -87,7 +87,7 @@ def _sql_type(annotation: Any) -> str:
             return "INTEGER"
         if only is int:
             return "INTEGER"
-    # A genuine multi-type union (utc_offset_hours_* is float|str) or typing.Any: keep it
+    # A genuine multi-type union (offset_to_local_hours_* is float|str) or typing.Any: keep it
     # as free TEXT so no value is rejected.
     return "TEXT"
 
@@ -134,12 +134,39 @@ def _hints(dataclass_type: type) -> dict[str, Any]:
 #   unique_cols — single columns to mark UNIQUE inline (the three owned-corner FKs, the
 #               entity FK, archive.path…).
 #   unique    — composite UNIQUE(tuple) natural keys (§2a and the link tables).
+#   checks    — table-level CHECK expressions spanning several columns (decision 55's
+#               link/bearer invariants); single-column vocabulary CHECKs are derived instead.
 #   extra_columns — DDL-only columns absent from the dataclass, as (name, "TYPE …").
 #               Currently unused (the one-time entity.raw_identifier gap was closed in
 #               vocabularies.py); kept because a future meta-ish column may need it.
 #   indexes   — (index_name, (col, …)) non-unique lookup indexes (SQLite makes none for FKs).
 # The column NAMES referenced here are checked against the dataclass at build time, so a
 # rename on either side raises instead of silently dropping a constraint (see _build_table).
+
+def _observation_link_checks() -> list[str]:
+    """The decision-55 invariants between the links and the bearer, as CHECK expressions.
+
+    HOW: each is written with ``IS`` / ``IS NOT`` rather than ``=`` because SQLite passes a
+    CHECK whose expression is NULL — ``entity_link = 'subject'`` on a NULL link would let any
+    bearer through. The member tokens come from the enums, never restated as literals.
+    WHY in the schema and not only at ingest: the database is read and edited directly (the
+    edit API, an analyst's SQL); a constraint only ingest honours is one an edit can break.
+    """
+    subject = V.EntityLink.SUBJECT.value
+    party = V.EntityLink.PARTY.value
+    unknown = V.EntityLink.UNKNOWN.value
+    return [
+        # 1. subject <=> the bearer IS the targeted entity.
+        f"(entity_link IS '{subject}') = (bearer_entity_id IS entity_id)",
+        # 2. party => another entity holds the position.
+        f"entity_link IS NOT '{party}' OR (bearer_entity_id IS NOT NULL "
+        f"AND bearer_entity_id IS NOT entity_id)",
+        # 3. unknown => no bearer: a placeholder would manufacture a presence claim.
+        f"entity_link IS NOT '{unknown}' OR bearer_entity_id IS NULL",
+        # 4. no geometry => nothing to say about how the position is used.
+        "spatial_expression_id IS NOT NULL OR spatial_link IS NULL",
+    ]
+
 
 @typing.no_type_check
 def _table_specs() -> "list[dict[str, Any]]":
@@ -159,7 +186,7 @@ def _table_specs() -> "list[dict[str, Any]]":
          "fks": {"run_id": ("run", "run_id"),
                  "archive_id": ("archive", "archive_id")},
          "unique": [("run_id", "archive_id")]},
-        {"name": "source", "dataclass": V.Source, "pk": "source_id",
+        {"name": "source_file", "dataclass": V.SourceFile, "pk": "source_file_id",
          "not_null": ["run_id", "input_file_path"],
          "fks": {"run_id": ("run", "run_id")},
          "unique": [("run_id", "input_file_path", "inner_path", "subunit")],
@@ -173,17 +200,11 @@ def _table_specs() -> "list[dict[str, Any]]":
                  "preset_id": ("preset", "preset_id")},
          "unique": [("run_id", "preset_id")]},
         {"name": "raw_record", "dataclass": V.RawRecord, "pk": "raw_record_id",
-         "not_null": ["source_id", "line_no", "raw_json"],
-         "fks": {"source_id": ("source", "source_id")},
-         "unique": [("source_id", "line_no")]},
+         "not_null": ["source_file_id", "line_no", "raw_json"],
+         "fks": {"source_file_id": ("source_file", "source_file_id")},
+         "unique": [("source_file_id", "line_no")]},
         # -- Layer 1: observation ----------------------------------------------
         {"name": "activity", "dataclass": V.Activity, "pk": "activity_id"},
-        {"name": "activity_record", "dataclass": V.ActivityRecord,
-         "pk": "activity_record_id",
-         "not_null": ["activity_id", "raw_record_id"],
-         "fks": {"activity_id": ("activity", "activity_id"),
-                 "raw_record_id": ("raw_record", "raw_record_id")},
-         "unique": [("activity_id", "raw_record_id")]},
         {"name": "entity", "dataclass": V.Entity, "pk": "entity_id",
          "not_null": ["identifier_type", "type"],
          # identifier_type carries NO enum CHECK: it is annotated ``str`` (a free string — a
@@ -193,7 +214,9 @@ def _table_specs() -> "list[dict[str, Any]]":
          "indexes": [("ix_entity_norm", ("identifier_type", "identifier")),
                      ("ix_entity_concerns", ("concerns_uid",))]},
         {"name": "spatial_expression", "dataclass": V.SpatialExpression,
-         "pk": "spatial_expression_id", "not_null": ["referential"]},
+         # position_type replaces referential as the NOT NULL fact: every expression has a
+         # kind, but only coordinate and grid_reference have something to be expressed in.
+         "pk": "spatial_expression_id", "not_null": ["position_type"]},
         {"name": "spatial_component", "dataclass": V.SpatialComponent,
          "pk": "spatial_component_id",
          "not_null": ["spatial_expression_id", "ordinal", "part"],
@@ -209,8 +232,8 @@ def _table_specs() -> "list[dict[str, Any]]":
                  ("temporal_expression", "temporal_expression_id")},
          "unique": [("temporal_expression_id", "ordinal")]},
         {"name": "observation", "dataclass": V.Observation, "pk": "observation_id",
-         "not_null": ["raw_record_id", "preset_id", "output_ordinal", "entity_id",
-                      "content_hash", "claim_digest"],
+         "not_null": ["raw_record_id", "preset_id", "entity_id",
+                      "observation_content_hash", "spatiotemporal_entity_hash"],
          "fks": {"raw_record_id": ("raw_record", "raw_record_id"),
                  "preset_id": ("preset", "preset_id"),
                  "entity_id": ("entity", "entity_id"),
@@ -225,13 +248,18 @@ def _table_specs() -> "list[dict[str, Any]]":
                  ("temporal_expression", "temporal_expression_id")},
          # The owned corners + BOTH entity rows are 1:1 with the observation (§2 guard: two
          # observations may never share a corner row or an entity row). bearer_entity_id is
-         # NOT in not_null: it is NULL exactly when entity_link is `self`, i.e. when the
-         # targeted entity holds its own position (EntityLink.needs_bearer).
+         # NOT in not_null: it is NULL for `unknown` and may be for `mentioned`; for
+         # `subject` it repeats entity_id, which UNIQUE still admits (one row per column).
          "unique_cols": ["entity_id", "bearer_entity_id",
                          "spatial_expression_id", "temporal_expression_id"],
-         "unique": [("raw_record_id", "preset_id", "output_ordinal")],
-         "indexes": [("ix_observation_ch", ("content_hash",)),
-                     ("ix_observation_cd", ("claim_digest",)),
+         # No UNIQUE on (raw_record_id, preset_id): a preset with several observation
+         # templates legitimately writes SEVERAL observations for one record, and
+         # `output_ordinal` (which used to discriminate them) went with decision 50.
+         # Re-ingesting a source is prevented earlier, by the pipeline's append check.
+         "unique": [],
+         "checks": _observation_link_checks(),
+         "indexes": [("ix_observation_ch", ("observation_content_hash",)),
+                     ("ix_observation_cd", ("spatiotemporal_entity_hash",)),
                      ("ix_observation_act", ("activity_id",))]},
         # -- Layer 2: integration --------------------------------------------
         {"name": "spatial_integration", "dataclass": V.SpatialIntegration,
@@ -263,6 +291,19 @@ def _table_specs() -> "list[dict[str, Any]]":
     ]
 
 
+_MODEL_DESCRIPTION_DDL = (
+    "CREATE TABLE model_description (\n"
+    "    table_name TEXT NOT NULL,\n"
+    # NULL = the row describes the TABLE itself; otherwise it describes one field.
+    "    field_name TEXT,\n"
+    "    type TEXT,\n"
+    "    unit TEXT,\n"
+    "    matlas_enrichment INTEGER,\n"
+    "    description TEXT NOT NULL,\n"
+    "    UNIQUE (table_name, field_name)\n"
+    ");"
+)
+
 # ``matlas_meta`` is a DDL-only table (no family — it is per-DB metadata, not evidence),
 # so it is declared explicitly rather than derived. One row, written by create_schema.
 _MATLAS_META_DDL = (
@@ -280,16 +321,16 @@ _DUPLICATE_SOURCES_VIEW = (
     "CREATE VIEW duplicate_sources AS\n"
     "    SELECT fingerprint_sha256, COUNT(*) AS copies,\n"
     "           GROUP_CONCAT(input_file_path, ' | ') AS files\n"
-    "    FROM source GROUP BY fingerprint_sha256 HAVING COUNT(*) > 1;"
+    "    FROM source_file GROUP BY fingerprint_sha256 HAVING COUNT(*) > 1;"
 )
 _POSSIBLE_SAME_EVIDENCE_VIEW = (
     "CREATE VIEW possible_same_evidence AS\n"
-    "    SELECT a.claim_digest, COUNT(*) AS copies,\n"
+    "    SELECT a.spatiotemporal_entity_hash, COUNT(*) AS copies,\n"
     "           GROUP_CONCAT(s.input_file_path, ' | ') AS files\n"
     "    FROM observation a\n"
     "    JOIN raw_record r ON r.raw_record_id = a.raw_record_id\n"
-    "    JOIN source s ON s.source_id = r.source_id\n"
-    "    GROUP BY a.claim_digest HAVING COUNT(*) > 1;"
+    "    JOIN source_file s ON s.source_file_id = r.source_file_id\n"
+    "    GROUP BY a.spatiotemporal_entity_hash HAVING COUNT(*) > 1;"
 )
 
 
@@ -356,6 +397,8 @@ def _build_table(spec: dict[str, Any]) -> str:
                     for name in order]
     for unique_cols in spec.get("unique", []):
         column_lines.append(f"UNIQUE ({', '.join(unique_cols)})")
+    for check in spec.get("checks", []):
+        column_lines.append(f"CHECK ({check})")
     body = ",\n    ".join(column_lines)
     return f"CREATE TABLE {spec['name']} (\n    {body}\n);"
 
@@ -399,7 +442,7 @@ def schema_statements() -> list[str]:
     is a fixed list and dataclass fields enumerate in declaration order — so the golden
     snapshot is stable.
     """
-    statements: list[str] = [_MATLAS_META_DDL]
+    statements: list[str] = [_MATLAS_META_DDL, _MODEL_DESCRIPTION_DDL]
     for spec in _table_specs():
         statements.append(_build_table(spec))
         for index_name, index_cols in spec.get("indexes", []):
@@ -407,6 +450,40 @@ def schema_statements() -> list[str]:
     statements.append(_DUPLICATE_SOURCES_VIEW)
     statements.append(_POSSIBLE_SAME_EVIDENCE_VIEW)
     return statements
+
+
+def model_description_rows() -> list[tuple[str, str | None, str | None, str | None,
+                                            int | None, str]]:
+    """Every ``model_description`` row, derived from the models themselves.
+
+    One row per TABLE (``field_name`` NULL, describing its purpose) followed by one row per
+    FIELD. Type comes from the same ``_sql_type`` the DDL uses, the unit is read back from
+    the field's own naming convention, and the enrichment flag from the field's marker — so
+    the description table can never disagree with the schema it describes. This is what
+    makes a persisted run DB self-describing: SQLite has no structured column attribute, so
+    without these rows a reader cannot tell which columns mATLAS added.
+    """
+    rows: list[tuple[str, str | None, str | None, str | None, int | None, str]] = []
+    for spec in _table_specs():
+        model = spec["dataclass"]
+        rows.append((spec["name"], None, None, None, None,
+                     V.DESCRIPTIONS[(model.__name__, None)]))
+        hints = _hints(model)
+        for name, annotation in hints.items():
+            rows.append((
+                spec["name"], name, _sql_type(annotation), V.field_unit(name),
+                int(V.is_enrichment(model, name)),
+                V.DESCRIPTIONS[(model.__name__, name)],
+            ))
+    return rows
+
+
+def _populate_model_description(connection: sqlite3.Connection) -> None:
+    """Write the self-description rows into a freshly created schema."""
+    connection.executemany(
+        "INSERT INTO model_description "
+        "(table_name, field_name, type, unit, matlas_enrichment, description) "
+        "VALUES (?, ?, ?, ?, ?, ?);", model_description_rows())
 
 
 def create_schema(connection: sqlite3.Connection) -> None:
@@ -424,6 +501,7 @@ def create_schema(connection: sqlite3.Connection) -> None:
     connection.execute(f"PRAGMA application_id = {APPLICATION_ID};")
     for statement in schema_statements():
         connection.execute(statement)
+    _populate_model_description(connection)
     connection.execute(
         "INSERT INTO matlas_meta "
         "(schema_version, families_version, normalisation_ruleset, stemming_ruleset) "

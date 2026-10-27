@@ -5,11 +5,11 @@ Defines:    one uuid5 namespace per run-DB table, the generic ``id_for(table, *p
             table of run_db_schema.md); the ``canonical_json`` determinism helper
             (rule 5); the plain typed projection-input dataclasses
             (``EntityProjection`` / ``SpatialProjection`` / ``TemporalProjection`` /
-            ``ActivityProjection`` / ``ObservationLinks`` + their ``Component`` parts);
+            ``ActivityProjection`` + their ``Component`` parts);
             the normative ``l1_projection`` both digests hash; and the two digests
-            ``content_hash`` and ``claim_digest``.
+            ``observation_content_hash`` and ``spatiotemporal_entity_hash``.
 Used by:    the assembly brick (it builds the projection inputs and calls
-            ``l1_projection`` / ``content_hash`` / ``claim_digest`` with no store), the
+            ``l1_projection`` / ``observation_content_hash`` / ``spatiotemporal_entity_hash`` with no store), the
             store's id derivation, and the demo cross-check tests.
 Depends on: the standard library only (``dataclasses``, ``enum``, ``hashlib``, ``json``,
             ``uuid``) and — for the enum→token rendering only — ``enum.Enum``.
@@ -78,26 +78,8 @@ CASE_METADATA_NAME = "case_metadata"
 RUN_NAME = "run"
 ARCHIVE_NAME = "archive"
 RUN_ARCHIVE_NAME = "run_archive"
-SOURCE_NAME = "source"
 PRESET_NAME = "preset"
 RUN_PRESET_NAME = "run_preset"
-RAW_RECORD_NAME = "record"            # demo tag: "record" (not "raw_record")
-ACTIVITY_NAME = "activity"
-ACTIVITY_RECORD_NAME = "actrec"       # demo tag: "actrec"
-# DELIBERATELY FROZEN at its historical value: this is an opaque constant feeding uuid5,
-# NOT the table name. Changing it would change every observation_id (and every analysis_id
-# derived from one) and break cross-run diffability against every DB already built - the
-# same argument made for _NAMESPACE above.
-OBSERVATION_NAME = "assertion"
-ENTITY_NAME = "entity"
-SPATIAL_EXPRESSION_NAME = "sx"        # demo tag: "sx"
-TEMPORAL_EXPRESSION_NAME = "tx"       # demo tag: "tx"
-SPATIAL_COMPONENT_NAME = "sc"         # demo tag: "sc"
-TEMPORAL_COMPONENT_NAME = "tc"        # demo tag: "tc"
-SPATIAL_INTEGRATION_NAME = "si"       # demo tag: "si"
-TIMESPAN_INTEGRATION_NAME = "ti"      # demo tag: "ti"
-SPATIAL_INDEX_NAME = "s2"             # demo tag: "s2"
-ANALYSIS_NAME = "analysis"
 EDIT_LOG_NAME = "edit_log"
 
 
@@ -175,97 +157,44 @@ def run_preset_id(run_id_: str, preset_id_: str) -> str:
     return id_for(RUN_PRESET_NAME, run_id_, preset_id_)
 
 
-def source_id(input_file_path: str, inner_path: str | None, subunit: str | None) -> str:
-    """source: uuid5(input_file_path ⟂ inner_path ⟂ subunit) — from PATHS, NEVER the
-    fingerprint (§2c fix), and preset-free. So two byte-identical exhibits
-    stay two source rows whose matching fingerprint is a finding, not a collapse."""
-    return id_for(SOURCE_NAME, input_file_path, inner_path, subunit)
+def new_id() -> str:
+    """A fresh uuid4 for one EVIDENCE-CHAIN row (decision 50).
+
+    ``source_file``, ``raw_record``, ``observation``, ``entity``, the two expressions and
+    their components, the two integrations, ``spatial_index`` and ``analysis`` all take one
+    of these. **Full random**: no derivation, no seed, no timestamp, no node id.
+
+    WHY random rather than derived
+    ------------------------------
+    An id's only job is to DISTINGUISH rows, not to order them and not to detect duplicates.
+    Duplicate evidence is found by ``spatiotemporal_entity_hash``, which is content-derived
+    and therefore converges ACROSS files — the thing a uuid5 over a path-derived natural key
+    could never do, since a different file gave a different id by construction.
+
+    WHY not uuid6/uuid7: both are TIME-ORDERED and embed the processing machine's clock (and
+    a node/clock-sequence). Putting the examiner's wall clock inside an evidence row id is
+    the opposite of what an id is for.
+
+    WHY it is never seeded: a seeded stream is POSITION-dependent — id N depends on how many
+    were drawn before it, so appending a source shifts every later id — and seeding from
+    something like the case name makes two same-named cases collide outright. Test
+    reproducibility comes from injecting a factory, never from making evidence ids
+    predictable.
+
+    Ordering: ingest order is not an order that should interest an analyst. The temporal
+    columns are the only ordering the model offers.
+    """
+    return str(uuid.uuid4())
 
 
 def preset_id(key: str, version: str | None) -> str:
     """preset: uuid5(key ⟂ version) — the ONLY content-keyed table: a preset's
-    definition is its identity; UNIQUE(key, version)."""
+    definition is its identity; UNIQUE(key, version).
+
+    Kept DERIVED while the evidence chain went random (decision 50): a preset id is
+    meaningful ACROSS cases — the same key+version is the same preset everywhere — which is
+    exactly the property an evidence-row id must not have."""
     return id_for(PRESET_NAME, key, version)
-
-
-def raw_record_id(source_id_: str, line_no: int) -> str:
-    """raw_record: uuid5(source_id ⟂ line_no); UNIQUE(source_id, line_no)."""
-    return id_for(RAW_RECORD_NAME, source_id_, line_no)
-
-
-def activity_id(raw_record_id_: str, activity_ordinal: int) -> str:
-    """activity: uuid5(raw_record_id ⟂ activity_ordinal) — per-record at ingest."""
-    return id_for(ACTIVITY_NAME, raw_record_id_, activity_ordinal)
-
-
-def activity_record_id(activity_id_: str, raw_record_id_: str) -> str:
-    """activity_record: uuid5(activity_id ⟂ raw_record_id); UNIQUE(activity_id,
-    raw_record_id) — ingest writes exactly one per activity."""
-    return id_for(ACTIVITY_RECORD_NAME, activity_id_, raw_record_id_)
-
-
-def observation_id(raw_record_id_: str, preset_key: str, output_ordinal: int) -> str:
-    """observation: uuid5(raw_record_id ⟂ preset KEY ⟂ output_ordinal) — the preset KEY
-    (not preset_id) so the natural key is stable across a version bump;
-    UNIQUE(raw_record_id, preset_id, output_ordinal)."""
-    return id_for(OBSERVATION_NAME, raw_record_id_, preset_key, output_ordinal)
-
-
-def entity_id(observation_natural_key: tuple[object, ...]) -> str:
-    """entity: uuid5(observation natural key ⟂ role tag).
-
-    The corner tag is the ``entity`` namespace itself (id_for prepends it), so the id is
-    ``uuid5(entity ⟂ <observation natural key parts>)``. The observation natural key is
-    passed as a tuple of its parts (raw_record_id, output_ordinal, and any further
-    discriminator the assembler uses) — the assembler owns that shape; this helper only
-    fixes the corner tag.
-
-    An observation now owns TWO entity rows, so the caller MUST append a role part —
-    ``"targeted"`` or ``"bearer"`` — as the last element of the natural key. Without it the
-    two rows of one observation would derive the same uuid5 and collide on the primary key.
-    Both remain per-observation OCCURRENCE rows: no content key, no sharing, no merge, and
-    convergence stays ``GROUP BY (identifier_type, identifier)``."""
-    return id_for(ENTITY_NAME, *observation_natural_key)
-
-
-def spatial_expression_id(observation_natural_key: tuple[object, ...]) -> str:
-    """spatial_expression: uuid5(observation natural key ⟂ corner tag 'sx')."""
-    return id_for(SPATIAL_EXPRESSION_NAME, *observation_natural_key)
-
-
-def temporal_expression_id(observation_natural_key: tuple[object, ...]) -> str:
-    """temporal_expression: uuid5(observation natural key ⟂ corner tag 'tx')."""
-    return id_for(TEMPORAL_EXPRESSION_NAME, *observation_natural_key)
-
-
-def spatial_component_id(spatial_expression_id_: str, ordinal: int) -> str:
-    """spatial_component: uuid5(spatial_expression_id ⟂ ordinal); UNIQUE(expr, ordinal)."""
-    return id_for(SPATIAL_COMPONENT_NAME, spatial_expression_id_, ordinal)
-
-
-def temporal_component_id(temporal_expression_id_: str, ordinal: int) -> str:
-    """temporal_component: uuid5(temporal_expression_id ⟂ ordinal); UNIQUE(expr, ordinal)."""
-    return id_for(TEMPORAL_COMPONENT_NAME, temporal_expression_id_, ordinal)
-
-
-def spatial_integration_id(spatial_expression_id_: str, method: str) -> str:
-    """spatial_integration: uuid5(spatial_expression_id ⟂ method)."""
-    return id_for(SPATIAL_INTEGRATION_NAME, spatial_expression_id_, method)
-
-
-def timespan_integration_id(temporal_expression_id_: str, method: str) -> str:
-    """timespan_integration: uuid5(temporal_expression_id ⟂ method)."""
-    return id_for(TIMESPAN_INTEGRATION_NAME, temporal_expression_id_, method)
-
-
-def spatial_index_id(spatial_integration_id_: str) -> str:
-    """spatial_index: uuid5(spatial_integration_id) — 1:1 with the integration."""
-    return id_for(SPATIAL_INDEX_NAME, spatial_integration_id_)
-
-
-def analysis_id(observation_id_: str, method: str) -> str:
-    """analysis: uuid5(observation_id ⟂ method); UNIQUE(observation_id, method)."""
-    return id_for(ANALYSIS_NAME, observation_id_, method)
 
 
 def edit_log_id() -> str:
@@ -323,7 +252,7 @@ class SpatialComponentProjection:
     ``unit`` replaces the former ``spatial_role`` slot. WHY it belongs in the digest: the
     unit is what makes a raw value mean something — "12.5" is a different speed in m/s and
     in km/h — so two presets declaring different units for one source value are stating
-    DIFFERENT claims and must not converge on one ``claim_digest``.
+    DIFFERENT claims and must not converge on one ``spatiotemporal_entity_hash``.
 
     ``source_field`` is deliberately ABSENT — a renamed source column must not move a
     digest (normative exclusion). Components are hashed in ``ordinal`` order, so the
@@ -356,11 +285,8 @@ class EntityProjection:
     Used for BOTH entity rows an observation owns — the targeted entity and the position
     bearer — since the digest reads the same three fields from each.
 
-    (``activity_role`` is carried on ``ObservationLinks`` — the doc lists it inside the
-    targeted-entity block, but it is an observation column, and it belongs to the targeted
-    entity alone: a bearer has no part in the activity. The projection order is preserved by
-    ``l1_projection`` regardless of which dataclass holds it.) ``concerns`` /
-    ``concerns_uid`` / ``raw_identifier`` are deliberately ABSENT (normative exclusions).
+``concerns`` / ``concerns_uid`` / ``raw_identifier`` are
+    deliberately ABSENT (normative exclusions).
     """
 
     identifier: str | None
@@ -389,73 +315,40 @@ class TemporalProjection:
     components: tuple[TemporalComponentProjection, ...] = field(default_factory=tuple)
 
 
-@dataclass(frozen=True)
-class ObservationLinks:
-    """The three corner links + attestation, AS THEY ENTER THE DIGEST.
-
-    Projection order: ``activity_role`` sits with the targeted-entity block; the three links
-    and ``attestation`` follow the temporal block. ``l1_projection`` places each correctly.
-
-    ``recorded_at`` is deliberately ABSENT: it says when the RECORD was written, not what the
-    record claims, so it is provenance — like paths and source attributes — and a re-export
-    with a new write time must not move a claim's identity. ``attestation`` IS present: it is
-    preset-mapped and part of what is being claimed.
-    """
-
-    activity_role: object | None = None   # ActivityRole enum or str value
-    entity_link: object | None = None     # EntityLink enum or str value
-    spatial_link: object | None = None    # SpatialLink enum or str value
-    occupancy: object | None = None       # Occupancy enum or str value
-    attestation: object | None = None     # Attestation enum or str value
-
-
-@dataclass(frozen=True)
-class ActivityProjection:
-    """The activity AS IT ENTERS THE DIGEST: kind ⟂ canonical context_json.
-
-    ``context`` is the DECODED preset-mapped context object (a dict or None), NOT a
-    pre-serialised string: ``l1_projection`` re-canonicalises it so key order in the
-    source can never move the digest (a party silently vanishing WOULD move it — that is
-    a real change and must move the digest). This mirrors the demo, which hands the raw
-    dict to the projection.
-    """
-
-    kind: object                       # ActivityKind enum or its str value
-    context: object | None = None      # decoded context object (dict) or None
-
-
-# --- The normative L1 projection (run_db_schema.md) ------------------------
-
 def l1_projection(
     *,
     entity: EntityProjection,
     bearer: EntityProjection | None,
     spatial: SpatialProjection | None,
     temporal: TemporalProjection | None,
-    links: ObservationLinks,
-    deleted: object | None,
-    multiplicity: int | None,
-    activity: ActivityProjection | None,
 ) -> str:
     """The NORMATIVE L1 projection both digests hash (run_db_schema.md §"The normative
     L1 projection"), in the EXACT field order, joined with the unit separator.
 
     Order (verbatim from the doc):
-      targeted entity (identifier ⟂ identifier_type ⟂ type ⟂ activity_role)
+      targeted entity (identifier ⟂ identifier_type ⟂ type)
       ⟂ bearer (presence ⟂ [identifier ⟂ identifier_type ⟂ type])
       ⟂ spatial expression (presence ⟂ [referential ⟂ spatial_source ⟂ count ⟂
         components by ordinal, each part ⟂ unit ⟂ raw_value])
       ⟂ temporal expression (presence ⟂ [kind ⟂ referential ⟂ count ⟂ components by
         ordinal, each part ⟂ stated_offset ⟂ raw_value])
-      ⟂ entity_link ⟂ spatial_link ⟂ occupancy ⟂ attestation ⟂ deleted ⟂ multiplicity
-      ⟂ activity (presence ⟂ [kind ⟂ canonical context_json])
+
+    NO LINKS (decision 55). A link is the preset author's statement about a record, not
+    content of the record: two presets reading the same record must converge on the same
+    ``spatiotemporal_entity_hash`` even when they disagree on a link — the disagreement stays
+    visible in the link columns. ``observation_content_hash`` still separates presets
+    through its ``preset_key`` prefix.
+
+    ``bearer`` is None when no OTHER entity holds the position — including ``subject``, where
+    the bearer is the targeted entity itself. Projecting it there would repeat the entity
+    block and make the hash depend on the link after all (``subject`` vs ``unknown``).
 
     WHY this framing makes the projection INJECTIVE (no two structurally-different claims
     share an L1 string). Two properties combine:
       1. ``_txt`` escapes ``SEP``, so a bare ``SEP`` is ALWAYS a delimiter — the token
          list is uniquely recoverable from the joined string, never smuggled by a value.
-      2. Every variable-length section is FRAMED. The targeted-entity block is a fixed 4
-         slots and the links+flags block a fixed 6, so their boundaries are positional. The
+      2. Every variable-length section is FRAMED. The targeted-entity block is a fixed 3
+         slots, so its boundary is positional. The
          BEARER is optional and therefore leads with a presence flag — at most one bearer
          exists, so a flag suffices and no component-style count is needed; without the flag
          an absent bearer would render identically to a present one whose three fields are
@@ -482,16 +375,15 @@ def l1_projection(
     """
     parts: list[str] = []
 
-    # targeted entity: identifier ⟂ identifier_type ⟂ type ⟂ activity_role (always 4 slots).
+    # targeted entity: identifier ⟂ identifier_type ⟂ type (always 3 slots).
     parts += [
         _txt(entity.identifier),
         _txt(entity.identifier_type),
         _txt(entity.type),
-        _txt(links.activity_role),
     ]
 
-    # bearer: presence ⟂ [identifier ⟂ identifier_type ⟂ type]. Absent whenever the entity
-    # holds its own position (entity_link is `self`), so the flag carries real information
+    # bearer: presence ⟂ [identifier ⟂ identifier_type ⟂ type]. Absent whenever no OTHER
+    # entity holds the position (subject, unknown), so the flag carries real information
     # and must be emitted even though the block is only three slots wide.
     if bearer is None:
         parts += [_CORNER_ABSENT]
@@ -534,28 +426,11 @@ def l1_projection(
                 _txt(c.raw_value),
             ]
 
-    # the three corner links ⟂ attestation ⟂ deleted ⟂ multiplicity (always 6 slots).
-    parts += [
-        _txt(links.entity_link),
-        _txt(links.spatial_link),
-        _txt(links.occupancy),
-        _txt(links.attestation),
-        _txt(deleted),
-        _txt(multiplicity),
-    ]
-
-    # activity: presence ⟂ [kind ⟂ canonical context_json] (re-canonicalised so key order
-    # can't drift). No component list, so the presence flag alone frames it.
-    if activity is None:
-        parts += [_CORNER_ABSENT]
-    else:
-        ctx = activity.context
-        parts += [
-            _CORNER_PRESENT,
-            _txt(activity.kind),
-            "" if ctx is None else canonical_json(ctx),
-        ]
-
+    # ``recovery_state`` / ``recovery_source`` are deliberately EXCLUDED, like paths and
+    # source attributes: HOW a record was obtained is provenance, not identity. A claim
+    # carved from free space is the SAME claim as a live one, only less certain to have
+    # been truly recorded — so the two must CONVERGE for the duplicate-surfacing to work
+    # across a live and a recovered copy of one row.
     return SEP.join(parts)
 
 
@@ -566,10 +441,10 @@ def _sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def claim_digest(l1: str) -> str:
-    """``observation.claim_digest`` = sha256 of the L1 projection ALONE.
+def spatiotemporal_entity_hash(l1: str) -> str:
+    """``observation.spatiotemporal_entity_hash`` = sha256 of the L1 projection ALONE.
 
-    No fingerprint, no line_no, no output_ordinal, no preset — so two overlapping
+    No fingerprint, no line_no, no preset — so two overlapping
     disclosures (different files sharing the same record content) CONVERGE here and
     surface as a *possible same-evidence* finding, never presented as corroboration.
     Repeats legally; never a key.
@@ -577,25 +452,27 @@ def claim_digest(l1: str) -> str:
     return _sha256_hex(l1)
 
 
-def content_hash(
+def observation_content_hash(
     *,
     fingerprint_sha256: str | None,
     preset_key: str,
     line_no: int,
-    output_ordinal: int,
     l1: str,
 ) -> str:
-    """``observation.content_hash`` (CSV ``content_uid``) =
-    sha256(fingerprint_sha256 ⟂ preset_key ⟂ line_no ⟂ output_ordinal ⟂ L1 projection).
+    """``observation.observation_content_hash`` (CSV ``observation_content_uid``) =
+    sha256(fingerprint_sha256 ⟂ preset_key ⟂ line_no ⟂ L1 projection).
+
+    ``output_ordinal`` left the prefix with the column (decision 50). Two templates of one
+    record now share a hash ONLY when their L1 projections are byte-identical — i.e. only
+    when they really are the same claim, which is more correct than separating them by a
+    position index.
 
     The digest SCOPED to this preset's reading of this file (the preset key is in the
     prefix). NO paths, so folder==zip parity holds; the fingerprint distinguishes
-    two byte-DIFFERENT files carrying the same claim (they share ``claim_digest`` but not
-    ``content_hash``). Repeats legally; never a key.
+    two byte-DIFFERENT files carrying the same claim (they share ``spatiotemporal_entity_hash`` but not
+    ``observation_content_hash``). Repeats legally; never a key.
     """
-    prefix = SEP.join(
-        [_txt(fingerprint_sha256), preset_key, str(line_no), str(output_ordinal), l1]
-    )
+    prefix = SEP.join([_txt(fingerprint_sha256), preset_key, str(line_no), l1])
     return _sha256_hex(prefix)
 
 
@@ -604,21 +481,19 @@ def digests(
     fingerprint_sha256: str | None,
     preset_key: str,
     line_no: int,
-    output_ordinal: int,
     l1: str,
 ) -> tuple[str, str]:
-    """Convenience: (content_hash, claim_digest) for one observation from its L1 projection.
+    """Convenience: (observation_content_hash, spatiotemporal_entity_hash) for one observation from its L1 projection.
 
     WHY paired: the assembler always needs both for one observation row and they share the
     L1 string, so computing them together avoids re-projecting.
     """
     return (
-        content_hash(
+        observation_content_hash(
             fingerprint_sha256=fingerprint_sha256,
             preset_key=preset_key,
             line_no=line_no,
-            output_ordinal=output_ordinal,
             l1=l1,
         ),
-        claim_digest(l1),
+        spatiotemporal_entity_hash(l1),
     )

@@ -42,9 +42,9 @@ observations:
       epoch: cocoa
       zone: const(UTC)
     links:
-      spatial: at
-      entity: self
-      temporal: once
+      spatial: measured
+      entity: subject
+      temporal: at_least_once
 """
 
 
@@ -65,7 +65,7 @@ def test_valid_preset_parses() -> None:
     fields = {f.model_field: f for f in template.fields}
     assert fields["latitude"].ref.arg == "ZLATITUDE"
     assert fields["horizontal_speed_kmh"].unit == "m/s"
-    assert fields["spatial_link"].ref.arg == "at"
+    assert fields["spatial_link"].ref.arg == "measured"
     time = template.temporal[0]
     assert time.kind == "instant" and time.epoch == "cocoa"
 
@@ -77,7 +77,7 @@ def test_title_with_tool() -> None:
 
 def test_invalid_edge_value_rejected() -> None:
     with pytest.raises(ValueError):
-        _parse(_VALID.replace("spatial: at", "spatial: teleported"))
+        _parse(_VALID.replace("spatial: measured", "spatial: teleported"))
 
 
 def test_engine_owned_field_not_assignable() -> None:
@@ -94,7 +94,7 @@ input_selector: {format: csv, name: f.csv}
 observations:
   - position: {latitude: field(Lat)}
     time: {instant: field(TS), format: "%Y"}
-    links: {entity: self, spatial: at, temporal: once}
+    links: {entity: subject, spatial: measured, temporal: at_least_once}
 """
 
 
@@ -186,10 +186,10 @@ _INVALID: dict[str, str] = {
         'instant: field(TS), format: "%Y"',
         'instant: field(TS), interval: {lower: field(A), upper: field(B)}'),
     "time epoch and format": _MIN.replace('format: "%Y"', 'format: "%Y", epoch: cocoa'),
-    "unknown links key": _MIN.replace("temporal: once}",
-                                      "temporal: once, bogus: x}"),
-    "invalid spatial enum": _MIN.replace("spatial: at",
-                                                 "spatial: teleported"),
+    "unknown links key": _MIN.replace("temporal: at_least_once}",
+                                      "temporal: at_least_once, bogus: x}"),
+    "invalid spatial enum": _MIN.replace("spatial: measured,",
+                                                 "spatial: teleported,"),
     "engine-owned field assigned": _MIN.replace("latitude: field(Lat)",
                                                 "latitude_source_field: field(Lat)"),
     "unknown model field": _MIN.replace("latitude: field(Lat)",
@@ -219,7 +219,6 @@ _INVALID: dict[str, str] = {
     # The top-level key set is CLOSED: an assignable field written there instead of under
     # `common:` would have its whole mapping silently dropped, so it must fail at load.
     "assignable field at top level": _MIN + "input_record_id: field(Row)\n",
-    "context key at top level": _MIN + "context.antenna: field(Cell)\n",
     "unknown top-level key": _MIN + "typo_key: 1\n",
 }
 
@@ -231,18 +230,14 @@ def test_invalid_presets_are_rejected(case: str) -> None:
 
 
 def test_extended_l1_vocabulary_is_assignable() -> None:
-    """A preset may now map the extended L1 targets (entity_role, activity_kind,
-    multiplicity, referentials) and any ``context.<key>`` in its ``common:`` block, and a
-    spatial referential in a position — not only the programmatic assemble path."""
+    """A preset may map the extended L1 targets (identifier_type, the referentials) in its
+    ``common:`` block, and a spatial referential in a position — not only the programmatic
+    assemble path. (``activity_role`` / ``activity_kind`` / ``context.<key>`` /
+    ``multiplicity`` were removed by decisions 51 and 53.)"""
     text = _MIN.replace(
         "observations:",
         "common:\n"
-        "  activity_role: const(caller)\n"
-        "  activity_kind: const(call)\n"
         "  identifier_type: const(bssid)\n"
-        "  multiplicity: field(N)\n"
-        "  context.callee: field(Callee)\n"
-        "  context.imei: field(IMEI)\n"
         "observations:",
     ).replace(
         "position: {latitude: field(Lat)}",
@@ -250,11 +245,7 @@ def test_extended_l1_vocabulary_is_assignable() -> None:
     )
     preset = _parse(text)
     common = {f.model_field: f for f in preset.common}
-    assert common["activity_role"].ref.arg == "caller"
-    assert common["activity_kind"].ref.arg == "call"
     assert common["identifier_type"].ref.arg == "bssid"   # free identifier type accepted
-    assert common["context.callee"].ref.arg == "Callee"
-    assert common["context.imei"].ref.arg == "IMEI"
     position = {f.model_field: f for f in preset.observations[0].fields}
     assert position["spatial_referential"].ref.arg == "epsg:4326"
 

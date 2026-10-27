@@ -15,10 +15,11 @@ Used by:    the app-layer pipeline (``model_atlas.app.pipeline``) and
             tests/integrate/test_temporal.py.
 Depends on: ``model_atlas.core`` (``ids`` — the integration id derivation,
             ``vocabularies`` — the ``TimespanIntegration`` family + the
-            ``UTC_OFFSET_UNKNOWN`` sentinel, ``store`` — the layer-typed writer) and
+            ``LOCAL_OFFSET_UNKNOWN`` sentinel, ``store`` — the layer-typed writer) and
             ``model_atlas.integrate.timeparse`` for the pure zone/ISO helpers
             (``parse_zone_token`` / ``parse_iso8601`` / ``local_naive_to_utc_us`` /
-            ``zone_standard_offset_hours`` / ``datetime_to_us`` — their settled home,
+            ``zone_standard_offset_hours`` / ``zone_offset_hours_at`` /
+            ``datetime_to_us`` — their settled home,
             folded verbatim from the retired ``transforms.builtin``).
 
 This is the port of the old ``transforms/assemble.py`` ``_decode_time`` /
@@ -33,31 +34,44 @@ The old rules map 1:1:
 - ``format`` + ``[DST]``/``local``      -> the zoneinfo branch of
   ``TzLocaliseMethod`` (per-bound DST resolution, with the old base-mismatch /
   ambiguous-overlap / imaginary-gap warnings, now via logging).
-- naive + no zone knowledge             -> ``AssumeUtcMethod`` (the old
-  ``UTC_OFFSET_UNKNOWN`` fallback, promoted to an explicit named method).
+- naive + no zone knowledge             -> ``AssumeUtcMethod`` (the assumed-UTC
+  fallback, an explicit named method so the assumption is auditable from ``method``).
 - the L1 date⊕time component split -> ``DatetimeCombineMethod``.
 
-The applied-offset discipline
+The offset-to-local discipline
 ------------------------------
-The stored ``utc_offset_hours_lower/_upper`` is the offset ACTUALLY APPLIED to reach
-UTC for THAT bound — never the old flat model's display-zone override — with three
-distinct states (the ``vocabularies.TimespanIntegration`` contract):
+``*_unix_utc_us`` is ALWAYS UTC — that is the canonical instant and the only thing
+queries and the concomitance engine ever compare.
 
-- a float:                 the zone was known and applied (per bound, DST-aware);
-- ``None``:                not applicable — the source value was absolute UTC by
-                           definition (an epoch), nothing was localised;
-- ``UTC_OFFSET_UNKNOWN``:  a naive clock was materialised by ASSUMING UTC.
+The stored ``offset_to_local_hours_lower/_upper`` is the offset the ANALYST adds to
+that canonical value to read the bound in the case's configured ``local_zone``,
+resolved for DST at that bound's own instant. Three states:
 
-These cells derive per bound from unix µs + that applied offset: a known offset
-renders one offset-tagged local ISO (``2026-03-14T02:20:31.000000+01:00``); an
-absolute-UTC source renders the exact UTC clock tagged ``+00:00`` (true and
-self-describing — nothing was assumed, so no ``N/A``); an ASSUMED clock renders with
-the loud trailing `` N/A``; a bound with no instant renders EMPTY cells (empty
-string / NULLs — empty and N/A stay distinct). Every row is method-stamped
-``rule/version[/reference]`` (composites join with ``+``); a pass-through is a
-method too. NOTE: the stored ``tz_localize`` token keeps the settled docs' spelling
-(run_db_schema.md names ``tz_localize/2026a``) even though identifiers here use the
-house British spelling.
+- a float:                   a ``local_zone`` is configured; this is its offset there;
+- ``LOCAL_OFFSET_UNKNOWN``:  no ``local_zone`` is configured, so the run cannot say;
+- ``None``:                  that bound has no instant, so there is nothing to offset.
+
+**It does NOT state the source's own offset, and must not be changed back to.** Until
+2026-09-07 this column held the offset CONSUMED to reach UTC, which is NULL for every
+epoch source: on the reference acquisition that was all 42 277 integrated rows, so the
+operator's configured zone reached the analyst on no row at all. What the source's clock
+carried survives in the verbatim raw value and its column name; HOW the instant was
+reached survives in ``method`` (``assume_utc`` names the assumption as loudly as the old
+`` N/A`` suffix did, and is auditable per row).
+
+The offset is stamped in ``integrate_expression`` — once, after whichever method decoded
+the bounds — because it depends only on the instant and the configured zone, never on the
+decode rule. Methods themselves never populate it.
+
+Nothing here renders a clock any more: ``lower_datetime_iso`` / ``*_date`` / ``*_time``
+were dropped with this change, since a stored rendering froze one zone into the evidence
+and an analyst can recompute it from the two columns above. ``core.local_time`` renders on
+demand for the report writers that need a human-readable string.
+
+Every row is method-stamped ``rule/version[/reference]`` (composites join with ``+``); a
+pass-through is a method too. NOTE: the stored ``tz_localize`` token keeps the settled
+docs' spelling (run_db_schema.md names ``tz_localize/2026a``) even though identifiers here
+use the house British spelling.
 """
 from __future__ import annotations
 
@@ -74,10 +88,17 @@ from model_atlas.integrate.timeparse import (
     local_naive_to_utc_us,
     parse_iso8601,
     parse_zone_token,
+    zone_offset_hours_at,
     zone_standard_offset_hours,
 )
 
 _LOG = logging.getLogger(__name__)
+
+# The INTERNAL marker for "this bound was materialised by ASSUMING UTC". Deliberately not
+# vocabularies.LOCAL_OFFSET_UNKNOWN: that one is a STORED value meaning "no local zone is
+# configured", and a shared constant is how the two directions got conflated before. This
+# one never leaves the module — only _offset_is_applied reads it.
+_ASSUMED_UTC = "assumed-utc"
 
 _UNIX_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
 _US_PER_HOUR = 3_600_000_000
@@ -146,16 +167,24 @@ class TemporalExpressionBundle:
 
 @dataclass(frozen=True)
 class _Bound:
-    """One decoded bound: the canonical instant, the APPLIED offset, its accuracy.
+    """One decoded bound: the canonical instant, the offset APPLIED to reach it, its accuracy.
 
-    ``offset`` follows the three-state contract (float / None / UTC_OFFSET_UNKNOWN);
+    ``applied_offset`` is what the decode consumed to get from the source's clock to UTC —
+    a float (a zone was known), None (the source was absolute UTC already) or
+    ``LOCAL_OFFSET_UNKNOWN`` (a naive clock materialised by assuming UTC). It is
+    **internal**: it selects ``DatetimeCombineMethod``'s method-string tail and nothing
+    else, and is deliberately NOT stored. The stored
+    ``offset_to_local_hours_*`` is the opposite direction (UTC -> the case's local zone)
+    and is stamped later, in ``integrate_expression``; conflating the two is the exact
+    defect this rename exists to prevent.
+
     ``accuracy_us`` is this bound's timing uncertainty (µs) — a source-stated per-bound
     value when the preset mapped one, else the Method's own claim, else None (see
     ``_bound_accuracy``). It is never invented from the clock's display resolution.
     """
 
     unix_us: int | None = None
-    offset: float | str | None = None
+    applied_offset: float | str | None = None
     accuracy_us: int | None = None
 
 
@@ -218,60 +247,36 @@ def _stated_accuracy(expression: TemporalExpressionBundle, side: str) -> int | N
             return None
 
 
-def _offset_tag(offset_hours: float) -> str:
-    """Render a signed decimal-hours offset as the ISO ``±HH:MM`` tag (+05:30 style)."""
-    sign = "+" if offset_hours >= 0 else "-"
-    minutes = int(round(abs(offset_hours) * 60))
-    hours, mins = divmod(minutes, 60)
-    return f"{sign}{hours:02d}:{mins:02d}"
-
-
 def _offset_is_applied(offset: float | str | None) -> bool:
     """True when a REAL numeric offset was applied to reach UTC (a float).
 
-    WHY a distinct predicate: the three-state offset contract (float / None /
-    UTC_OFFSET_UNKNOWN) means "an offset was applied" is *offset is a float* — the
-    ``None`` (absolute-UTC epoch) and the ``UTC_OFFSET_UNKNOWN`` (assumed) states are
-    NOT applied offsets. ``bool`` is excluded because ``True``/``False`` are ints.
+    WHY a distinct predicate: the three-state applied-offset contract (float / None /
+    ``_ASSUMED_UTC``) means "an offset was applied" is *offset is a float* — the ``None``
+    (absolute-UTC epoch) and the ``_ASSUMED_UTC`` states are NOT applied offsets.
+    ``bool`` is excluded because ``True``/``False`` are ints. This reads the INTERNAL
+    applied offset only; it never sees the stored offset-to-local.
     """
     return isinstance(offset, (int, float)) and not isinstance(offset, bool)
 
 
-def _bound_cells(unix_us: int | None,
-                 offset: float | str | None) -> tuple[str, int | None, int | None]:
-    """The convenience cells for ONE bound: (datetime_iso, date µs, time-of-day µs).
+def offset_to_local(unix_us: int | None, zone: str | None) -> float | str | None:
+    """The offset an analyst adds to ``unix_us`` to read it in ``zone``.
 
-    HOW: shift the canonical UTC µs by the applied offset to get the local wall
-    clock, render it with full microseconds, then tag it by the offset state:
-    - no instant                  -> ("", None, None)  — EMPTY cells, never invented;
-    - offset known (float)        -> ``…±HH:MM`` local ISO + local date + time µs;
-    - offset None (absolute UTC)  -> the exact UTC clock tagged ``+00:00`` (true and
-      self-describing — an epoch source assumed nothing, so no ``N/A``);
-    - offset UNKNOWN (assumed)    -> the assumed-UTC clock with the loud trailing
-      `` N/A``.
-    WHY the `` N/A`` suffix: "value, zone unknown" must stay visibly distinct from
-    "no value" (empty) — empty ≠ N/A; confusing them hides an assumption.
-    All datetime arithmetic is timedelta-from-epoch (never ``fromtimestamp``): the
-    Windows CRT raises for pre-1970/far-future instants that occur in real evidence.
+    Three states, mirroring the ``TimespanIntegration`` contract: None when the bound has
+    no instant (nothing to offset), ``LOCAL_OFFSET_UNKNOWN`` when no zone is configured
+    (the run cannot say — never a misleading 0.0, which would claim the case IS on UTC),
+    and otherwise the zone's offset AT that instant, DST resolved.
+
+    WHY per bound and not per run: a case spanning a DST transition has a different answer
+    for a March bound than a July one, and one stored constant would be wrong for half of
+    it. WHY this direction is always answerable: every UTC instant has exactly one local
+    wall clock, so unlike the local -> UTC direction there is no ambiguous or imaginary case.
     """
     if unix_us is None:
-        return "", None, None
-    known = _offset_is_applied(offset)
-    applied = float(offset) if known else 0.0
-    local_us = unix_us + int(round(applied * _US_PER_HOUR))
-    local = _UNIX_EPOCH + dt.timedelta(microseconds=local_us)
-    clock = local.strftime("%Y-%m-%dT%H:%M:%S.%f")
-    if known:
-        iso = clock + _offset_tag(applied)
-    elif offset == V.UTC_OFFSET_UNKNOWN:
-        iso = clock + " " + V.UTC_OFFSET_UNKNOWN
-    else:
-        # offset None with an instant: an absolute-UTC source — the UTC clock IS the
-        # value, tagged +00:00 so the ISO stays self-describing and UTC-recoverable.
-        iso = clock + "+00:00"
-    day = dt.datetime(local.year, local.month, local.day, tzinfo=dt.timezone.utc)
-    date_us = (day - _UNIX_EPOCH).days * _US_PER_DAY
-    return iso, date_us, local_us - date_us
+        return None
+    if not zone:
+        return V.LOCAL_OFFSET_UNKNOWN
+    return zone_offset_hours_at(zone, unix_us)
 
 
 def _resolve_naive(naive: dt.datetime, stated_offset: str | None,
@@ -356,7 +361,7 @@ def _assume_utc(naive: dt.datetime) -> tuple[int, str]:
     WHY the sentinel and not 0.0: a real 0.0 would claim the zone was known to be
     UTC; the assumption must stay loud on the row.
     """
-    return datetime_to_us(naive.replace(tzinfo=dt.timezone.utc)), V.UTC_OFFSET_UNKNOWN
+    return datetime_to_us(naive.replace(tzinfo=dt.timezone.utc)), _ASSUMED_UTC
 
 
 # --- the Method base ----------------------------------------------------------
@@ -432,26 +437,22 @@ class _TemporalMethodBase:
                 lower = upper
         if lower.unix_us is None and upper.unix_us is None:
             return None
-        lower_iso, lower_date, lower_time = _bound_cells(lower.unix_us, lower.offset)
-        upper_iso, upper_date, upper_time = _bound_cells(upper.unix_us, upper.offset)
         expression_id = expression.expression.temporal_expression_id
         method_string = self._method_string(lower, upper)
         return V.TimespanIntegration(
-            timespan_integration_id=ids.timespan_integration_id(expression_id, method_string),
+            timespan_integration_id=ids.new_id(),
             temporal_expression_id=expression_id,
             method=method_string,
+            kind=_value_of(expression.expression.kind),
+            referential=_value_of(expression.expression.referential),
+            temporal_source=expression.expression.temporal_source,
             lower_unix_utc_us=lower.unix_us,
             upper_unix_utc_us=upper.unix_us,
-            lower_datetime_iso=lower_iso,
-            upper_datetime_iso=upper_iso,
-            lower_date=lower_date,
-            upper_date=upper_date,
-            lower_time=lower_time,
-            upper_time=upper_time,
-            utc_offset_hours_lower=lower.offset,
-            utc_offset_hours_upper=upper.offset,
-            # Per bound, split like the offsets above; the instant collapse (upper = lower)
-            # above carries the lower reading's accuracy onto the degenerate upper for free.
+            # offset_to_local_hours_* is deliberately left unset here: it depends on the
+            # configured zone, not on this method, and is stamped once in
+            # integrate_expression. A method must never invent it.
+            # Per bound; the instant collapse (upper = lower) above carries the lower
+            # reading's accuracy onto the degenerate upper for free.
             lower_accuracy_us=lower.accuracy_us,
             upper_accuracy_us=upper.accuracy_us,
         )
@@ -547,7 +548,7 @@ class EpochMethod(_TemporalMethodBase):
                 _LOG.warning(f"unreadable {rule.referential} value {text!r}; bound skipped")
                 return _ABSENT_BOUND
             unix_us = int(round(value * rule.scale_num_us / rule.scale_den)) + rule.offset_us
-        offset = V.UTC_OFFSET_UNKNOWN if rule.assumed_clock else None
+        offset = _ASSUMED_UTC if rule.assumed_clock else None
         # No accuracy is derived FROM the epoch (its numeric resolution is representation,
         # not an accuracy claim); a source-stated per-bound value is still honoured.
         return _Bound(unix_us, offset, self._bound_accuracy(expression, side))
@@ -666,10 +667,10 @@ class TzLocaliseMethod(_ClockMethodBase):
 class AssumeUtcMethod(_ClockMethodBase):
     """The explicit assumed-UTC fallback: a naive clock with NO zone knowledge.
 
-    The instant is materialised by assuming UTC; the applied offset is the loud
-    ``UTC_OFFSET_UNKNOWN`` sentinel and the ISO carries the trailing `` N/A`` — an
-    assumption stamped as such, never a silent 0.0. A value that turns out to carry
-    its OWN offset is honoured (nothing assumed for that bound).
+    The instant is materialised by assuming UTC. The assumption is stamped in the row's
+    ``method`` (``assume_utc``) rather than in an offset cell — that is now the only place
+    it lives, and it is per row and auditable. A value that turns out to carry its OWN
+    offset is honoured (nothing assumed for that bound).
     """
 
     name = "assume_utc"
@@ -740,7 +741,8 @@ class DatetimeCombineMethod(_TemporalMethodBase):
         return f"{self.name}/{self.version}+{self._tail(applied=False)}"
 
     def _method_string(self, lower: _Bound, upper: _Bound) -> str:
-        applied = _offset_is_applied(lower.offset) or _offset_is_applied(upper.offset)
+        applied = (_offset_is_applied(lower.applied_offset)
+                   or _offset_is_applied(upper.applied_offset))
         return f"{self.name}/{self.version}+{self._tail(applied)}"
 
     def applies_to(self, expression: TemporalExpressionBundle) -> bool:
@@ -875,22 +877,17 @@ class StartPlusDurationMethod(_TemporalMethodBase):
         duration_us = self._duration_us(expression)
         if duration_us is None:
             return None
-        upper = _Bound(row.lower_unix_utc_us + duration_us, row.utc_offset_hours_lower,
-                       row.upper_accuracy_us)
-        upper_iso, upper_date, upper_time = _bound_cells(upper.unix_us, upper.offset)
+        upper = _Bound(row.lower_unix_utc_us + duration_us, None, row.upper_accuracy_us)
         method_string = self.method
         return dataclasses.replace(
             row,
             # The id is derived from the method string, so it must be re-derived here — the
             # inner method's id would claim a row this method actually produced.
-            timespan_integration_id=ids.timespan_integration_id(
-                row.temporal_expression_id, method_string),
+            timespan_integration_id=ids.new_id(),
             method=method_string,
             upper_unix_utc_us=upper.unix_us,
-            upper_datetime_iso=upper_iso,
-            upper_date=upper_date,
-            upper_time=upper_time,
-            utc_offset_hours_upper=upper.offset,
+            # The offsets stay unset on the replaced row for the same reason as above:
+            # integrate_expression stamps both bounds once, after this wrapper has run.
         )
 
 
@@ -925,6 +922,7 @@ def standard_methods(zone: str | None = None, datetime_format: str | None = None
 
 def integrate_expression(store: RunStore, expression: TemporalExpressionBundle,
                          methods: tuple[_TemporalMethodBase, ...] | list[_TemporalMethodBase],
+                         local_zone: str | None = None,
                          ) -> V.TimespanIntegration | None:
     """Integrate ONE temporal expression: first applicable method wins, one row written.
 
@@ -934,12 +932,22 @@ def integrate_expression(store: RunStore, expression: TemporalExpressionBundle,
     parse failed; a later, laxer rule may still read the value honestly).
     WHY one row: the v1 schema is single-integration (UNIQUE temporal_expression_id)
     — writing a second candidate raises in the store, never merges silently.
+
+    ``local_zone`` is stamped onto both bounds HERE rather than inside the methods: the
+    offset to local depends only on the resulting instant and the operator's configured
+    zone, so every method would compute it identically, and a method that forgot would
+    silently emit a NULL that reads as "no instant". One funnel, one rule.
     """
     for method in methods:
         if not method.applies_to(expression):
             continue
         row = method.integrate(expression)
         if row is not None:
+            row = dataclasses.replace(
+                row,
+                offset_to_local_hours_lower=offset_to_local(row.lower_unix_utc_us, local_zone),
+                offset_to_local_hours_upper=offset_to_local(row.upper_unix_utc_us, local_zone),
+            )
             store.write_timespan_integration(row)
             return row
         _LOG.debug(f"method {method.method} applied but decoded no bound for "

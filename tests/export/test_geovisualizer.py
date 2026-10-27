@@ -80,12 +80,12 @@ def test_geovisualizer_expands_interval_into_two_rows(tmp_path: Path) -> None:
     # Both bound-rows share position/IMEI/target (only the timestamp/description differ).
     assert interval_rows["Latitude"].nunique() == 1
     assert interval_rows["Longitude"].nunique() == 1
-    assert set(interval_rows["Target"]) == {"subject"}
+    assert set(interval_rows["Target"]) == {"dev_490154203237518-x"}
 
     descriptions = " ".join(interval_rows["Description"].tolist())
     assert "Range start" in descriptions
     assert "Range end" in descriptions
-    # The upper bound's offset was written as UTC_OFFSET_UNKNOWN -> the warning fires
+    # The upper bound's offset was written as LOCAL_OFFSET_UNKNOWN -> the warning fires
     # on exactly that row, not the lower one.
     assert (interval_rows["Description"].str.contains("UTC offset unknown")).sum() == 1
 

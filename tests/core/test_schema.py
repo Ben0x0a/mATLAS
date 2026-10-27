@@ -14,6 +14,7 @@ deliberate change.
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import sqlite3
 import uuid
@@ -22,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from model_atlas.core import schema
+from model_atlas.core import vocabularies as V
 
 _HERE = Path(__file__).resolve().parent
 _GOLDEN = _HERE / "schema.gol.sql"
@@ -56,11 +58,50 @@ def test_all_tables_and_views_present() -> None:
         "SELECT name FROM sqlite_master WHERE type='table'")}
     views = {r[0] for r in connection.execute(
         "SELECT name FROM sqlite_master WHERE type='view'")}
-    expected_tables = set(_COPYABLE) | {"matlas_meta"}
+    # matlas_meta and model_description are metadata, not evidence, so neither is copyable.
+    expected_tables = set(_COPYABLE) | {"matlas_meta", "model_description"}
     assert tables == expected_tables
     assert views == {"duplicate_sources", "possible_same_evidence"}
     # exactly one matlas_meta row, stamped with the schema/families versions.
     assert connection.execute("SELECT COUNT(*) FROM matlas_meta").fetchone()[0] == 1
+
+
+def test_model_description_describes_every_table_and_field() -> None:
+    """The DB must explain itself: one row per table, one per field, nothing missing.
+
+    This is what replaced the per-column DDL comment. SQLite has no structured column
+    attribute, so without these rows a persisted run DB cannot say which of its columns
+    mATLAS added rather than read from the trace.
+    """
+    connection = _memory_conn()
+    described = {(t, f) for t, f in connection.execute(
+        "SELECT table_name, field_name FROM model_description")}
+    expected: set[tuple[str, str | None]] = set()
+    for spec in schema._table_specs():
+        expected.add((spec["name"], None))
+        expected |= {(spec["name"], f.name)
+                     for f in dataclasses.fields(spec["dataclass"])}
+    assert described == expected
+
+    # A table row carries no type/unit/enrichment — it describes the table, not a column.
+    table_rows = connection.execute(
+        "SELECT type, unit, matlas_enrichment FROM model_description "
+        "WHERE field_name IS NULL").fetchall()
+    assert table_rows and all(r == (None, None, None) for r in table_rows)
+    # Every description is real prose, not an empty placeholder.
+    assert connection.execute(
+        "SELECT COUNT(*) FROM model_description "
+        "WHERE description IS NULL OR TRIM(description) = ''").fetchone()[0] == 0
+
+
+def test_model_description_enrichment_matches_the_model_marker() -> None:
+    """The stored flag must equal the field's own marker — one source, no second copy."""
+    connection = _memory_conn()
+    for table, field_name, flag in connection.execute(
+            "SELECT table_name, field_name, matlas_enrichment FROM model_description "
+            "WHERE field_name IS NOT NULL"):
+        model = next(s["dataclass"] for s in schema._table_specs() if s["name"] == table)
+        assert bool(flag) == V.is_enrichment(model, field_name), f"{table}.{field_name}"
 
 
 def test_matlas_meta_single_row_values() -> None:
@@ -131,41 +172,55 @@ def _seed_one_observation(connection: sqlite3.Connection) -> dict[str, str]:
         "INSERT INTO preset (preset_id, key, definition_digest) VALUES (?, ?, ?)",
         (ids["preset"], "k", "digest"))
     connection.execute(
-        "INSERT INTO source (source_id, run_id, input_file_path) VALUES (?, ?, ?)",
+        "INSERT INTO source_file (source_file_id, run_id, input_file_path) VALUES (?, ?, ?)",
         (ids["source"], ids["run"], "/f.csv"))
     connection.execute(
-        "INSERT INTO raw_record (raw_record_id, source_id, line_no, raw_json) "
+        "INSERT INTO raw_record (raw_record_id, source_file_id, line_no, raw_json) "
         "VALUES (?, ?, ?, ?)", (ids["record"], ids["source"], 1, "{}"))
     connection.execute(
         "INSERT INTO entity (entity_id, identifier_type, type) VALUES (?, ?, ?)",
         (ids["entity"], "none", "device"))
     connection.execute(
-        "INSERT INTO spatial_expression (spatial_expression_id, referential) "
-        "VALUES (?, ?)", (ids["sx"], "epsg:4326"))
+        "INSERT INTO spatial_expression "
+        "(spatial_expression_id, position_type, referential) "
+        "VALUES (?, ?, ?)", (ids["sx"], "coordinate", "epsg:4326"))
     connection.execute(
         "INSERT INTO temporal_expression (temporal_expression_id, kind) VALUES (?, ?)",
         (ids["tx"], "instant"))
     connection.execute(
-        "INSERT INTO observation (observation_id, raw_record_id, preset_id, output_ordinal, "
-        "entity_id, spatial_expression_id, temporal_expression_id, content_hash, "
-        "claim_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (ids["observation"], ids["record"], ids["preset"], 0, ids["entity"],
+        "INSERT INTO observation (observation_id, raw_record_id, preset_id, "
+        "entity_id, spatial_expression_id, temporal_expression_id, observation_content_hash, "
+        "spatiotemporal_entity_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (ids["observation"], ids["record"], ids["preset"], ids["entity"],
          ids["sx"], ids["tx"], "ch", "cd"))
     return ids
 
 
-def test_duplicate_observation_natural_key_raises() -> None:
+def test_several_observations_per_record_and_preset_are_legal() -> None:
+    """There is NO UNIQUE over (raw_record_id, preset_id) since decision 50.
+
+    One preset with several observation templates legitimately writes several observations
+    for one record — the route search's origin and destination — and `output_ordinal`, which
+    used to discriminate them, was removed with the derived ids. Each row still OWNS its
+    corners, which is what the remaining UNIQUEs enforce (see the two tests below).
+
+    Re-ingesting a source is prevented earlier, by the pipeline's append check on the
+    source's natural key; it was never this constraint's job.
+    """
     connection = _memory_conn()
     ids = _seed_one_observation(connection)
-    # Same (raw_record_id, preset_id, output_ordinal) with fresh owned corners: the §2a
-    # guard must reject the duplicate reading.
-    with pytest.raises(sqlite3.IntegrityError):
-        connection.execute(
-            "INSERT INTO observation (observation_id, raw_record_id, preset_id, "
-            "output_ordinal, entity_id, content_hash, claim_digest) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), ids["record"], ids["preset"], 0,
-             str(uuid.uuid4()), "ch2", "cd2"))
+    second_entity = str(uuid.uuid4())
+    connection.execute(
+        "INSERT INTO entity (entity_id, identifier_type, type) VALUES (?, ?, ?)",
+        (second_entity, "none", "device"))
+    connection.execute(
+        "INSERT INTO observation (observation_id, raw_record_id, preset_id, "
+        "entity_id, observation_content_hash, spatiotemporal_entity_hash) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), ids["record"], ids["preset"], second_entity, "ch2", "cd2"))
+    (n,) = connection.execute(
+        "SELECT COUNT(*) FROM observation WHERE raw_record_id = ?", (ids["record"],)).fetchone()
+    assert n == 2
 
 
 def test_shared_entity_corner_raises() -> None:
@@ -173,16 +228,16 @@ def test_shared_entity_corner_raises() -> None:
     ids = _seed_one_observation(connection)
     # A second observation referencing the SAME entity row violates UNIQUE(entity_id).
     connection.execute(
-        "INSERT INTO raw_record (raw_record_id, source_id, line_no, raw_json) "
+        "INSERT INTO raw_record (raw_record_id, source_file_id, line_no, raw_json) "
         "VALUES (?, ?, ?, ?)", (str(uuid.uuid4()), ids["source"], 2, "{}"))
     other_record = connection.execute(
         "SELECT raw_record_id FROM raw_record WHERE line_no = 2").fetchone()[0]
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(
             "INSERT INTO observation (observation_id, raw_record_id, preset_id, "
-            "output_ordinal, entity_id, content_hash, claim_digest) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), other_record, ids["preset"], 0,
+            "entity_id, observation_content_hash, spatiotemporal_entity_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), other_record, ids["preset"],
              ids["entity"], "ch3", "cd3"))
 
 
@@ -190,7 +245,7 @@ def test_shared_spatial_corner_raises() -> None:
     connection = _memory_conn()
     ids = _seed_one_observation(connection)
     connection.execute(
-        "INSERT INTO raw_record (raw_record_id, source_id, line_no, raw_json) "
+        "INSERT INTO raw_record (raw_record_id, source_file_id, line_no, raw_json) "
         "VALUES (?, ?, ?, ?)", (str(uuid.uuid4()), ids["source"], 2, "{}"))
     other_record = connection.execute(
         "SELECT raw_record_id FROM raw_record WHERE line_no = 2").fetchone()[0]
@@ -198,9 +253,9 @@ def test_shared_spatial_corner_raises() -> None:
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(
             "INSERT INTO observation (observation_id, raw_record_id, preset_id, "
-            "output_ordinal, entity_id, spatial_expression_id, content_hash, "
-            "claim_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), other_record, ids["preset"], 0,
+            "entity_id, spatial_expression_id, observation_content_hash, "
+            "spatiotemporal_entity_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), other_record, ids["preset"],
              str(uuid.uuid4()), ids["sx"], "ch4", "cd4"))
 
 

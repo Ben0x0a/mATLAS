@@ -5,13 +5,14 @@ Defines:    ``CANONICAL_COLUMNS`` (the ordered flat-CSV column contract encoded 
             (assembles the per-run SELECT — canonical block first, then the exploded
             ``orig_<col>`` passthrough), and ``build_flat_view`` (runs it against a
             read-only connection and returns the flat pandas frame with numeric dtypes
-            restored and the derived ``is_presence`` filled).
+            restored).
 Used by:    the CSV exporter and any read-only consumer wanting the flat view;
             tests.core.test_flat_view. NB: this is the CSV-column "flat view", distinct
             from ids.py's ``l1_projection`` (the digest input) and the future road
             geometry "projection" — the three no longer share the one word.
-Depends on: ``model_atlas.core.vocabularies`` (``SpatialLink.is_presence`` — the single
-            source of the ``is_presence`` derivation), ``pandas`` (the frame + numeric
+Depends on: ``model_atlas.core.vocabularies`` (``RecordType`` for the derived
+            the enrichment marker driving the ``_matlas`` suffix),
+            ``pandas`` (the frame + numeric
             re-coercion the old frame builder did), and the standard library
             (``sqlite3``, ``json``).
 
@@ -41,16 +42,15 @@ column list)
   the role was a preset-author assertion, and ``*_source_field`` carries the meaning)
   (cross-check row 42: the settled model's names; the old headers are
   retired).
-- ``utc_offset_hours`` -> ``utc_offset_hours_lower`` / ``_upper``.
-- ``deleted`` sources from ``observation.deleted`` (the app's own flag, migration row 65);
-  the separate ``recovery_state`` new column sources from
-  ``raw_record.recovery_state``.
-- ``is_presence`` is SELECTed as a ``NULL`` placeholder and filled in Python from
-  ``SpatialLink(...).is_presence`` — the predicate is declared once in vocabularies,
-  so it is never re-encoded as a SQL ``CASE``.
-- ``counterpart`` / ``facets`` / ``context`` are OPTIONAL bonus columns:
-  best-effort ``json_extract`` over ``activity.context_json``. No MANDATORY column
-  sources from the activity table.
+- ``utc_offset_hours`` -> ``offset_to_local_hours_lower`` / ``_upper`` — hours to ADD to
+  the canonical UTC µs to read the bound in the case's configured local zone, NOT the
+  offset the source's clock carried. The rendered ``*_datetime_iso`` / ``*_date`` /
+  ``*_time`` columns are gone with it: ``core.local_time`` renders on demand.
+- ``deleted`` is GONE (decision 48): the app's own flag asked a question the source could
+  not answer separately from "was this recovered", so it folded into ``recovery_state`` —
+  which now sources from ``observation``, not ``raw_record``.
+- ``record_order`` reads ``analysis.record_rank_type`` directly. The label is STORED
+  (decision 54) so SQL against this database can use it; the projection no longer derives it.
 - The preferred-integration predicate is future-proofing only: v1 is single-integration
   (``UNIQUE(expression_id)``), so there is NO ``preferred`` column to filter on — a plain
   LEFT JOIN already yields the one row. When plural candidates arrive, add
@@ -73,7 +73,7 @@ PASSTHROUGH_PREFIX = "orig_"
 # expression names the source table.column (or a component subquery / json_extract).
 # Table aliases: a=observation, r=raw_record, s=source, rn=run, c=case_metadata,
 # e=entity, p=preset, sx/si/six=spatial expression/integration/index,
-# tx/ti=temporal expression/timespan integration, act=activity, an=analysis.
+# tx/ti=temporal expression/timespan integration, an=analysis.
 
 # A standard temporal/spatial component is reassembled by its ordinal-ordered, standard
 # part name; ``is_standard_part`` in vocabularies is the authoritative predicate, and the
@@ -105,17 +105,17 @@ def _spatial_part(part: str, column: str) -> str:
             f"AND sc.part = '{part}' ORDER BY sc.ordinal LIMIT 1)")
 
 
-# raw_source_path: the data-source where the data originally lived, falling
-# back to the chain-inclusive input source path (``input_file_path!inner_path``).
+# raw_source_path: the path the source REPORTS the data originally lived at (secondary
+# exports only — NULL for a primary acquisition), falling back to the chain-inclusive
+# input source path (``input_file_path!inner_path``), which for a primary IS the truth.
 _RAW_SOURCE_PATH = (
-    "COALESCE(s.data_source, CASE WHEN s.inner_path IS NOT NULL "
+    "COALESCE(s.reported_data_source, CASE WHEN s.inner_path IS NOT NULL "
     "THEN s.input_file_path || '!' || s.inner_path ELSE s.input_file_path END)")
 
 _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     # -- Block 1: every old column, mapped (csv_migration.md, old CSV order) ----
     ("entity", "e.identifier"),
     ("entity_type", "e.type"),
-    ("concerns", "e.concerns"),
     ("time_lower_raw", _temporal_part("lower", "raw_value")),
     ("time_lower_source_field", _temporal_part("lower", "source_field")),
     ("time_lower_unix_utc_us", "ti.lower_unix_utc_us"),
@@ -127,8 +127,8 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("time_upper_raw", _temporal_part_either("upper", "duration", "raw_value")),
     ("time_upper_source_field", _temporal_part_either("upper", "duration", "source_field")),
     ("time_upper_unix_utc_us", "ti.upper_unix_utc_us"),
-    ("utc_offset_hours_lower", "ti.utc_offset_hours_lower"),
-    ("utc_offset_hours_upper", "ti.utc_offset_hours_upper"),
+    ("offset_to_local_hours_lower", "ti.offset_to_local_hours_lower"),
+    ("offset_to_local_hours_upper", "ti.offset_to_local_hours_upper"),
     ("lower_accuracy_us", "ti.lower_accuracy_us"),
     ("upper_accuracy_us", "ti.upper_accuracy_us"),
     ("temporal_source", "tx.temporal_source"),
@@ -141,7 +141,12 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("longitude_wgs84", "si.longitude_wgs84"),
     ("longitude_source_field", _spatial_part("longitude", "source_field")),
     ("altitude_m", "si.altitude_m"),
-    ("raw_position", _spatial_part("raw_position", "raw_value")),
+    # The verbatim components that produced latitude_wgs84 / longitude_wgs84, as
+    # `<source column>:<value> | ...` — written by the spatial integration, which is the
+    # only layer that knows which components ITS derivation consumed. It replaces the old
+    # `raw_position`, which projected the single composite component and was therefore
+    # EMPTY for every preset that maps structured lat/lon columns (i.e. most of them).
+    ("position_raw", "si.position_raw"),
     ("spatial_source", "sx.spatial_source"),            # old position_source
     ("horizontal_accuracy_m", "si.horizontal_accuracy_m"),
     ("vertical_accuracy_m", "si.vertical_accuracy_m"),
@@ -155,9 +160,7 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("beam_width_deg", "si.beam_width_deg"),
     ("entity_link", "a.entity_link"),
     ("spatial_link", "a.spatial_link"),
-    ("occupancy", "a.occupancy"),
-    ("attestation", "a.attestation"),
-    ("recorded_at", "a.recorded_at"),
+    ("temporal_link", "a.temporal_link"),
     ("raw_source_path", _RAW_SOURCE_PATH),
     ("input_file_path", "s.input_file_path"),
     ("input_record_id", "a.input_record_id"),
@@ -170,73 +173,109 @@ _CANONICAL_SELECT: tuple[tuple[str, str], ...] = (
     ("preset_name", "p.name"),
     ("source_label", "a.source_label"),
     ("source_tier", "s.source_tier"),
-    ("deleted", "a.deleted"),                           # the app's own flag
     ("record_rank", "an.record_rank"),
-    ("record_rank_type", "an.record_rank_type"),
+    ("record_order", "an.record_rank_type"),            # STORED (decision 54)
     # -- Block 2: new columns (csv_migration.md order) -------------------------
     ("case_number", "c.case_number"),
-    ("content_uid", "a.content_hash"),
-    ("claim_digest", "a.claim_digest"),
+    ("observation_content_uid", "a.observation_content_hash"),
+    ("spatiotemporal_entity_hash", "a.spatiotemporal_entity_hash"),
     ("raw_identifier", "e.raw_identifier"),
     ("identifier_type", "e.identifier_type"),
-    ("activity_role", "a.activity_role"),
-    ("concerns_origin", "e.concerns_origin"),
-    ("spatial_referential", "sx.referential"),
     # The position BEARER, projected from the SECOND entity join. This is the accepted
     # storage/projection inversion made concrete: storage orders by whose position it is, so
     # a CDR row stores the antenna, while the line still names the phone and the antenna
-    # arrives as columns instead of dissolving into a cell_ref string. Empty when the entity
-    # holds its own position (entity_link = self).
+    # arrives as columns instead of dissolving into a cell_ref string. For `subject` the
+    # bearer IS the targeted entity, so these repeat it; empty for `unknown` (decision 55).
     ("bearer_entity", "be.identifier"),
     ("bearer_raw_identifier", "be.raw_identifier"),
     ("bearer_identifier_type", "be.identifier_type"),
     ("bearer_entity_type", "be.type"),
-    ("is_presence", "NULL"),                            # derived in Python
-    ("spatial_method", "si.method"),
-    ("temporal_method", "ti.method"),
-    ("time_lower_stated_offset", _temporal_part("lower", "stated_offset")),
-    ("time_upper_stated_offset", _temporal_part("upper", "stated_offset")),
-    ("time_lower_datetime_iso", "ti.lower_datetime_iso"),
-    ("time_upper_datetime_iso", "ti.upper_datetime_iso"),
-    ("time_lower_date", "ti.lower_date"),
-    ("time_upper_date", "ti.upper_date"),
-    ("time_lower_time", "ti.lower_time"),
-    ("time_upper_time", "ti.upper_time"),
-    ("recovery_state", "r.recovery_state"),
-    ("recovery_source", "r.recovery_source"),   # the fine origin (live/wal/…/freespace)
-    ("data_source", "s.data_source"),
-    ("activity_id", "a.activity_id"),
-    ("activity_kind", "act.kind"),                      # bonus, optional
-    ("counterpart", "json_extract(act.context_json, '$.counterpart')"),
-    ("facets", "json_extract(act.context_json, '$.facets')"),
-    ("context", "json_extract(act.context_json, '$.context')"),
+    # Both read the OBSERVATION, never raw_record: on a primary source assemble copied our
+    # own L0 finding onto it, on a secondary one it holds what the TOOL reports. One column
+    # in the output either way, and the retired `deleted` column's question folded into it.
+    ("recovery_state", "a.recovery_state"),
+    # The fine origin (wal/journal/freelist/freespace); NULL means the record was live,
+    # i.e. recovered from nowhere — a populated cell IS the "this was recovered" signal.
+    ("recovery_source", "a.recovery_source"),
+    ("reported_data_source", "s.reported_data_source"),
     ("s2_cell_id", "six.s2_cell_id"),
 )
 
 # The ordered flat-CSV column names — the encoded csv_migration.md contract. The exporter
 # and the tests assert the projected frame's canonical block matches this exactly.
-CANONICAL_COLUMNS: tuple[str, ...] = tuple(name for name, _ in _CANONICAL_SELECT)
+# --- the ``_matlas`` enrichment suffix --------------------------------------
+# A projected column is suffixed when its value did not come from the trace: a uid mATLAS
+# computed, a link a preset author stated, a rank an analysis produced, the operator's case
+# number. A value DERIVED from a trace datum in an obvious way keeps its bare name —
+# ``latitude_wgs84`` is still the source's own coordinate, just converted.
+#
+# The flag is DERIVED, not listed: every simple ``alias.column`` expression is resolved back
+# to its model field and read from the marker declared in vocabularies. The alias map below
+# is the same one ``_FROM_JOINS`` declares, so a renamed table cannot silently un-suffix a
+# column. Only expressions with no single model field (a COALESCE, a correlated subquery, a
+# Python-filled ``NULL``) are named explicitly.
+
+_ALIAS_MODELS: dict[str, type] = {
+    "a": V.Observation, "e": V.Entity, "be": V.Entity, "s": V.SourceFile, "r": V.RawRecord,
+    "p": V.Preset, "c": V.CaseMetadata, "act": V.Activity, "an": V.Analysis,
+    "sx": V.SpatialExpression, "si": V.SpatialIntegration, "six": V.SpatialIndex,
+    "tx": V.TemporalExpression, "ti": V.TimespanIntegration,
+}
+
+# Composite expressions: no single model field to read the marker from.
+_COMPUTED_ENRICHMENT: frozenset[str] = frozenset({
+    # COALESCE(a.source_record_uid, r.raw_record_id) — the fallback half is a mATLAS uid, and
+    # a uid is an enrichment even though it is derived, because nothing in the trace is it.
+    "source_record_uid",
+    "record_order",          # analysis.record_rank_type
+})
+_COMPUTED_TRACE: frozenset[str] = frozenset({
+    "raw_source_path",       # COALESCE over source paths — the acquisition's own
+})
+
+
+def _is_enrichment_column(name: str, expr: str) -> bool:
+    """Whether a projected column carries a mATLAS enrichment (and so takes the suffix)."""
+    if name in _COMPUTED_ENRICHMENT:
+        return True
+    if name in _COMPUTED_TRACE:
+        return False
+    alias, _, column = expr.partition(".")
+    model = _ALIAS_MODELS.get(alias)
+    # Anything else is a subquery or literal over verbatim source values (the ``*_raw`` and
+    # ``*_source_field`` parts), which are the trace's own words by construction.
+    if model is None or not column.isidentifier():
+        return False
+    return V.is_enrichment(model, column)
+
+
+ENRICHMENT_SUFFIX = "_matlas"
+
+CANONICAL_COLUMNS: tuple[str, ...] = tuple(
+    name + ENRICHMENT_SUFFIX if _is_enrichment_column(name, expr) else name
+    for name, expr in _CANONICAL_SELECT)
 
 # Columns whose MODEL type is a numeric union (``float | str`` / ``int | float``) so the
 # schema stores them as TEXT, but whose values are semantically numeric. After reading the
 # frame back their numeric dtype is restored PER VALUE (see _restore_numeric_dtype) so the
-# CSV renders each real number unquoted, while a non-numeric sentinel (``UTC_OFFSET_UNKNOWN``
-# = "N/A") sitting in a sibling row stays text (quoted) — keeping "value, zone unknown"
+# CSV renders each real number unquoted, while a non-numeric sentinel (``LOCAL_OFFSET_UNKNOWN``
+# = "N/A") sitting in a sibling row stays text (quoted) — keeping "no local zone configured"
 # visibly distinct from a real offset without dragging the genuine numbers into TEXT too.
 _NUMERIC_TEXT_COLUMNS: tuple[str, ...] = (
-    "utc_offset_hours_lower", "utc_offset_hours_upper",
+    "offset_to_local_hours_lower", "offset_to_local_hours_upper",
 )
 
 # INTEGER-typed flat-view columns that may carry NULLs (a corner-less observation). Read
 # as pandas nullable ``Int64`` rather than the float64 pandas would otherwise infer:
 # ``s2_cell_id`` is a signed int64 S2 leaf cell whose value EXCEEDS float64's 53-bit
 # integer range — a float round-trip would silently corrupt the cell id (a §2-class
-# silent loss) — and the epoch/date/time columns render as clean unquoted integers.
+# silent loss) — and the epoch columns render as clean unquoted integers.
+# NOTE: these name PROJECTED columns, so enrichment members carry the ``_matlas`` suffix —
+# the frame is keyed on the final name, not the model field.
 _INTEGER_COLUMNS: tuple[str, ...] = (
     "time_lower_unix_utc_us", "time_upper_unix_utc_us",
-    "time_lower_date", "time_upper_date", "time_lower_time", "time_upper_time",
     "lower_accuracy_us", "upper_accuracy_us",
-    "record_rank", "s2_cell_id",
+    "record_rank_matlas", "s2_cell_id_matlas",
 )
 
 # The join chain up the grain (observation -> raw_record -> source -> run -> case) plus the
@@ -246,7 +285,7 @@ _INTEGER_COLUMNS: tuple[str, ...] = (
 _FROM_JOINS = """
 FROM observation a
 JOIN raw_record r ON r.raw_record_id = a.raw_record_id
-JOIN source s ON s.source_id = r.source_id
+JOIN source_file s ON s.source_file_id = r.source_file_id
 JOIN run rn ON rn.run_id = s.run_id
 JOIN case_metadata c ON c.case_id = rn.case_id
 JOIN entity e ON e.entity_id = a.entity_id
@@ -257,7 +296,6 @@ LEFT JOIN spatial_integration si ON si.spatial_expression_id = a.spatial_express
 LEFT JOIN spatial_index six ON six.spatial_integration_id = si.spatial_integration_id
 LEFT JOIN temporal_expression tx ON tx.temporal_expression_id = a.temporal_expression_id
 LEFT JOIN timespan_integration ti ON ti.temporal_expression_id = a.temporal_expression_id
-LEFT JOIN activity act ON act.activity_id = a.activity_id
 LEFT JOIN analysis an ON an.observation_id = a.observation_id AND an.method = ?
 ORDER BY a.rowid
 """.strip()
@@ -371,7 +409,9 @@ def build_flat_view_sql(
     columns (empty when ``include_source_columns`` is False), so a caller knows the frame's
     trailing column set without re-parsing the SQL.
     """
-    select_terms = [f"{expr} AS {name}" for name, expr in _CANONICAL_SELECT]
+    select_terms = [f"{expr} AS {final}"
+                    for (name, expr), final in zip(_CANONICAL_SELECT,
+                                                   CANONICAL_COLUMNS)]
     orig_columns: list[str] = []
     if include_source_columns:
         fields = _orig_fields_in_first_appearance_order(connection)
@@ -402,7 +442,7 @@ def build_flat_view(
 
     HOW: resolve the current ranking method, build the generated SELECT, read it into a
     frame, restore the numeric-union TEXT columns to a numeric dtype (so they render
-    unquoted), and fill the derived ``is_presence`` from ``SpatialLink`` — never from a
+    unquoted) — never from a
     SQL mapping (the vocabulary is the single source of truth). Corner-less
     observations keep their row with empty coordinate/time cells (LEFT JOINs), never dropped.
     """
@@ -430,7 +470,6 @@ def build_flat_view(
     }, columns=column_names)
     for column in _NUMERIC_TEXT_COLUMNS:
         _restore_numeric_dtype(frame, column)
-    _fill_is_presence(frame)
     return frame
 
 
@@ -439,7 +478,7 @@ def _restore_numeric_dtype(frame: pd.DataFrame, column: str) -> None:
 
     A column whose non-null cells ALL parse as numbers becomes a numeric dtype (rendered
     unquoted). When only SOME cells are numbers — the rest being the non-numeric sentinel
-    (``UTC_OFFSET_UNKNOWN`` = "N/A") — the genuine numbers are still restored to numeric
+    (``LOCAL_OFFSET_UNKNOWN`` = "N/A") — the genuine numbers are still restored to numeric
     values while the sentinel cells keep their text, so a mixed column renders each number
     numerically and each sentinel as the sentinel (rather than the WHOLE column staying
     TEXT and rendering every real offset quoted, e.g. ``'2.00'``).
@@ -465,26 +504,4 @@ def _restore_numeric_dtype(frame: pd.DataFrame, column: str) -> None:
     frame[column] = [
         number if pd.notna(number) else (None if pd.isna(original) else original)
         for original, number in zip(series, coerced)
-    ]
-
-
-def _fill_is_presence(frame: pd.DataFrame) -> None:
-    """Fill ``is_presence`` from ``spatial_link`` via the vocabulary predicate.
-
-    The successor to the derived ``locates`` column, and a narrower claim. ``locates`` asked
-    *whose* position this was, which the bearer columns now answer structurally — no
-    derivation needed. What a query still needs derived is the presence test, and that is
-    exactly the distinction the three negatives exist to preserve: ``references`` (interest,
-    no presence), ``absent`` (asserted non-presence) and ``unknown`` (no claim either way)
-    are all NOT presence but are not each other, and all three stay visible in
-    ``spatial_link`` beside this flag.
-
-    WHY in Python and not SQL: the predicate is declared once as ``SpatialLink.is_presence``;
-    re-encoding it as a SQL CASE would be a second source that could silently drift. An
-    unmapped link (NULL) stays empty — unknown is not non-presence, and a row with no mapped
-    link must never be silently read as an exclusion.
-    """
-    frame["is_presence"] = [
-        None if pd.isna(value) else V.SpatialLink(value).is_presence
-        for value in frame["spatial_link"]
     ]

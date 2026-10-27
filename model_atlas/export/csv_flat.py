@@ -19,8 +19,8 @@ Why the flat view and not a hand-built frame
 The flat CSV stopped being a 45-column dict assembled per observation; it is now a
 GENERATED query over the run database (docs/csv_migration.md). This brick therefore owns
 no column knowledge of its own — the order, the numeric dtypes and the ``orig_<col>``
-explosion all come from ``core.flat_view``. The four mandatory columns
-(``spatial_referential``, ``locates``, ``spatial_method``, ``temporal_method``) are part
+explosion all come from ``core.flat_view``. The mandatory columns
+(the three ``*_link_matlas`` columns and the bearer block) are part
 of that contract, so a GPS fix, a geocoder centroid and a cell lookup each carry their
 own referential + method and can never render identically.
 
@@ -81,7 +81,7 @@ class Exporter(Protocol):
 class CsvFlatExporter:
     """The flat-CSV export brick: project the store, write one CSV (or one per preset)."""
 
-    format = "csv_flat"
+    format = "csv"          # MUST equal the registry name (registry.py registers "csv")
 
     def export(self, store: RunStore, ctx: ExportContext) -> list[Path]:
         """Project the run store and write the flat CSV, returning the file written.

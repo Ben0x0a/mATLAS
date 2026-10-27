@@ -60,7 +60,7 @@ def test_geojson_round_trips_small_store(tmp_path: Path) -> None:
         assert "latitude_wgs84" not in properties
         assert "longitude_wgs84" not in properties
         assert properties["entity_type"] == "device"
-        assert properties["concerns"] == "subject"
+        assert "concerns" not in properties   # left the projection
 
 
 def test_geojson_writes_one_file_for_all_presets(tmp_path: Path) -> None:

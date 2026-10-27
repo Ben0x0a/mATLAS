@@ -57,9 +57,9 @@ def test_kml_round_trips_small_store(tmp_path: Path) -> None:
     }
     assert actual_coords == expected_coords
 
-    # name = concerns ("subject" for both rows in this fixture).
+    # name = entity, falling back to raw_identifier ("device" here: a typed mention).
     names = {placemark.find(f"{_KML_NS}name").text for placemark in placemarks}
-    assert names == {"subject"}
+    assert names == {"device"}
 
     # A TimeStamp/when is present (an instant observation — lower bound is set).
     for placemark in placemarks:

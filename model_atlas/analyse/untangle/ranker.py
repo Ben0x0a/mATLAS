@@ -2,7 +2,7 @@
 
 Defines:    ``analyse`` — reads every observation joined to its entity and its L2
             integrations, applies the UNCHANGED untangle grouping/ranking semantics
-            (``record_rank_type`` main/additional + ``record_rank`` within same-second time
+            (``record_rank`` within same-second time
             groups, ranked by horizontal accuracy then completeness) and writes one
             method-stamped ``analysis`` row per observation — plus ``METHOD_NAME`` /
             ``UNTANGLE_VERSION`` / ``DEFAULT_RESOLUTION_US``.
@@ -42,10 +42,9 @@ settled home (the csv_migration.md mapping):
 - ``time_*_raw`` / ``_source_field`` -> the ``lower``/``upper`` temporal components;
 - ``time_*_unix_utc_us`` -> ``timespan_integration``; ``time_accuracy_us`` -> COALESCE of
   the two split per-bound ``*_accuracy_us`` columns (the completeness bit the old column had);
-- ``utc_offset_hours``          -> COALESCE of the two split per-bound applied
-  offsets (the old single column existed once per row; either bound's applied
-  offset marks the same "an offset is known" completeness bit the old column
-  carried);
+- ``offset_to_local_hours``          -> COALESCE of the two split per-bound offsets to
+  local (the old single column existed once per row; either bound's offset marks the same
+  "an offset is known" completeness bit the old column carried);
 - ``temporal_source``           -> ``temporal_expression.temporal_source``;
 - ``position_source``           -> ``spatial_expression.spatial_source`` (renamed
   from the old flat CSV column of the same name);
@@ -88,7 +87,6 @@ _ENTITY = "entity"
 _LOWER_FIELD = "time_lower_source_field"
 _UPPER_FIELD = "time_upper_source_field"
 _HACC = "horizontal_accuracy_m"
-_RECORD_TYPE = "record_rank_type"
 _RECORD_RANK = "record_rank"
 
 # Acquisition tools round timestamps to the second; group at that resolution (1e6 us).
@@ -97,11 +95,12 @@ DEFAULT_RESOLUTION_US = 1_000_000
 # Fields that count towards completeness when breaking an accuracy tie.
 _COMPLETENESS_COLUMNS: tuple[str, ...] = (
     "entity", "concerns", "time_lower_raw", "time_lower_unix_utc_us",
-    "time_upper_raw", "time_upper_unix_utc_us", "utc_offset_hours", "time_accuracy_us", "temporal_source",
+    "time_upper_raw", "time_upper_unix_utc_us", "offset_to_local_hours",
+    "time_accuracy_us", "temporal_source",
     "latitude_wgs84", "longitude_wgs84", "altitude_m", "raw_position", "position_source",
     "horizontal_accuracy_m", "vertical_accuracy_m", "horizontal_speed_kmh",
     "vertical_speed_kmh", "heading_deg", "heading_accuracy_deg", "beam_azimuth_deg",
-    "beam_width_deg", "entity_link", "spatial_link", "occupancy", "attestation",
+    "beam_width_deg", "entity_link", "spatial_link", "temporal_link",
 )
 
 # --- the store read: reassemble the old flat columns from their settled homes
@@ -119,14 +118,14 @@ _OBSERVATION_FRAME_SELECT: tuple[tuple[str, str], ...] = (
     ("time_upper_raw", _temporal_part("upper", "raw_value")),
     ("time_upper_source_field", _temporal_part("upper", "source_field")),
     ("time_upper_unix_utc_us", "ti.upper_unix_utc_us"),
-    # The old flat model carried ONE applied offset per row; the settled schema
-    # split it per bound. Either bound's applied offset carries the same
-    # "an offset is known" completeness bit the old single column did.
-    ("utc_offset_hours",
-     "COALESCE(ti.utc_offset_hours_lower, ti.utc_offset_hours_upper)"),
+    # The old flat model carried ONE offset per row; the settled schema splits it per
+    # bound. Either bound's offset carries the same "an offset is known" completeness bit
+    # the old single column did.
+    ("offset_to_local_hours",
+     "COALESCE(ti.offset_to_local_hours_lower, ti.offset_to_local_hours_upper)"),
     # The schema splits the timing uncertainty per bound; the ranking only needs the
     # "an accuracy is stated" completeness bit, so COALESCE the two into the one signal the
-    # old flat model carried (the same shape as the utc_offset COALESCE just above).
+    # old flat model carried (the same shape as the offset COALESCE just above).
     ("time_accuracy_us", "COALESCE(ti.lower_accuracy_us, ti.upper_accuracy_us)"),
     ("temporal_source", "tx.temporal_source"),
     ("latitude_wgs84", "si.latitude_wgs84"),
@@ -144,8 +143,7 @@ _OBSERVATION_FRAME_SELECT: tuple[tuple[str, str], ...] = (
     ("beam_width_deg", "si.beam_width_deg"),
     ("entity_link", "a.entity_link"),
     ("spatial_link", "a.spatial_link"),
-    ("occupancy", "a.occupancy"),
-    ("attestation", "a.attestation"),
+    ("temporal_link", "a.temporal_link"),
 )
 
 # LEFT JOINs: a corner-less observation keeps its row (it simply ranks ineligible —
@@ -204,7 +202,6 @@ def _rank(df: pd.DataFrame, *, resolution_us: int = DEFAULT_RESOLUTION_US) -> pd
     seconds) — a unit/resolution choice, not a fuzzy tolerance.
     """
     out = df.copy()
-    out[_RECORD_TYPE] = pd.NA
     out[_RECORD_RANK] = pd.NA
     required = {_LOWER_US, _UPPER_US, _ENTITY, _LOWER_FIELD, _UPPER_FIELD}
     if df.empty or not required.issubset(df.columns):
@@ -236,10 +233,6 @@ def _rank(df: pd.DataFrame, *, resolution_us: int = DEFAULT_RESOLUTION_US) -> pd
         )
         ranks = pd.Series(range(1, len(ranked) + 1), index=ranked.index, dtype="Int64")
         out.loc[ranked.index, _RECORD_RANK] = ranks
-        out.loc[ranked.index, _RECORD_TYPE] = ranks.apply(
-            lambda value: V.RecordType.MAIN.value if value == 1
-            else V.RecordType.ADDITIONAL.value
-        )
 
     temp = ["_lower_num", "_upper_num", "_hacc", "_hacc_missing", "_hacc_sort",
             "_completeness", "_order", "_lower_unit", "_upper_unit"]
@@ -255,7 +248,7 @@ def analyse(store: RunStore, *, version: str = UNTANGLE_VERSION,
 
     HOW: reassemble the old flat frame from the relational store (one row per
     observation, ingest order), run the unchanged ranking, then write
-    ``(observation_id, untangle/<version>, record_rank, record_rank_type)`` rows through
+    ``(observation_id, untangle/<version>, record_rank)`` rows through
     the L3 writer. Returns the number of rows written (== the observation count).
     Normally a re-run with a changed ranker ADDS a new method generation beside the
     old one; re-running the SAME version hits ``UNIQUE(observation_id,
@@ -273,17 +266,22 @@ def analyse(store: RunStore, *, version: str = UNTANGLE_VERSION,
     frame = _rank(_load_frame(store.connection), resolution_us=resolution_us)
     written = 0
     ranked = 0
-    for observation_id, record_rank_type, record_rank in frame[
-            ["observation_id", _RECORD_TYPE, _RECORD_RANK]].itertuples(index=False):
+    for observation_id, record_rank in frame[
+            ["observation_id", _RECORD_RANK]].itertuples(index=False):
         # pandas NA -> SQL NULL: an unranked observation keeps its verdict row with a
         # NULL verdict ("examined, no duplicate group"), never a fabricated rank.
         rank_value = None if pd.isna(record_rank) else int(record_rank)
         store.write_analysis(V.Analysis(
-            analysis_id=ids.analysis_id(observation_id, method),
+            analysis_id=ids.new_id(),
             observation_id=observation_id,
             method=method,
-            record_rank_type=None if pd.isna(record_rank_type) else str(record_rank_type),
             record_rank=rank_value,
+            # Written beside the rank, from the SAME value, so the two cannot disagree at
+            # the point of writing (decision 54). NULL rank -> NULL label: an unranked
+            # observation is "examined, no duplicate group", not "additional".
+            record_rank_type=(None if rank_value is None
+                              else V.RecordType.MAIN if rank_value == 1
+                              else V.RecordType.ADDITIONAL),
         ))
         written += 1
         if rank_value is not None:

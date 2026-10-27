@@ -149,25 +149,24 @@ def run_relational_pipeline(
     Ingest (L0) writes case/run/preset/source/raw_record; each matching preset is
     assembled onto every source (L1); spatial + temporal integrations are written
     (L2); entities are normalised (MUST precede untangle so a converged identifier is
-    visible); untangle writes the analysis verdicts (L3). ``data_source`` resolved by
+    visible); untangle writes the analysis verdicts (L3). ``reported_data_source`` resolved by
     assemble is set back on the source row here (decision 24 — the L0 owner's job,
     which this runner stands in for), so ``raw_source_path`` reports the in-artefact
-    path, not the opened file. Digests are unaffected (data_source is source-grain,
+    path, not the opened file. Digests are unaffected (it is source-grain,
     outside both digests), so folder==zip parity holds.
     """
     preset_rows = tuple(_preset_row(spec) for spec in specs)
     ingest_input(input_path, store, case_number=case_number, presets=preset_rows)
 
-    # activity ids are record-scoped (preset-free), so one ordinal registry is shared
-    # across every assemble call in the run (see assemble_source's caller contract).
-    activity_ordinals: dict[str, int] = {}
-    for source in rows(store, "SELECT source_id, fingerprint_sha256, format FROM source"):
+    for source in rows(store, "SELECT source_file_id, fingerprint_sha256, format FROM source_file"):
         records = [
-            RawRecord(line_no=row["line_no"], fields=json.loads(row["raw_json"]))
+            RawRecord(line_no=row["line_no"], fields=json.loads(row["raw_json"]),
+                      raw_record_id=row["raw_record_id"])
             for row in rows(
                 store,
-                "SELECT line_no, raw_json FROM raw_record WHERE source_id = ? ORDER BY line_no",
-                source["source_id"],
+                "SELECT raw_record_id, line_no, raw_json FROM raw_record "
+                "WHERE source_file_id = ? ORDER BY line_no",
+                source["source_file_id"],
             )
         ]
         for spec in specs:
@@ -177,21 +176,24 @@ def run_relational_pipeline(
                 continue
             report = assemble_source(
                 records, spec, store,
-                source_id=source["source_id"],
+                source_file_id=source["source_file_id"],
                 fingerprint_sha256=source["fingerprint_sha256"],
                 concerns=concerns,
-                activity_ordinals=activity_ordinals,
             )
-            if report.data_source is not None:
+            # Mirrors the pipeline: the reported path is a SECONDARY tool's second-hand
+            # claim, so a primary acquisition drops it — input_file_path is already the
+            # verified location there, and an unverifiable path must not sit beside it.
+            if (report.data_source is not None
+                    and spec.source_tier != V.SourceTier.PRIMARY.value):
                 store.connection.execute(
-                    "UPDATE source SET data_source = ? WHERE source_id = ?",
-                    (report.data_source, source["source_id"]),
+                    "UPDATE source_file SET reported_data_source = ? WHERE source_file_id = ?",
+                    (report.data_source, source["source_file_id"]),
                 )
             # The matched preset's declared tier overrides the L0 'primary' default
             # (mirrors the pipeline; source-grain, outside the digests).
             store.connection.execute(
-                "UPDATE source SET source_tier = ? WHERE source_id = ?",
-                (spec.source_tier, source["source_id"]),
+                "UPDATE source_file SET source_tier = ? WHERE source_file_id = ?",
+                (spec.source_tier, source["source_file_id"]),
             )
             _integrate_temporal_for_preset(store, spec)
 
@@ -250,7 +252,7 @@ def _write_observation(
     observation_id = f"observation-{tag}"
 
     store.write_raw_record(V.RawRecord(
-        raw_record_id=raw_record_id, source_id=_SOURCE_ID, line_no=line_no, raw_json="{}"))
+        raw_record_id=raw_record_id, source_file_id=_SOURCE_ID, line_no=line_no, raw_json="{}"))
 
     store.write_entity(V.Entity(
         entity_id=entity_id, identifier=identifier, raw_identifier=identifier,
@@ -259,6 +261,7 @@ def _write_observation(
 
     store.write_spatial_expression(V.SpatialExpression(
         spatial_expression_id=spatial_expression_id,
+        position_type=V.PositionType.COORDINATE,
         referential=V.SpatialReferential.EPSG_4326, spatial_source="GNSS"))
     store.write_spatial_component(V.SpatialComponent(
         spatial_component_id=f"sc-{tag}-lat", spatial_expression_id=spatial_expression_id,
@@ -285,19 +288,17 @@ def _write_observation(
     store.write_timespan_integration(V.TimespanIntegration(
         timespan_integration_id=f"ti-{tag}", temporal_expression_id=temporal_expression_id,
         method="tz_localize/1.0", lower_unix_utc_us=lower_us, upper_unix_utc_us=upper_us,
-        utc_offset_hours_lower=offset_lower, utc_offset_hours_upper=offset_upper))
+        offset_to_local_hours_lower=offset_lower, offset_to_local_hours_upper=offset_upper))
 
     store.write_observation(V.Observation(
-        observation_id=observation_id, raw_record_id=raw_record_id, preset_id=_PRESET_ID,
-        output_ordinal=0, entity_id=entity_id, content_hash=f"content-{tag}",
-        claim_digest=f"claim-{tag}", activity_role=V.ActivityRole.UNKNOWN,
-        entity_link=V.EntityLink.SELF,
-        spatial_link=V.SpatialLink.AT,
-        attestation=V.Attestation.INSTRUMENT,
-        # A degenerate interval carries no occupancy information (box == diamond there), so a
-        # single fix is ``once`` and a real span is ``continuous``.
-        occupancy=(V.Occupancy.ONCE if lower_us == upper_us
-                   else V.Occupancy.CONTINUOUS),
+        observation_id=observation_id, raw_record_id=raw_record_id, preset_id=_PRESET_ID, entity_id=entity_id, observation_content_hash=f"content-{tag}",
+        spatiotemporal_entity_hash=f"claim-{tag}",
+        # A device's own fix: it is the subject, and so its own bearer (decision 55).
+        bearer_entity_id=entity_id, entity_link=V.EntityLink.SUBJECT,
+        spatial_link=V.SpatialLink.MEASURED,
+        # On a degenerate interval box == diamond, so one canonical member is written there.
+        temporal_link=(V.TemporalLink.AT_LEAST_ONCE if lower_us == upper_us
+                       else V.TemporalLink.THROUGHOUT),
         spatial_expression_id=spatial_expression_id,
         temporal_expression_id=temporal_expression_id))
 
@@ -318,8 +319,8 @@ def build_manual_store(store: RunStore) -> None:
     store.write_preset(V.Preset(
         preset_id=_PRESET_ID, key="test.manual", name="Manual Test Preset",
         version="1.0", definition_digest="digest-manual-1"))
-    store.write_source(V.Source(
-        source_id=_SOURCE_ID, run_id=_RUN_ID,
+    store.write_source_file(V.SourceFile(
+        source_file_id=_SOURCE_ID, run_id=_RUN_ID,
         input_file_path="/manual/source.csv", format="csv"))
 
     _write_observation(
@@ -340,6 +341,6 @@ def build_manual_store(store: RunStore) -> None:
         # per-bound "offset unknown" warning GeoVisualizer's description carries
         # (module docstring, F2) — the lower bound stays a known offset so the two
         # emitted rows are distinguishable.
-        offset_lower=0.0, offset_upper=V.UTC_OFFSET_UNKNOWN,
+        offset_lower=0.0, offset_upper=V.LOCAL_OFFSET_UNKNOWN,
         lower_field="Start", upper_field="End", line_no=2,
     )

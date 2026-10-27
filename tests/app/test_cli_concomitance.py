@@ -29,6 +29,9 @@ from gui import spatiotemporal_query as gui_seam
 from model_atlas.analyse.concomitance import DURATION_UNIT_NAMES, duration_from
 from tests.app.test_concomitance_run import KNOWN, _build_case, _north_of
 
+# The engine raises until decision 55's presence predicate exists; these tests run it.
+_ENGINE_DISABLED = pytest.mark.skip(reason="concomitance is disabled until its presence predicate is redesigned (decision 55)")
+
 
 def _run(argv: list[str]) -> int:
     return cli.run(argv)
@@ -122,6 +125,7 @@ def test_malformed_group1_unknown_kind_exits_nonzero_naming_allowed_kinds(
 
 # --- a supported request writes the CSV -------------------------------------------------
 
+@_ENGINE_DISABLED
 def test_supported_request_writes_csv_and_exits_zero(
         tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     db_path = tmp_path / "case.matlas.sqlite"
@@ -164,6 +168,7 @@ def test_check_request_error_exits_one_before_running(capsys: pytest.CaptureFixt
     assert "Traceback" not in err
 
 
+@_ENGINE_DISABLED
 def test_identical_groups_warning_does_not_block_the_run(
         tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     db_path = tmp_path / "case.matlas.sqlite"

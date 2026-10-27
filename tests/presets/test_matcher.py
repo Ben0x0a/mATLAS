@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from model_atlas.app.pipeline import process
-from model_atlas.ingest.containers import FilesystemContainer, SourceFile
+from model_atlas.ingest.containers import FilesystemContainer, DiscoveredFile
 from model_atlas.ingest.format_detect import detect_source_format
 from model_atlas.presets.matcher import match_files_detailed, resolve_force_selector
 from model_atlas.presets.spec import preset_spec_from_yaml
@@ -18,8 +18,8 @@ def _preset(text: str):
     return preset_spec_from_yaml(yaml.safe_load(text), Path("p.yaml"))
 
 
-def _file(root: Path, rel: str) -> SourceFile:
-    return SourceFile(containers=(FilesystemContainer(root),), logical_path=PurePosixPath(rel))
+def _file(root: Path, rel: str) -> DiscoveredFile:
+    return DiscoveredFile(containers=(FilesystemContainer(root),), logical_path=PurePosixPath(rel))
 
 
 def _make_sqlite(path: Path, table: str) -> None:
@@ -49,7 +49,7 @@ common: {entity: const(device)}
 observations:
   - position: {latitude: field(lat), longitude: field(lon)}
     time: {instant: field(ts), epoch: unix_s}
-    links: {entity: self, spatial: at, temporal: once}
+    links: {entity: subject, spatial: measured, temporal: at_least_once}
 """
 
 _CSV_B = _CSV_A.replace("id: a, name: A", "id: b, name: B").replace(
@@ -101,7 +101,7 @@ common: {entity: const(device)}
 observations:
   - position: {latitude: 'field("ZLAT*")', longitude: field(ZLONGITUDE)}
     time: {instant: field(ZTIMESTAMP), epoch: unix_s}
-    links: {entity: self, spatial: at, temporal: once}
+    links: {entity: subject, spatial: measured, temporal: at_least_once}
 """
 
 
@@ -131,7 +131,7 @@ common: {entity: const(device)}
 observations:
   - position: {latitude: field(lat), longitude: field(lon)}
     time: {instant: field(ts), epoch: unix_s}
-    links: {entity: self, spatial: at, temporal: once}
+    links: {entity: subject, spatial: measured, temporal: at_least_once}
 """
 
 
@@ -169,7 +169,7 @@ common: {entity: const(device)}
 observations:
   - position: {latitude: field(lat), longitude: field(lon)}
     time: {instant: field(ts), epoch: unix_s}
-    links: {entity: self, spatial: at, temporal: once}
+    links: {entity: subject, spatial: measured, temporal: at_least_once}
 """
 
 

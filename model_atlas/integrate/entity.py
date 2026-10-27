@@ -37,11 +37,11 @@ favour of digest integrity.
 
 The digest recomputation (CRITICAL — run_db_schema.md, the normative L1 projection)
 -----------------------------------------------------------------------------------
-``entity.identifier`` is inside the L1 projection both ``content_hash`` and
-``claim_digest`` hash. Assembly stored digests hashing ``identifier=None`` (the assembled,
+``entity.identifier`` is inside the L1 projection both ``observation_content_hash`` and
+``spatiotemporal_entity_hash`` hash. Assembly stored digests hashing ``identifier=None`` (the assembled,
 pre-normalisation row), so after a normalisation SUCCEEDS this brick re-reads every L1
 row the projection covers (entity, spatial/temporal expressions + components in ordinal
-order, activity context), rebuilds the projection via ``ids.l1_projection`` and both
+order), rebuilds the projection via ``ids.l1_projection`` and both
 digests via ``ids.digests`` — never a local recipe — and UPDATEs the two observation
 columns. Cost shape: O(1) small SELECTs per normalised entity (the observation is 1:1
 with its entity by the schema's UNIQUE), so the whole pass is linear in the number of
@@ -432,18 +432,16 @@ def _recompute_observation_digests(
     the drift this function exists to prevent.
     """
     observation = connection.execute(
-        "SELECT observation_id, raw_record_id, preset_id, output_ordinal, activity_id, "
-        "spatial_expression_id, temporal_expression_id, activity_role, "
-        "entity_link, spatial_link, occupancy, attestation, "
-        "deleted, multiplicity, entity_id, bearer_entity_id "
+        "SELECT observation_id, raw_record_id, preset_id, "
+        "spatial_expression_id, temporal_expression_id, "
+        "entity_id, bearer_entity_id "
         "FROM observation WHERE entity_id = ? OR bearer_entity_id = ?",
         (entity_id, entity_id)).fetchone()
     if observation is None:
         return 0
-    (observation_id, raw_record_id, preset_id, output_ordinal, activity_id,
-     spatial_expression_id, temporal_expression_id, activity_role,
-     entity_link, spatial_link, occupancy, attestation,
-     deleted, multiplicity, targeted_entity_id, bearer_entity_id) = observation
+    (observation_id, raw_record_id, preset_id,
+     spatial_expression_id, temporal_expression_id,
+     targeted_entity_id, bearer_entity_id) = observation
 
     # Both entity rows enter the projection, so BOTH are read from the store — with the
     # freshly normalised values substituted for whichever row triggered this call.
@@ -457,10 +455,10 @@ def _recompute_observation_digests(
             (row_id,)).fetchone()
         return None if stored is None else ids.EntityProjection(*stored)
 
-    # The content_hash prefix inputs: fingerprint ⟂ preset KEY ⟂ line_no.
+    # The observation_content_hash prefix inputs: fingerprint ⟂ preset KEY ⟂ line_no.
     line_no, fingerprint_sha256 = connection.execute(
-        "SELECT record.line_no, source.fingerprint_sha256 FROM raw_record AS record "
-        "JOIN source ON source.source_id = record.source_id "
+        "SELECT record.line_no, source_file.fingerprint_sha256 FROM raw_record AS record "
+        "JOIN source_file ON source_file.source_file_id = record.source_file_id "
         "WHERE record.raw_record_id = ?",
         (raw_record_id,)).fetchone()
     (preset_key,) = connection.execute(
@@ -469,31 +467,25 @@ def _recompute_observation_digests(
     targeted_projection = _entity_projection(targeted_entity_id)
     assert targeted_projection is not None, (
         f"observation {observation_id} has no targeted entity row")
+    # A `subject` row's bearer IS the targeted entity: the projection then carries no bearer
+    # block, exactly as assemble wrote it (ids.l1_projection, decision 55).
+    bearer_projection = (None if bearer_entity_id == targeted_entity_id
+                         else _entity_projection(bearer_entity_id))
     l1 = ids.l1_projection(
         entity=targeted_projection,
-        bearer=_entity_projection(bearer_entity_id),
+        bearer=bearer_projection,
         spatial=_load_spatial_projection(connection, spatial_expression_id),
         temporal=_load_temporal_projection(connection, temporal_expression_id),
-        links=ids.ObservationLinks(
-            activity_role=activity_role,
-            entity_link=entity_link,
-            spatial_link=spatial_link,
-            occupancy=occupancy,
-            attestation=attestation),
-        deleted=deleted,
-        multiplicity=multiplicity,
-        activity=_load_activity_projection(connection, activity_id),
     )
-    content_hash, claim_digest = ids.digests(
+    observation_content_hash, spatiotemporal_entity_hash = ids.digests(
         fingerprint_sha256=fingerprint_sha256,
         preset_key=preset_key,
         line_no=line_no,
-        output_ordinal=output_ordinal,
         l1=l1,
     )
     connection.execute(
-        "UPDATE observation SET content_hash = ?, claim_digest = ? WHERE observation_id = ?",
-        (content_hash, claim_digest, observation_id))
+        "UPDATE observation SET observation_content_hash = ?, spatiotemporal_entity_hash = ? WHERE observation_id = ?",
+        (observation_content_hash, spatiotemporal_entity_hash, observation_id))
     return 1
 
 
@@ -534,19 +526,3 @@ def _load_temporal_projection(
             "WHERE temporal_expression_id = ? ORDER BY ordinal",
             (temporal_expression_id,)))
     return ids.TemporalProjection(kind, referential, components)
-
-
-def _load_activity_projection(
-    connection: sqlite3.Connection, activity_id: str | None,
-) -> ids.ActivityProjection | None:
-    """The stored activity as its digest projection, or None when the observation has no
-    activity. The context is DECODED back to the object the assembler hashed:
-    ``l1_projection`` re-canonicalises it, so the stored JSON's key order is irrelevant
-    and the round-trip through SQLite cannot move the digest."""
-    if activity_id is None:
-        return None
-    kind, context_json = connection.execute(
-        "SELECT kind, context_json FROM activity WHERE activity_id = ?",
-        (activity_id,)).fetchone()
-    context = json.loads(context_json) if context_json is not None else None
-    return ids.ActivityProjection(kind, context)

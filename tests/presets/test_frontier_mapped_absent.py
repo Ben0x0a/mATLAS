@@ -20,8 +20,8 @@ def _preset(longitude_ref: str) -> object:
         "observations": [{
             "position": {"latitude": "field(Lat)", "longitude": longitude_ref},
             "time": {"instant": "field(Ts)"},
-            "links": {"entity": "self", "spatial": "at",
-                      "temporal": "once"},
+            "links": {"entity": "subject", "spatial": "measured",
+                      "temporal": "at_least_once"},
         }],
     }
     return preset_spec_from_yaml(yaml.safe_load(yaml.safe_dump(raw)), Path("t.yaml"))

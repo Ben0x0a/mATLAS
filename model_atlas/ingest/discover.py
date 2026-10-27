@@ -15,7 +15,7 @@ Depends on: ``model_atlas.ingest.containers`` (the Container model), ``model_atl
 Ported from ``sources/discover.py``. Two changes vs the original, both
 justified in the writer's header:
   * the walk now EMITS an ``ArchiveFound`` event per container (the old discover returned
-    only leaf ``SourceFile``s), so the writer can record every archive encounter and an
+    only leaf ``DiscoveredFile``s), so the writer can record every archive encounter and an
     opt-in preset-scoped skip — never traceless;
   * a ``should_skip(cd_sha256)`` predicate lets the writer stop the walk descending into
     an archive a previous run already parsed with the same preset set (a skip still emits
@@ -40,7 +40,7 @@ from model_atlas.ingest.containers import (
     SIBLING_SUFFIXES,
     Container,
     FilesystemContainer,
-    SourceFile,
+    DiscoveredFile,
     ZipContainer,
 )
 from model_atlas.ingest.format_detect import detect_path_format, detect_source_format
@@ -74,7 +74,7 @@ class ArchiveFound:
 class FileFound:
     """One leaf file to be opened as a source (folder->file, zip->inner file)."""
 
-    file: SourceFile
+    file: DiscoveredFile
 
 
 def _sidecar_base(name: str) -> str | None:
@@ -134,7 +134,7 @@ def _walk_container(
             log.debug(f"Orphan sidecar with no sibling db, emitting as a file: {file.logical_path}")
         # Re-anchor the file onto the full container chain (outermost..innermost), keeping the
         # entry_index so a zip leaf still resolves to its OWN entry (duplicate-path handling).
-        file = SourceFile(
+        file = DiscoveredFile(
             containers=prefix + (container,),
             logical_path=file.logical_path,
             entry_index=file.entry_index,
@@ -145,7 +145,7 @@ def _walk_container(
         yield FileFound(file)
 
 
-def _archive_identity(container: Container, file: SourceFile, disk: Path | None) -> str:
+def _archive_identity(container: Container, file: DiscoveredFile, disk: Path | None) -> str:
     """The archive ``path`` identity for a nested container: the on-disk canonical path,
     or ``<parent path>!<member>`` when it lives inside another archive (unique + traceable)."""
     if disk is not None:
@@ -164,7 +164,7 @@ def _container_identity(container: Container) -> str:
 
 
 def _open_nested(
-    file: SourceFile,
+    file: DiscoveredFile,
     container: Container,
     prefix: tuple[Container, ...],
     depth: int,
@@ -251,5 +251,5 @@ def walk(
     # A single ordinary file (csv / sqlite / xlsx / unknown): present it through a
     # FilesystemContainer over its parent yielding just this one file.
     container = FilesystemContainer(input_path.parent)
-    file = SourceFile(containers=(container,), logical_path=PurePosixPath(input_path.name))
+    file = DiscoveredFile(containers=(container,), logical_path=PurePosixPath(input_path.name))
     yield FileFound(file)

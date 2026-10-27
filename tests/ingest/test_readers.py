@@ -230,7 +230,9 @@ def test_sqlite_recovered_rows_come_after_live_continuing_line_no(tmp_path: Path
     ]
     assert [r.line_no for r in recs] == [1, 2]
     # The fine origin: the live row is LIVE, the WAL-only row names its sidecar (WAL).
-    assert [r.recovery_source for r in recs] == [RecoverySource.LIVE, RecoverySource.WAL]
+    # A live row was recovered from nowhere, so it carries NO recovery_source: a
+    # populated cell IS the "recovered" signal, never an echo of recovery_state.
+    assert [r.recovery_source for r in recs] == [None, RecoverySource.WAL]
 
 
 def test_sidecar_recovery_source_mapping() -> None:

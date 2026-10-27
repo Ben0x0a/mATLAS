@@ -42,7 +42,7 @@ def read_case_counts(db_path: str | Path) -> CaseCounts:
     connection = sqlite3.connect(f"{Path(db_path).absolute().as_uri()}?mode=ro", uri=True)
     try:
         runs = connection.execute("SELECT COUNT(*) FROM run").fetchone()[0]
-        sources = connection.execute("SELECT COUNT(*) FROM source").fetchone()[0]
+        sources = connection.execute("SELECT COUNT(*) FROM source_file").fetchone()[0]
         observations = connection.execute("SELECT COUNT(*) FROM observation").fetchone()[0]
         return CaseCounts(runs=runs, sources=sources, observations=observations)
     finally:

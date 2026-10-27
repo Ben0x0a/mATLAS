@@ -66,9 +66,9 @@ observations:                               # required; non-empty list
       epoch:   cocoa
       zone:    const(UTC)
     links:
-      entity:   self
-      spatial:  at
-      temporal: once
+      entity:   subject
+      spatial:  measured
+      temporal: at_least_once
 ```
 
 ## 2. Top-level keys
@@ -199,7 +199,7 @@ These are the extra temporal attributes and per-bound overrides.
 
 | Field | Target |
 | --- | --- |
-| `utc_offset_hours` | The applied offset (usually set via `time.zone`, not directly). |
+| `utc_offset_hours` | The offset the SOURCE's clocks carry (usually set via `time.zone`, not directly). It lands verbatim in `temporal_component.stated_offset`. **Not** the DB's `offset_to_local_hours_*`, which is the offset to the case's local zone and is derived from settings, never from a preset. |
 | `temporal_source` | `temporal_expression.temporal_source` (the clock mechanism: NTP, internal_clock…). |
 | `temporal_referential` | `temporal_expression.referential` (explicit override of the derivation from `epoch`/`format`). |
 | `temporal_part_lower` / `temporal_part_upper` | Per-bound component part name (default `lower` / `upper`; e.g. rename to `duration`). |
@@ -236,9 +236,9 @@ source's latitude / longitude words". The datum is stated separately via
 
 | Field | Target |
 | --- | --- |
-| `entity_link` | `observation.entity_link` (`EntityPositionLink`). |
-| `occupancy` | `observation.occupancy` (`EntityTimeLink`). |
-| `occupancy` | `observation.occupancy` (`SpatialTemporalLink`). |
+| `entity_link` | `observation.entity_link` (`EntityLink`). |
+| `spatial_link` | `observation.spatial_link` (`SpatialLink`). |
+| `temporal_link` | `observation.temporal_link` (`TemporalLink`). |
 
 The short `links:` block (§9) is the ergonomic way to set these three with bare enum
 tokens. Use the full column names here when a link value must come from a conditional or
@@ -248,8 +248,8 @@ another reference rather than a bare token.
 
 | Field | Target |
 | --- | --- |
-| `raw_source_path` | Legacy alias of `data_source` — the source-grain `data_source` on the `source` row. Resolved once per source. |
-| `data_source` | Where the trace originally lived (preferred spelling). |
+| `raw_source_path` | Legacy alias of `data_source`. Resolved once per source. |
+| `data_source` | Where the trace originally lived, as the SOURCE reports it (preferred spelling). Lands in `source_file.reported_data_source` — and only for `tier: secondary`: on a `tier: primary` preset the pipeline ignores it and warns, since `input_file_path` is already the verified location. |
 | `input_record_id` | `observation.input_record_id` — a human locator back to the source record; defaults to `<table-or-sheet>#<ordinal>` when unmapped. |
 | `source_label` | `observation.source_label` — one per-claim provenance label. |
 | `source_tier` | Accepted and validated against `SourceTier`; the header `tier` is the usual place to state the tier. |
@@ -413,17 +413,22 @@ source_label: format("{field(FirstName)} {field(LastName)} from {field(City)}")
 
 ## 9. `links`
 
-The observation's three edges, grouped, as bare enum tokens:
+The observation's three stored links (decision 55), grouped, as bare enum tokens:
 
 ```yaml
 links:
-  spatial:  at                 # -> entity_link
-  entity:   self        # -> occupancy
-  temporal: once            # -> occupancy
+  entity:   subject        # -> entity_link   (role; decides the bearer)
+  spatial:  measured       # -> spatial_link  (how the position is used)
+  temporal: at_least_once  # -> temporal_link (how the interval is referenced; the only negation)
 ```
 
 Each key is optional; each value is validated against its controlled vocabulary at load
-time (§14). Only these three keys are accepted; any other raises. For a value that must
+time (§14). Only these three keys are accepted; any other raises. `entity: subject` makes the
+targeted entity its own bearer; `party` writes the mapped `bearer_*` fields as a second
+entity (a typed one when no identifier is mapped); `unknown` writes no bearer, whatever is
+mapped. A template with no position carries no `spatial` link — ingest drops one with a
+warning. On an `instant`, `throughout` is written `at_least_once` and `not_throughout`
+`never`. For a value that must
 come from a conditional or a reference, map the full column name (`entity_link`,
 …) in `common:` or `position:` instead.
 
@@ -543,7 +548,7 @@ was stated in. An unreadable or negative span costs the end bound only: the row 
 start, and nothing is invented.
 
 The flat CSV projects the verbatim span in `time_upper_raw` (the column coalesces the `upper`
-and `duration` parts), with the derived end in `time_upper_unix_utc_us` / `time_upper_datetime_iso`.
+and `duration` parts), with the derived end in `time_upper_unix_utc_us`.
 
 ### 11.2 `zone` — offsets and named zones
 
@@ -571,13 +576,14 @@ back to assuming UTC.
   `temporal_referential`) is parsed as an **override** and applies to the bounds.
 - **With neither `epoch` nor `format`**, the value is assumed to already be **Unix
   microseconds**.
-- **With no `zone`**, the tool assumes **UTC** and marks the assumption loudly with a
-  trailing ` N/A` on the materialised datetime (the `UTC_OFFSET_UNKNOWN` sentinel), so an
-  examiner sees it was assumed, not stated.
+- **With no `zone`**, the tool assumes **UTC** and marks the assumption in the row's
+  `timespan_integration.method` (`assume_utc/…`), so an examiner sees per row that the
+  offset was assumed, not stated. (Before 2026-09-07 this was flagged as an ` N/A` in the
+  offset column; that column now answers a different question — see decision 47.)
 
 The verbatim bound values become `temporal_component` rows (parts `lower` / `upper`, or a
 preset-renamed part); the `zone` text is stored as each bound's `stated_offset`. The
-canonical UTC µs and the offset-tagged local ISO strings are Layer-2 projections written by
+canonical UTC µs and the offset to the case's local zone are Layer-2 projections written by
 the integration method, not by the preset.
 
 ## 12. Spatial datum rule
@@ -624,8 +630,8 @@ Three columns, three jobs:
 
 The `const` value of a controlled-vocabulary field (or a conditional's `const` result) must
 be a legal member. **Validated at load time** (`_ENUM_FIELDS` in `spec.py`):
-`entity_link`, `occupancy`, `occupancy`, `source_tier`,
-`deleted` (and the header `tier`). The other vocabularies below are typed columns whose
+`entity_link`, `spatial_link`, `temporal_link`, `position_type`, `source_tier`,
+`recovery_state`, `recovery_source` (and the header `tier`). The other vocabularies below are typed columns whose
 value is checked by the run-DB CHECK at write time — an illegal token flows as text and is
 rejected **loudly** there (there is no silent drop). `entity_type`, `identifier_type`,
 `spatial_referential` is a free-text column: an
@@ -635,10 +641,9 @@ The members (from `core/vocabularies.py`):
 
 | Vocabulary | Field(s) | Members |
 | --- | --- | --- |
-| `EntityPositionLink` | `spatial` / `entity_link` | `at`, `within_range_of`, `at_fixed_detector`, `references`, `claimed_at`, `inferred`, `unknown` |
-| `EntityTimeLink` | `entity_time` / `occupancy` | `observed_at`, `event_at`, `recorded_at`, `reported_for`, `intended_for`, `never_during_interval`, `unknown` |
-| `SpatialTemporalLink` | `spatial_temporal` / `occupancy` | `instant`, `continuous_during_interval`, `once_during_interval`, `sporadic_during_interval`, `never_during_interval`, `unknown_during_interval` |
-| `EntityRole` | `activity_role` | `subject`, `caller`, `callee`, `sender`, `recipient`, `reporter`, `owner`, `unknown` |
+| `EntityLink` | `entity` / `entity_link` | `subject`, `party`, `mentioned`, `unknown` |
+| `SpatialLink` | `spatial` / `spatial_link` | `measured`, `registered`, `served`, `seen`, `used`, `stayed`, `located`, `searched`, `shared`, `cached`, `unknown` (open list) |
+| `TemporalLink` | `temporal` / `temporal_link` | `throughout`, `at_least_once`, `never`, `not_throughout`, `unknown` |
 | `IdentifierType` | `identifier_type` | `msisdn`, `imei`, `imsi`, `email`, `plate`, `account`, `mac`, `ip`, `cell`, `camera`, `case_ref`, `other`, `none` (recognised kinds; the column is free text) |
 | `EntityType` | `entity_type` | `device`, `person`, `vehicle`, `account`, `camera`, `antenna`, `case`, `label`, `event`, `poi`, `unknown` |
 | `SpatialReferential` | `spatial_referential` | `epsg:4326`, `geohash`, `mgrs`, `address`, `place_name`, `cell_ref`, `asset_ref`, `region`, `unknown` |

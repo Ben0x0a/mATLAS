@@ -21,6 +21,7 @@ import pytest
 
 from model_atlas.core import ids
 from model_atlas.core import vocabularies as V
+from model_atlas.core.local_time import render_local
 from model_atlas.core.store import RunStore
 from model_atlas.integrate.temporal import (
     AssumeUtcMethod,
@@ -59,14 +60,14 @@ def _bundle(store: RunStore, key: str, kind: str, referential: str,
     ``components`` rows are (part, stated_offset, raw_value); ids derive from
     ``core.ids`` exactly as the assembler's do, so the integration FK matches.
     """
-    expression_id = ids.temporal_expression_id((f"record-{key}", key, 0))
+    expression_id = ids.new_id()
     expression = V.TemporalExpression(
         temporal_expression_id=expression_id, kind=kind, referential=referential)
     store.write_temporal_expression(expression)
     rows = []
     for ordinal, (part, stated_offset, raw_value) in enumerate(components):
         component = V.TemporalComponent(
-            temporal_component_id=ids.temporal_component_id(expression_id, ordinal),
+            temporal_component_id=ids.new_id(),
             temporal_expression_id=expression_id,
             ordinal=ordinal,
             part=part,
@@ -101,16 +102,17 @@ def test_dst_boundary_interval_gets_dual_per_bound_offsets(store) -> None:
         ("lower", "UTC+01:00[DST]", "25.10.2025 13:00:00.000"),
         ("upper", "UTC+01:00[DST]", "26.10.2025 13:00:00.000"),
     ])
-    integrate_expression(store, bundle, [method])
+    integrate_expression(store, bundle, [method], local_zone="Europe/Paris")
     row = _row(store, bundle)
-    assert float(row["utc_offset_hours_lower"]) == 2.0     # summer, applied
-    assert float(row["utc_offset_hours_upper"]) == 1.0     # winter, applied
-    # The L1 stated offset is untouched — one token, two different applied values.
-    assert bundle.components[0].stated_offset == "UTC+01:00[DST]"
+    # The decode resolved DST per bound: 13:00 local is 11:00Z in summer, 12:00Z in winter.
     assert row["lower_unix_utc_us"] == _us(2025, 10, 25, 11, 0, 0)   # 13:00 +2
     assert row["upper_unix_utc_us"] == _us(2025, 10, 26, 12, 0, 0)   # 13:00 +1
-    assert row["lower_datetime_iso"] == "2025-10-25T13:00:00.000000+02:00"
-    assert row["upper_datetime_iso"] == "2025-10-26T13:00:00.000000+01:00"
+    # And the offset the analyst adds to read each bound locally is ALSO per bound, for the
+    # same transition — +2 on the summer side, +1 on the winter side.
+    assert float(row["offset_to_local_hours_lower"]) == 2.0
+    assert float(row["offset_to_local_hours_upper"]) == 1.0
+    # The L1 stated offset is untouched — one token, two different resolutions.
+    assert bundle.components[0].stated_offset == "UTC+01:00[DST]"
 
 
 def test_winter_and_summer_wall_clocks_resolve_different_utc(store) -> None:
@@ -137,7 +139,8 @@ def test_stated_fixed_offset_is_applied_season_blind(store) -> None:
                      [("lower", "UTC+01:00", "06.07.2025 13:00:00.000")])
     integrate_expression(store, bundle, [method])
     row = _row(store, bundle)
-    assert float(row["utc_offset_hours_lower"]) == 1.0
+    # 13:00 with a fixed +01:00 is 12:00Z even in July: the instant IS the assertion, since
+    # the offset the source declared is no longer echoed into a column of its own.
     assert row["lower_unix_utc_us"] == _us(2025, 7, 6, 12, 0, 0)
 
 
@@ -153,12 +156,10 @@ def test_source_named_zone_resolves_dst_without_any_configured_zone(store) -> No
     ])
     integrate_expression(store, bundle, [method])
     row = _row(store, bundle)
-    assert float(row["utc_offset_hours_lower"]) == 1.0      # CET
-    assert float(row["utc_offset_hours_upper"]) == 2.0      # CEST
-    assert row["lower_unix_utc_us"] == _us(2026, 1, 15, 12, 0, 0)
-    assert row["upper_unix_utc_us"] == _us(2026, 7, 15, 11, 0, 0)
-    # Nothing was ASSUMED, so no trailing N/A and the tzdb reference is on the method.
-    assert row["lower_datetime_iso"] == "2026-01-15T13:00:00.000000+01:00"
+    assert row["lower_unix_utc_us"] == _us(2026, 1, 15, 12, 0, 0)   # CET, +1
+    assert row["upper_unix_utc_us"] == _us(2026, 7, 15, 11, 0, 0)   # CEST, +2
+    # Nothing was ASSUMED: the method names tz_localize and carries the tzdb reference,
+    # which is where "how this instant was reached" lives now.
     assert "tzdb=" in row["method"] and row["method"].startswith("tz_localize/")
 
 
@@ -170,7 +171,8 @@ def test_source_named_zone_outranks_the_configured_zone(store) -> None:
                      [("lower", "Europe/Zurich", "2026-01-15 13:00:00")])
     integrate_expression(store, bundle, [method])
     row = _row(store, bundle)
-    assert float(row["utc_offset_hours_lower"]) == 1.0      # Zurich, not New York (-5)
+    # 13:00 read as Zurich (+1) is 12:00Z; read as New York (-5) it would be 18:00Z.
+    assert row["lower_unix_utc_us"] == _us(2026, 1, 15, 12, 0, 0)
 
 
 @pytest.mark.parametrize("unit, raw, seconds", [
@@ -196,8 +198,9 @@ def test_start_plus_duration_derives_the_upper_bound(store, unit, raw, seconds) 
     assert row["upper_unix_utc_us"] - row["lower_unix_utc_us"] == seconds * 1_000_000
     # The composite stamp names the decode that produced the start, THEN the derivation.
     assert row["method"] == f"{inner.method}+start_plus_duration/1.0"
-    assert row["timespan_integration_id"] == ids.timespan_integration_id(
-        bundle.expression.temporal_expression_id, row["method"])
+    # The id is random (decision 50); what must hold is that ONE row was written for the
+    # expression, which _row already asserts by fetching exactly one.
+    assert row["timespan_integration_id"]
 
 
 def test_start_plus_duration_keeps_the_derived_end_in_the_starts_offset(store) -> None:
@@ -213,7 +216,6 @@ def test_start_plus_duration_keeps_the_derived_end_in_the_starts_offset(store) -
     integrate_expression(store, bundle, [StartPlusDurationMethod(inner, "s")])
     row = _row(store, bundle)
     assert row["upper_unix_utc_us"] - row["lower_unix_utc_us"] == 7200 * 1_000_000
-    assert float(row["utc_offset_hours_upper"]) == 1.0      # the start's applied offset
 
 
 def test_unreadable_duration_leaves_the_start_alone(store) -> None:
@@ -250,53 +252,53 @@ def test_value_borne_offset_is_honoured_as_parsed(store) -> None:
                      [("lower", None, "2025-06-06T13:00:00+02:00")])
     integrate_expression(store, bundle, [TzLocaliseMethod()])
     row = _row(store, bundle)
-    assert float(row["utc_offset_hours_lower"]) == 2.0
-    assert row["lower_unix_utc_us"] == _us(2025, 6, 6, 11, 0, 0)
-    assert row["lower_datetime_iso"] == "2025-06-06T13:00:00.000000+02:00"
+    assert row["lower_unix_utc_us"] == _us(2025, 6, 6, 11, 0, 0)   # 13:00 +02:00
 
 
-# --- Verify bullet 2: assumed-UTC -> loud N/A ---------------------------------
+# --- Verify bullet 2: the assumption is stamped in the method ------------------
 
-def test_assumed_utc_flags_offset_and_iso_loudly(store) -> None:
+def test_assumed_utc_is_stamped_in_the_method_not_an_offset_cell(store) -> None:
+    """A naive clock with no zone knowledge is materialised by ASSUMING UTC, and that
+    assumption must stay visible. It now lives in ``method`` — per row, auditable, and
+    unlike the old `` N/A`` offset it cannot be confused with the analyst's local offset."""
     bundle = _bundle(store, "naive", "instant", "iso8601",
                      [("lower", None, "2026-03-14T02:20:31")])
-    integrate_expression(store, bundle, [AssumeUtcMethod()])
+    integrate_expression(store, bundle, [AssumeUtcMethod()], local_zone="Europe/Paris")
     row = _row(store, bundle)
-    assert row["utc_offset_hours_lower"] == V.UTC_OFFSET_UNKNOWN   # the sentinel, not 0.0
-    assert row["utc_offset_hours_upper"] == V.UTC_OFFSET_UNKNOWN   # instant mirrors
-    assert row["lower_datetime_iso"] == "2026-03-14T02:20:31.000000 N/A"
-    assert row["lower_datetime_iso"].endswith(" N/A")
-    assert row["lower_unix_utc_us"] == _us(2026, 3, 14, 2, 20, 31)
     assert row["method"] == "assume_utc/1.0"
+    assert row["lower_unix_utc_us"] == _us(2026, 3, 14, 2, 20, 31)
+    # The offset to local is about the CASE's zone and is unaffected by the assumption:
+    # +1 in March, exactly as for a row whose zone was known. The two facts are separate.
+    assert float(row["offset_to_local_hours_lower"]) == 1.0
+    assert float(row["offset_to_local_hours_upper"]) == 1.0
 
 
-def test_assumed_na_is_distinct_from_empty(store) -> None:
-    # D32: empty = no value; ` N/A` = value with unknown zone. The two must never
-    # collapse — an assumed instant has FULL cells, an absent bound has EMPTY ones.
-    assumed = _bundle(store, "na-vs-empty", "instant", "local_string",
-                      [("lower", None, "14.03.2026 02:20:31")])
-    integrate_expression(
-        store, assumed, [AssumeUtcMethod(datetime_format="%d.%m.%Y %H:%M:%S")])
-    row = _row(store, assumed)
-    assert row["lower_datetime_iso"].endswith(" N/A") and row["lower_datetime_iso"] != ""
-    assert row["lower_date"] is not None and row["lower_time"] is not None
+def test_no_configured_zone_yields_the_sentinel_not_a_silent_zero(store) -> None:
+    """With no ``local_zone`` the run cannot say what local means, and must say so: the
+    loud ``N/A``, never 0.0 — which would claim the case IS on UTC."""
+    bundle = _bundle(store, "no-zone", "instant", "iso8601",
+                     [("lower", None, "2026-03-14T02:20:31+01:00")])
+    integrate_expression(store, bundle, [TzLocaliseMethod()])     # local_zone omitted
+    row = _row(store, bundle)
+    assert row["offset_to_local_hours_lower"] == V.LOCAL_OFFSET_UNKNOWN
+    assert row["offset_to_local_hours_upper"] == V.LOCAL_OFFSET_UNKNOWN
+    assert row["lower_unix_utc_us"] is not None    # the instant is still known exactly
 
 
 # --- Verify bullet 3: an absent bound -> empty cells --------------------------
 
 def test_absent_upper_bound_yields_empty_cells(store) -> None:
-    # An interval whose upper never existed: the upper cells are EMPTY (empty ISO
-    # string, NULL date/time/unix/offset) — not N/A, and nothing invented.
+    # An interval whose upper never existed: the upper cells are NULL, and — with a zone
+    # configured, so the sentinel is NOT in play — that NULL means "no bound", never
+    # "no zone". The two absences must not collapse.
     bundle = _bundle(store, "open", "interval", "unix_epoch_s",
                      [("lower", None, "1773450680")])
-    integrate_expression(store, bundle, epoch_methods())
+    integrate_expression(store, bundle, epoch_methods(), local_zone="Europe/Paris")
     row = _row(store, bundle)
     assert row["lower_unix_utc_us"] == 1_773_450_680_000_000
     assert row["upper_unix_utc_us"] is None
-    assert row["upper_datetime_iso"] == ""          # empty, NOT " N/A"
-    assert row["upper_date"] is None
-    assert row["upper_time"] is None
-    assert row["utc_offset_hours_upper"] is None
+    assert float(row["offset_to_local_hours_lower"]) == 1.0
+    assert row["offset_to_local_hours_upper"] is None   # NULL, NOT the "N/A" sentinel
 
 
 def test_time_only_split_bound_yields_empty_cells(store) -> None:
@@ -307,12 +309,11 @@ def test_time_only_split_bound_yields_empty_cells(store) -> None:
         ("lower_time", None, "02:20:31"),
         ("upper_time", None, "03:00:00"),           # no upper_date -> no upper instant
     ])
-    integrate_expression(store, bundle, [DatetimeCombineMethod()])
+    integrate_expression(store, bundle, [DatetimeCombineMethod()], local_zone="Europe/Paris")
     row = _row(store, bundle)
     assert row["lower_unix_utc_us"] == _us(2026, 3, 14, 2, 20, 31)
     assert row["upper_unix_utc_us"] is None
-    assert row["upper_datetime_iso"] == ""
-    assert row["upper_date"] is None and row["upper_time"] is None
+    assert row["offset_to_local_hours_upper"] is None
 
 
 # --- Verify bullet 4: the epoch constants live in the method string -----------
@@ -324,9 +325,6 @@ def test_apple_cfabsolute_decodes_with_constant_in_method(store) -> None:
     row = _row(store, bundle)
     assert row["lower_unix_utc_us"] == 978_307_200_000_000   # 2001-01-01T00:00:00Z
     assert row["method"] == "epoch_cfabsolute/1.0/offset_s=978307200"
-    # An epoch is absolute UTC: nothing assumed, offset not applicable, exact UTC ISO.
-    assert row["utc_offset_hours_lower"] is None
-    assert row["lower_datetime_iso"] == "2001-01-01T00:00:00.000000+00:00"
 
 
 def test_webkit_decodes_with_constant_in_method(store) -> None:
@@ -358,8 +356,6 @@ def test_excel_serial_decodes_as_assumed_clock_with_epoch_in_method(store) -> No
     row = _row(store, bundle)
     assert row["lower_unix_utc_us"] == _US_PER_DAY // 2      # 1970-01-01 12:00 assumed
     assert row["method"] == "epoch_excel_serial/1.0/epoch=1899-12-30"
-    assert row["utc_offset_hours_lower"] == V.UTC_OFFSET_UNKNOWN
-    assert row["lower_datetime_iso"].endswith(" N/A")
 
 
 def test_unix_scale_decodes_and_leaves_accuracy_unset(store) -> None:
@@ -389,9 +385,8 @@ def test_datetime_combine_without_zone_assumes_utc(store) -> None:
     integrate_expression(store, bundle, [DatetimeCombineMethod()])
     row = _row(store, bundle)
     assert row["lower_unix_utc_us"] == _us(2026, 3, 14, 2, 20, 31)
+    # The assumption is named in the method — the only place it lives now.
     assert row["method"] == "datetime_combine/1.0+assume_utc/1.0"
-    assert row["utc_offset_hours_lower"] == V.UTC_OFFSET_UNKNOWN
-    assert row["lower_datetime_iso"].endswith(" N/A")
 
 
 def test_datetime_combine_with_zone_localises_and_stamps_tzdb(store) -> None:
@@ -401,9 +396,7 @@ def test_datetime_combine_with_zone_localises_and_stamps_tzdb(store) -> None:
     ])
     integrate_expression(store, bundle, [DatetimeCombineMethod(zone="Europe/Paris")])
     row = _row(store, bundle)
-    assert float(row["utc_offset_hours_lower"]) == 1.0        # March: Paris winter
-    assert row["lower_unix_utc_us"] == _us(2026, 3, 14, 1, 20, 31)
-    assert row["lower_datetime_iso"] == "2026-03-14T02:20:31.000000+01:00"
+    assert row["lower_unix_utc_us"] == _us(2026, 3, 14, 1, 20, 31)   # 02:20:31 Paris, +1
     assert row["method"].startswith("datetime_combine/1.0+tz_localize/1.0/tzdb=")
 
 
@@ -417,8 +410,7 @@ def test_instant_collapse_is_symmetric_when_only_the_upper_decodes(store) -> Non
     row = _row(store, bundle)
     assert row["upper_unix_utc_us"] == 1_773_450_680_000_000
     assert row["lower_unix_utc_us"] == row["upper_unix_utc_us"]      # collapsed downward
-    assert row["lower_datetime_iso"] == row["upper_datetime_iso"]
-    assert row["utc_offset_hours_lower"] == row["utc_offset_hours_upper"]
+    assert row["offset_to_local_hours_lower"] == row["offset_to_local_hours_upper"]
 
 
 def test_datetime_combine_honours_an_inline_time_offset_and_stamps_tz(store) -> None:
@@ -432,8 +424,6 @@ def test_datetime_combine_honours_an_inline_time_offset_and_stamps_tz(store) -> 
     integrate_expression(store, bundle, [DatetimeCombineMethod()])
     row = _row(store, bundle)
     assert row["lower_unix_utc_us"] == _us(2026, 3, 14, 1, 20, 31)   # 02:20:31 +1
-    assert float(row["utc_offset_hours_lower"]) == 1.0
-    assert row["lower_datetime_iso"] == "2026-03-14T02:20:31.000000+01:00"
     assert row["method"].startswith("datetime_combine/1.0+tz_localize/1.0/tzdb=")
     assert "assume_utc" not in row["method"]
 
@@ -449,7 +439,6 @@ def test_zoneless_format_borne_offset_is_stamped_tz_localize_not_assume_utc(stor
     assert written is not None
     assert written.method.startswith("tz_localize/")     # not assume_utc
     row = _row(store, bundle)
-    assert float(row["utc_offset_hours_lower"]) == 1.0
     assert row["lower_unix_utc_us"] == _us(2026, 3, 14, 1, 20, 31)
 
 
@@ -532,16 +521,23 @@ def test_source_stated_accuracy_overrides_the_method_level_claim(store) -> None:
 
 # --- D32 cells + identity + dispatch --------------------------------------------
 
-def test_local_date_and_time_cells_derive_from_the_applied_offset(store) -> None:
-    # Local 01:30+01:00 is 00:30 UTC on the 14th: the date cell is the LOCAL
-    # calendar day and the time cell the µs past LOCAL midnight (never the UTC ones).
+def test_the_stored_pair_reconstructs_the_local_reading(store) -> None:
+    """The two stored columns are sufficient: canonical UTC µs + the offset to local
+    render back to the analyst's wall clock, which is why no rendered column is stored.
+
+    The case here is the one that used to need a stored cell to get right — an instant
+    just after LOCAL midnight but still on the PREVIOUS day in UTC. 2026-03-14 00:30
+    Paris is 2026-03-13 23:30Z: a reader who ignored the offset would file it under the
+    wrong calendar day."""
     bundle = _bundle(store, "cells", "instant", "iso8601",
-                     [("lower", None, "2026-03-14T01:30:00+01:00")])
-    integrate_expression(store, bundle, [TzLocaliseMethod()])
+                     [("lower", None, "2026-03-13T23:30:00+00:00")])
+    integrate_expression(store, bundle, [TzLocaliseMethod()], local_zone="Europe/Paris")
     row = _row(store, bundle)
-    assert row["lower_date"] == _us(2026, 3, 14, 0, 0, 0)
-    assert row["lower_time"] == 90 * 60 * 1_000_000            # 01:30 local
-    assert row["lower_datetime_iso"] == "2026-03-14T01:30:00.000000+01:00"
+    assert row["lower_unix_utc_us"] == _us(2026, 3, 13, 23, 30, 0)   # the 13th, in UTC
+    assert float(row["offset_to_local_hours_lower"]) == 1.0
+    assert render_local(row["lower_unix_utc_us"],
+                        float(row["offset_to_local_hours_lower"])) == (
+        "2026-03-14T00:30:00.000000+01:00")                          # the 14th, locally
 
 
 def test_instant_mirrors_the_single_bound(store) -> None:
@@ -550,16 +546,19 @@ def test_instant_mirrors_the_single_bound(store) -> None:
     integrate_expression(store, bundle, epoch_methods())
     row = _row(store, bundle)
     assert row["upper_unix_utc_us"] == row["lower_unix_utc_us"]
-    assert row["upper_datetime_iso"] == row["lower_datetime_iso"]
 
 
-def test_integration_id_derives_from_core_ids(store) -> None:
+def test_integration_id_is_random_and_unique_per_expression(store) -> None:
+    """Ids no longer derive from anything (decision 50). The invariant that survives is
+    UNIQUE(temporal_expression_id): one integration per expression, enforced by the store,
+    not by two callers computing the same uuid5."""
     bundle = _bundle(store, "idcheck", "instant", "unix_epoch_s",
                      [("lower", None, "1773450680")])
     written = integrate_expression(store, bundle, epoch_methods())
     assert written is not None
-    assert written.timespan_integration_id == ids.timespan_integration_id(
-        bundle.expression.temporal_expression_id, written.method)
+    assert written.timespan_integration_id != written.temporal_expression_id
+    stored = _row(store, bundle)
+    assert stored["timespan_integration_id"] == written.timespan_integration_id
 
 
 def test_standard_methods_dispatch_by_referential(store) -> None:

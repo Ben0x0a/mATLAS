@@ -255,13 +255,15 @@ class SqliteReader:
             record.pop(SOURCE_ROW_NUMBER_COLNAME)
             # merge_with_source labels every row 'both' / 'db_only_unique' (live) or
             # sidecar_label (recovered) — never any other value. Each row carries its fine
-            # recovery_source (wal/journal for a sidecar row, live otherwise) through to the
-            # yield below via the private key numbered_records passes through untouched.
+            # recovery_source (wal/journal for a sidecar row, None for a live one — an
+            # in-place row was recovered from nowhere, so the column stays empty rather
+            # than echoing recovery_state) through to the yield below via the private key
+            # numbered_records passes through untouched.
             if origin == sidecar_label:
                 record[_RECOVERY_SOURCE_KEY] = sidecar_source
                 recovered.append(record)
             else:
-                record[_RECOVERY_SOURCE_KEY] = RecoverySource.LIVE
+                record[_RECOVERY_SOURCE_KEY] = None
                 live.append(record)
 
         # An ADDITIONAL recovery pass. Rows carved from the main file's unallocated

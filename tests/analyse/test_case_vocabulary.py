@@ -32,8 +32,8 @@ class _Fixture:
         store.write_case_metadata(V.CaseMetadata(case_id=case_id, case_number="T101a"))
         run_id = ids.run_id()
         store.write_run(V.Run(run_id=run_id, case_id=case_id))
-        self.source_id = ids.source_id("/case/t101a.csv", None, None)
-        store.write_source(V.Source(source_id=self.source_id, run_id=run_id,
+        self.source_file_id = ids.new_id()
+        store.write_source_file(V.SourceFile(source_file_id=self.source_file_id, run_id=run_id,
                                     input_file_path="/case/t101a.csv"))
         self.preset_key = "t101a"
         self.preset_id = ids.preset_id(self.preset_key, "1")
@@ -46,41 +46,42 @@ class _Fixture:
         """One observation; ``placed=False`` omits the spatial/temporal integration so it
         is NOT a queryable placement (the entity-with-no-integrated-point case)."""
         self.line_no += 1
-        record_id = ids.raw_record_id(self.source_id, self.line_no)
+        record_id = ids.new_id()
         self.store.write_raw_record(V.RawRecord(
-            raw_record_id=record_id, source_id=self.source_id,
+            raw_record_id=record_id, source_file_id=self.source_file_id,
             line_no=self.line_no, raw_json="{}"))
         natural_key = (record_id, 0)
-        entity_id = ids.entity_id(natural_key)
+        entity_id = ids.new_id()
         self.store.write_entity(V.Entity(
             entity_id=entity_id, identifier=identifier, raw_identifier=identifier,
             identifier_type=identifier_type, type=entity_type))
-        sx_id = ids.spatial_expression_id(natural_key)
+        sx_id = ids.new_id()
         self.store.write_spatial_expression(V.SpatialExpression(
-            spatial_expression_id=sx_id, referential="epsg:4326"))
+            spatial_expression_id=sx_id,
+        position_type=V.PositionType.COORDINATE, referential="epsg:4326"))
         for ordinal, (part, raw) in enumerate((
                 ("latitude", str(KNOWN[0])), ("longitude", str(KNOWN[1])))):
             self.store.write_spatial_component(V.SpatialComponent(
-                spatial_component_id=ids.spatial_component_id(sx_id, ordinal),
+                spatial_component_id=ids.new_id(),
                 spatial_expression_id=sx_id, ordinal=ordinal,
                 part=part, raw_value=raw))
-        tx_id = ids.temporal_expression_id(natural_key)
+        tx_id = ids.new_id()
         self.store.write_temporal_expression(V.TemporalExpression(
             temporal_expression_id=tx_id, kind="interval"))
         if placed:
             self.store.write_timespan_integration(V.TimespanIntegration(
-                timespan_integration_id=ids.timespan_integration_id(tx_id, "fixture/1.0"),
+                timespan_integration_id=ids.new_id(),
                 temporal_expression_id=tx_id, method="fixture/1.0",
                 lower_unix_utc_us=BASE_US, upper_unix_utc_us=BASE_US + 60_000_000))
-        observation_id = ids.observation_id(record_id, self.preset_key, 0)
+        observation_id = ids.new_id()
         self.store.write_observation(V.Observation(
             observation_id=observation_id, raw_record_id=record_id,
-            preset_id=self.preset_id, output_ordinal=0, entity_id=entity_id,
-            content_hash=f"ch-{self.line_no}", claim_digest=f"cd-{self.line_no}",
+            preset_id=self.preset_id, entity_id=entity_id,
+            observation_content_hash=f"ch-{self.line_no}", spatiotemporal_entity_hash=f"cd-{self.line_no}",
             spatial_expression_id=sx_id,
             temporal_expression_id=tx_id if placed else None,
-            activity_role="unknown", spatial_link="at",
-            entity_link="self", occupancy="once"))
+            spatial_link="measured", bearer_entity_id=entity_id,
+            entity_link="subject", temporal_link="at_least_once"))
         return observation_id
 
 

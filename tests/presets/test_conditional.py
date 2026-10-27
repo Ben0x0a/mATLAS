@@ -190,7 +190,7 @@ common:
   # A link field mapped by its full name (owner's decision-33 example) resolves through
   # _parse_field, so a conditional is accepted here — unlike the short `links:` block, which
   # stays bare-enum only.
-  occupancy: if field(Created) == "NA" then const(once)
+  temporal_link: if field(Created) == "NA" then const(at_least_once)
 observations:
   - position:
       latitude: field(Lat)
@@ -199,15 +199,15 @@ observations:
     time:
       instant: field(Created)
     links:
-      spatial: at
-      entity: self
+      spatial: measured
+      entity: subject
 """
 
 
 def test_conditional_enum_result_is_validated_at_load() -> None:
     # A conditional producing an invalid controlled-vocabulary value must fail at parse time,
     # exactly as a plain const would.
-    bad = _LINK_COND.replace("then const(once)", "then const(not_a_link)")
+    bad = _LINK_COND.replace("then const(at_least_once)", "then const(not_a_link)")
     with pytest.raises(ValueError):
         _preset(bad)
 

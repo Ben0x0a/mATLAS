@@ -8,12 +8,12 @@ Used by:    every concrete reader (csv_reader.py, excel_reader.py, sqlite_reader
             xml_reader.py) and registry.py (the ``format -> Reader`` map); later, the
             discover/assemble bricks consume ``RawRecord`` to build the persisted
             ``core.vocabularies.RawRecord`` table row (which adds ``raw_record_id``,
-            ``source_id`` and serialises ``fields`` into canonical-JSON ``raw_json``).
+            ``source_file_id`` and serialises ``fields`` into canonical-JSON ``raw_json``).
 Depends on: ``model_atlas.core.vocabularies`` (``RecordState`` — live vs recovered;
             ``RecoverySource`` — the fine origin) and the standard library only.
 
 WHY ``RawRecord`` is distinct from ``core.vocabularies.RawRecord``: the persisted table
-row needs a ``source_id`` (the discover brick assigns it) and a ``raw_record_id`` derived
+row needs a ``source_file_id`` (the discover brick assigns it) and a ``raw_record_id`` derived
 from it (uuid5) — neither exists yet at read time. This module's ``RawRecord`` carries
 exactly what a reader can know on its own: the ``line_no`` in normative enumeration
 order, the verbatim field values, and whether the row was live or recovered.
@@ -37,14 +37,20 @@ class RawRecord:
     SQLite types wherever float precision matters (canonical JSON rule 5) — never
     re-formatted. ``recovery_state`` defaults to LIVE; a sqlite reader overrides it to
     RECOVERED for WAL/journal/carved rows (rule 1). ``recovery_source`` is the fine
-    companion — the exact origin (live/wal/journal/freelist/freespace); non-sqlite readers
-    keep the LIVE default (their rows are always live).
+    companion — the exact origin (wal/journal/freelist/freespace) — and stays None for a
+    live or intact row, which was recovered from nowhere. Non-sqlite readers therefore
+    never set it: their rows are always live, so a populated cell always MEANS recovered.
     """
 
     line_no: int
     fields: dict[str, Any]
+    # The STORED id, set only when this record was read back out of the case (the pipeline's
+    # assemble pass). A reader that has just produced a record leaves it None: the row does
+    # not exist yet, and the writer mints the id. Evidence-chain ids are random since
+    # decision 50, so a later pass can no longer re-derive one — it must carry or query it.
+    raw_record_id: str | None = None
     recovery_state: RecordState = RecordState.LIVE
-    recovery_source: RecoverySource = RecoverySource.LIVE
+    recovery_source: RecoverySource | None = None
 
 
 @runtime_checkable

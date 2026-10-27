@@ -10,7 +10,7 @@ from model_atlas.presets.spec import preset_spec_from_yaml
 import pytest
 
 pytest.importorskip("lxml")
-from model_atlas.ingest.containers import FilesystemContainer, SourceFile
+from model_atlas.ingest.containers import FilesystemContainer, DiscoveredFile
 from tests.ingest.test_xml_reader import _REPORT
 
 _NS = "http://pa.cellebrite.com/report/2.0"
@@ -27,16 +27,16 @@ def _xml_preset(model: str, *, id_suffix: str = "", longitude=None) -> object:
         "observations": [{
             "position": position,
             "time": {"instant": "field(TimeStamp)"},
-            "links": {"entity": "self", "spatial": "at",
-                      "temporal": "once"},
+            "links": {"entity": "subject", "spatial": "measured",
+                      "temporal": "at_least_once"},
         }],
     }
     return preset_spec_from_yaml(yaml.safe_load(yaml.safe_dump(raw)), Path(f"{model}.yaml"))
 
 
-def _report_file(tmp_path: Path) -> SourceFile:
+def _report_file(tmp_path: Path) -> DiscoveredFile:
     (tmp_path / "report.xml").write_text(_REPORT, encoding="utf-8")
-    return SourceFile(containers=(FilesystemContainer(tmp_path),),
+    return DiscoveredFile(containers=(FilesystemContainer(tmp_path),),
                       logical_path=PurePosixPath("report.xml"))
 
 
@@ -47,7 +47,7 @@ def _peek(present):
 
 def test_one_report_matches_one_preset_per_model(tmp_path: Path) -> None:
     (tmp_path / "report.xml").write_text(_REPORT, encoding="utf-8")
-    file = SourceFile(containers=(FilesystemContainer(tmp_path),),
+    file = DiscoveredFile(containers=(FilesystemContainer(tmp_path),),
                       logical_path=PurePosixPath("report.xml"))
     presets = [_xml_preset("Location"), _xml_preset("Call")]
 
@@ -59,7 +59,7 @@ def test_one_report_matches_one_preset_per_model(tmp_path: Path) -> None:
 
 def test_namespace_mismatch_excludes_preset(tmp_path: Path) -> None:
     (tmp_path / "report.xml").write_text(_REPORT, encoding="utf-8")
-    file = SourceFile(containers=(FilesystemContainer(tmp_path),),
+    file = DiscoveredFile(containers=(FilesystemContainer(tmp_path),),
                       logical_path=PurePosixPath("report.xml"))
     location = _xml_preset("Location")
     raw = {
@@ -69,8 +69,8 @@ def test_namespace_mismatch_excludes_preset(tmp_path: Path) -> None:
         "observations": location.observations and [{
             "position": {"latitude": "field(Position.Latitude)"},
             "time": {"instant": "field(TimeStamp)"},
-            "links": {"entity": "self", "spatial": "at",
-                      "temporal": "once"},
+            "links": {"entity": "subject", "spatial": "measured",
+                      "temporal": "at_least_once"},
         }],
     }
     axiom = preset_spec_from_yaml(yaml.safe_load(yaml.safe_dump(raw)), Path("axiom.yaml"))

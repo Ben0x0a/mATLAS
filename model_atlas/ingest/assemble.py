@@ -1,12 +1,11 @@
 """The L1 writer: records × one matched preset → observations / expressions / components.
 
 Defines:    ``assemble_source`` (the fan-out engine: one reader record × one matched
-            preset → activity(+link), entity, spatial/temporal expressions with their
+            preset → entity, spatial/temporal expressions with their
             verbatim component rows, and the observation tying them together, written into
             a ``core.store.RunStore``), ``AssembleReport`` (its testable summary, carrying
-            the source-grain ``data_source`` for the caller), and the
-            EXTENDED preset field vocabulary (``activity_role``, ``identifier_type``,
-            ``activity_kind``, ``context.<key>``, ``multiplicity``, the two referentials,
+            the source-grain ``reported_data_source`` for the caller), and the
+            EXTENDED preset field vocabulary (``identifier_type``, the two referentials,
             the per-bound temporal role/part names, ``data_source``) that maps the new
             L1 columns the old flat model never had.
 Used by:    the app-layer pipeline (``model_atlas.app.pipeline``) and
@@ -51,12 +50,14 @@ The old→new field mapping (cross-check table of run_db_schema.md)
 - ``deleted``           → ``observation.deleted`` (the app's OWN flag, distinct from
   ``raw_record.recovery_state``).
 - ``source_label``      → ``observation.source_label`` (the one per-claim provenance field).
-- ``raw_source_path``   → the source-grain ``data_source``: assemble never
+- ``raw_source_path``   → the source-grain ``reported_data_source``: assemble never
   emits it per observation — it resolves the value once (first record) and RETURNS it on
-  the report so the L0 owner can set it on the ``source`` row. ``data_source`` is the
+  the report so the L0 owner can set it on the ``source`` row (which DROPS it for a
+  primary acquisition — see pipeline). ``data_source`` is the
   preferred new spelling; ``raw_source_path`` is accepted as its legacy alias.
-- the three ``links``   → the three corner link columns, joined by ``activity_role``
-  and the statement-level ``attestation``.
+- the three ``links``   → ``entity_link`` / ``spatial_link`` / ``temporal_link``; the
+  entity link also decides the bearer (decision 55), and on an instant the temporal link is
+  written in its one canonical form.
 - spatial part fields (``raw_position``, ``latitude``, ``longitude``, … ) → one
   ``spatial_component`` row each, VERBATIM ``raw_value`` + the resolved ``source_field``.
 - the time bounds       → ``temporal_component`` rows (parts ``lower``/``upper``, or a
@@ -68,9 +69,7 @@ Extended vocabulary — new L1 columns the old flat model never had. These are o
 ``FieldSpec`` targets resolved through the same machinery (so conditionals
 and templates apply to them for free); the v3 YAML loader ADMITS them all (its
 ``ASSIGNABLE_FIELDS`` gate in ``presets/spec.py`` lists each), so a real YAML preset can map:
-``activity_role``, ``identifier_type``, ``activity_kind`` (its presence in ``common:``
-creates the record's activity), ``context.<key>`` (gathered into
-``activity.context_json``), ``multiplicity``, ``spatial_referential`` /
+``identifier_type``, ``spatial_referential`` /
 ``temporal_referential`` (explicit override of the derivations below), and
 ``temporal_part_lower`` /
 ``temporal_part_upper`` (each bound carries its own role/part).
@@ -81,7 +80,7 @@ Component ``raw_value``s and the entity's ``raw_identifier`` are resolved VERBAT
 conditionals choose a source value and ``extract`` selects source text (still verbatim
 characters), but the pipe / unit / cast tail is deliberately NOT applied — every
 conversion is Layer-2's job, method-stamped. Scalar observation columns
-(links, roles, ``deleted``, activity kind, context values…) resolve through the FULL
+(links, recovery values…) resolve through the FULL
 old tail because a lookup pipe there maps tokens, it does not convert measurements.
 
 No integration is written here (that is Layer 2's job) and nothing is invented: a field
@@ -122,14 +121,11 @@ from model_atlas.presets.resolve import (
 # One constant per NEW L1 mapping target; suffixed _NAME because each is a field-name
 # identifier, not a value. The old names they join are read straight from the resolved
 # holder by their historic spelling (entity, entity_type, concerns, position_type,
-# position_source, temporal_source, deleted, source_label, the three link columns).
+# position_source, temporal_source, source_label, the three link columns).
 
-ACTIVITY_ROLE_NAME = "activity_role"
 IDENTIFIER_TYPE_NAME = "identifier_type"
-ACTIVITY_KIND_NAME = "activity_kind"
-CONTEXT_PREFIX_NAME = "context."           # context.<key> → activity.context_json[<key>]
-MULTIPLICITY_NAME = "multiplicity"
 SPATIAL_REFERENTIAL_NAME = "spatial_referential"
+POSITION_TYPE_NAME = "position_type"
 TEMPORAL_REFERENTIAL_NAME = "temporal_referential"
 TEMPORAL_PART_LOWER_NAME = "temporal_part_lower"
 TEMPORAL_PART_UPPER_NAME = "temporal_part_upper"
@@ -147,10 +143,6 @@ TIME_ACCURACY_US_UPPER_NAME = "time_accuracy_us_upper"
 _LOWER_SIDE_NAME = "lower"
 _UPPER_SIDE_NAME = "upper"
 _ACCURACY_PART_SUFFIX = "_accuracy"
-# The entity-id role tags. They are the LAST part of an entity row's natural key, so the
-# targeted row and the bearer row of one observation derive different uuid5 ids.
-_TARGETED_ROLE = "targeted"
-_BEARER_ROLE = "bearer"
 DATA_SOURCE_NAME = "data_source"           # source grain, via the report
 RAW_SOURCE_PATH_NAME = "raw_source_path"   # legacy alias of data_source
 
@@ -160,18 +152,17 @@ _ENTITY_TYPE_NAME = "entity_type"
 _CONCERNS_NAME = "concerns"
 _SPATIAL_SOURCE_NAME = "position_source"
 _TEMPORAL_SOURCE_NAME = "temporal_source"
-_DELETED_NAME = "deleted"
+_RECOVERY_STATE_NAME = "recovery_state"
+_RECOVERY_SOURCE_NAME = "recovery_source"
 _SOURCE_LABEL_NAME = "source_label"
 _INPUT_RECORD_ID_NAME = "input_record_id"
-# The three corner links + the statement-level attestation, and the record's own clock.
+# The three stored links, one per arm of the observation (decision 55).
 _ENTITY_LINK_NAME = "entity_link"
 _SPATIAL_LINK_NAME = "spatial_link"
-_OCCUPANCY_NAME = "occupancy"
-_ATTESTATION_NAME = "attestation"
-_RECORDED_AT_NAME = "recorded_at"
-# The position BEARER's own mention fields — the entity whose position the spatial corner
-# states (a CDR's antenna, an ANPR's camera). Written as a SECOND entity row, and only when
-# the entity link needs one (i.e. is not `self`).
+_TEMPORAL_LINK_NAME = "temporal_link"
+# The position BEARER's own mention fields — the entity whose position the spatial arm
+# states (a CDR's antenna, an ANPR's camera). Written as a SECOND entity row for `party`, and
+# for `mentioned` when the preset maps one (see _bearer_for).
 _BEARER_ENTITY_NAME = "bearer_entity"
 _BEARER_ENTITY_TYPE_NAME = "bearer_entity_type"
 _BEARER_IDENTIFIER_TYPE_NAME = "bearer_identifier_type"
@@ -205,11 +196,10 @@ class _ParamEnv:
 @dataclass
 class AssembleReport:
     """The counts one ``assemble_source`` call produced, plus the source-grain values it
-    resolved but does NOT write itself (``data_source`` belongs on the
+    resolved but does NOT write itself (``reported_data_source`` belongs on the
     ``source`` row, which the L0 writer owns — assemble only reports it)."""
 
     observation_count: int = 0
-    activity_count: int = 0
     data_source: str | None = None
     # mutable default — a shared [] across instances would be a latent aliasing bug.
     warnings: list[str] = field(default_factory=list)
@@ -337,41 +327,28 @@ def assemble_source(
     preset: PresetSpec,
     store: RunStore,
     *,
-    source_id: str,
+    source_file_id: str,
     fingerprint_sha256: str | None,
     source_file_name: str | None = None,
     source_file_path: str | None = None,
     selector: InputSelector | None = None,
     entity: str | None = None,
     concerns: str | None = None,
-    activity_ordinals: dict[str, int] | None = None,
 ) -> AssembleReport:
     """Assemble one already-L0-written source's records under ONE matched preset.
 
     The caller (the L0 writer / future pipeline) has already written the ``source`` and
     its ``raw_record`` rows plus the ``preset`` row; this function derives
     ``raw_record_id`` / ``preset_id`` from the same natural keys (``core.ids``) and
-    writes only Layer 1, in parent-before-child order (activity+link → entity + expressions +
+    writes only Layer 1, in parent-before-child order (entity + expressions +
     components → the observation referencing them). ``PRAGMA foreign_keys = ON`` makes a
     missing parent raise immediately, so the layering is enforced, not assumed.
 
     ``entity`` / ``concerns`` are the run-level operator params (they OVERRIDE the
     preset mapping and set the ``*_origin`` columns to ``operator_param``); either
     may itself be a call-form reference (``field(...)``) resolved per row.
-
-    ``activity_ordinals`` is the per-run ``raw_record_id → next activity ordinal``
-    registry. WHY it is caller-shared: ``activity_id`` derives from the record and an
-    ordinal (id scheme — the preset is deliberately absent so the id is record-scoped),
-    so when SEVERAL presets each map an activity onto one record the ordinals must
-    continue across the assemble calls; the caller passes one dict for the whole run
-    (preset application order is pinned by the operator's list, so the ids stay
-    deterministic). Omitting it (one preset per source) uses a fresh private registry.
     """
     report = AssembleReport()
-    if not records:
-        return report
-    if activity_ordinals is None:
-        activity_ordinals = {}
 
     # Seed the resolver from the UNION of field names across ALL records, not record[0]
     # alone. WHY: a heterogeneous JSON/JSONL source can introduce a column only in a LATER
@@ -388,6 +365,20 @@ def assemble_source(
                 source_fields.append(name)
     resolve = make_resolver(source_fields)
     ctx = PipeContext(lookup_tables=preset.lookup_tables, patterns=preset.patterns)
+
+    # Surface a preset that maps a recovery field on a PRIMARY source ONCE per source, not
+    # once per record: on a 40k-row artefact the per-record form would bury every other
+    # warning. _recovery_for ignores the mapping; this is what tells the operator it did.
+    if preset.source_tier == V.SourceTier.PRIMARY.value:
+        overruled = sorted(
+            {field.model_field
+             for template in preset.observations for field in template.fields
+             if field.model_field in (_RECOVERY_STATE_NAME, _RECOVERY_SOURCE_NAME)})
+        if overruled:
+            report.warnings.append(
+                f"preset {preset.meta.id} maps {', '.join(overruled)} on a PRIMARY source; "
+                f"ignored — on a primary acquisition the recovery state is OUR parsing "
+                f"result, not a value a preset may state")
     preset_values = _preset_values(preset, selector)
     preset_key = preset.meta.id
     # The preset row's id — derived, never invented: uuid5(key ⟂ version), the same
@@ -405,8 +396,8 @@ def assemble_source(
     entity_expr = parse_param_expr(entity)
     concerns_expr = parse_param_expr(concerns)
 
-    # entity_origin / concerns_origin: who specified the value.
-    entity_origin = V.Origin.OPERATOR_PARAM if entity is not None else V.Origin.PRESET_MAPPED
+    # concerns_origin: who specified the value. (observation.entity_origin was dropped by
+    # decision 53; entity.concerns_origin still records it for the concerns value.)
     operator_concerns = concerns is not None
 
     # Which template fields feed the two resolution modes (classified once, not per row).
@@ -418,7 +409,12 @@ def assemble_source(
 
     for record in records:
         row = record.fields
-        raw_record_id = ids.raw_record_id(source_id, record.line_no)
+        # Carried on the record by the caller (the pipeline reads it back with the row).
+        # It can no longer be re-derived: evidence-chain ids are random (decision 50).
+        raw_record_id = record.raw_record_id
+        assert raw_record_id is not None, (
+            f"record {record.line_no} was not read back from the store: assemble writes L1 "
+            f"against EXISTING raw_record rows and cannot mint their ids")
 
         # Per-row operator params: a call-form --entity/--concerns resolves against
         # THIS record; a plain literal is used verbatim for every row.
@@ -447,7 +443,7 @@ def assemble_source(
                     raise ValueError(
                         f"preset {preset.meta.id!r} maps source_record_uid "
                         f"{source_record_uid!r} on both line {clash} and line "
-                        f"{record.line_no} of {source_file_name or source_id}: a mapped uid "
+                        f"{record.line_no} of {source_file_name or source_file_id}: a mapped uid "
                         f"must be unique per source record — map a genuinely unique column, "
                         f"or write 'source_record_uid: default' to generate one")
                 seen_record_uids[source_record_uid] = record.line_no
@@ -477,7 +473,7 @@ def assemble_source(
         # Run-level entity / concerns OVERRIDE the preset value whenever the operator
         # supplied one — INCLUDING an empty string or a call-form that resolves to nothing.
         # WHY apply on ``entity is not None`` (the operator param) rather than truthiness:
-        # entity_origin / concerns_origin are tagged OPERATOR_PARAM on exactly that test, so
+        # concerns_origin is tagged OPERATOR_PARAM on exactly that test, so
         # the APPLIED value must key on the same condition — otherwise ``--entity ""`` tags a
         # preset value it never actually replaced (origin lies about provenance).
         if entity is not None:
@@ -497,43 +493,10 @@ def assemble_source(
             if not _is_missing(data_source) and data_source is not NA_SENTINEL:
                 report.data_source = str(data_source)
 
-        # --- activity (+ its ONE ingest link) -------------------------------
-        # Created only when the preset maps activity_kind in common: (a
-        # single placement has nothing to group, so no kind mapped means no row) and the
-        # kind resolved to a value. All of the record's fan-out observations share it.
-        activity_id: str | None = None
-        activity_projection: ids.ActivityProjection | None = None
-        kind_value = _norm(shared.get(ACTIVITY_KIND_NAME))
-        if kind_value is not None:
-            ordinal = activity_ordinals.get(raw_record_id, 0)
-            activity_ordinals[raw_record_id] = ordinal + 1
-            activity_id = ids.activity_id(raw_record_id, ordinal)
-            # the preset-mapped context (callee, caller IMEI, recipients…)
-            # gathered from context.<key> mappings; missing values are simply absent —
-            # never invented (the sentinel, a produced value, flows as text).
-            context = {
-                key[len(CONTEXT_PREFIX_NAME):]: value
-                for key, value in shared.items()
-                if key.startswith(CONTEXT_PREFIX_NAME) and not _is_missing(value)
-            }
-            store.write_activity(V.Activity(
-                activity_id=activity_id,
-                kind=str(kind_value),
-                context_json=canonical_json(context) if context else None,
-            ))
-            # invariant: exactly ONE activity_record link at ingest — its own record.
-            store.write_activity_record(V.ActivityRecord(
-                activity_record_id=ids.activity_record_id(activity_id, raw_record_id),
-                activity_id=activity_id,
-                raw_record_id=raw_record_id,
-            ))
-            report.activity_count += 1
-            # The digest hashes the DECODED context object; l1_projection
-            # re-canonicalises it, so key order can never move a digest.
-            activity_projection = ids.ActivityProjection(str(kind_value), context or None)
+        # Activity is NOT written (decision 51): the table stays empty and
+        # observation.activity_id stays NULL until activity is modelled.
 
         # --- the fan-out: one observation per template × time spec ------------
-        output_ordinal = 0
         for template in preset.observations:
             scalar_specs, verbatim_specs = _split_specs(template.fields)
             holder = dict(shared)
@@ -565,13 +528,12 @@ def assemble_source(
                     row=row, resolve=resolve, file_values=file_values, env=row_env,
                     ctx=ctx, preset_values=preset_values,
                     raw_record_id=raw_record_id, preset_key=preset_key,
-                    preset_row_id=preset_row_id, output_ordinal=output_ordinal,
+                    preset_row_id=preset_row_id,
                     fingerprint_sha256=fingerprint_sha256, line_no=record.line_no,
-                    activity_id=activity_id, activity_projection=activity_projection,
-                    entity_origin=entity_origin, operator_concerns=operator_concerns,
+                    operator_concerns=operator_concerns,
                     source_record_uid=source_record_uid,
+                    recovery=_recovery_for(preset, record, flat),
                 )
-                output_ordinal += 1
 
     return report
 
@@ -616,10 +578,10 @@ def _write_temporal_component(
     WHY a shared helper: the bound loop and the per-bound accuracy loop write the identical row
     shape (only the offset/source_field set differs), so routing both through one helper
     keeps the written row and its projection in lockstep — any drift between them would move the
-    claim_digest.
+    spatiotemporal_entity_hash.
     """
     store.write_temporal_component(V.TemporalComponent(
-        temporal_component_id=ids.temporal_component_id(temporal_expression_id, ordinal),
+        temporal_component_id=ids.new_id(),
         temporal_expression_id=temporal_expression_id,
         ordinal=ordinal,
         part=part,
@@ -628,6 +590,75 @@ def _write_temporal_component(
         raw_value=raw_value,
     ))
     return ids.TemporalComponentProjection(part, stated_offset, raw_value)
+
+
+def _recovery_for(preset: PresetSpec, record: RawRecord,
+                  flat: dict[str, Any]) -> tuple[Any, Any]:
+    """The (recovery_state, recovery_source) this observation records — TIER-GATED.
+
+    - **primary**: OUR OWN parsing. The reader found it (the sqlite reader's WAL / journal /
+      carve pass), so the record carries it and a preset may not overrule it. A preset that
+      maps either field on a primary source is ignored, and says so in the report — the same
+      discipline as ``reported_data_source`` (decision 47c): a tool's claim never overwrites
+      a fact we established ourselves.
+    - **secondary**: what the TOOL REPORTS, i.e. whatever the preset mapped. The reader's own
+      value is NOT used as a fallback: for a secondary export it is the format reader's
+      ``LIVE`` default (a CSV or XML reader cannot know), so falling back would silently
+      assert "live" about rows the tool never described. Unmapped stays NULL — the honest
+      "the export does not say".
+
+    WHY gate rather than "preset wins, else the reader": the two tiers are answering
+    different questions with the same words, and a fallback would let them blend in one cell
+    without the reader being able to tell which they got.
+    """
+    mapped_state = _norm(flat.get(_RECOVERY_STATE_NAME))
+    mapped_source = _norm(flat.get(_RECOVERY_SOURCE_NAME))
+    if preset.source_tier != V.SourceTier.PRIMARY.value:
+        return mapped_state, mapped_source
+    return record.recovery_state, record.recovery_source
+
+
+def _bearer_for(
+    store: RunStore, flat: dict[str, Any], entity_link: str | None, entity_id: str,
+) -> tuple[str | None, ids.EntityProjection | None]:
+    """The observation's ``bearer_entity_id`` and its digest projection, from the entity link.
+
+    Decision 55, one branch per member:
+    - ``subject`` — the targeted entity holds its own position: the bearer IS ``entity_id``
+      and nothing is projected (the entity block already carries it).
+    - ``party`` — another entity holds it: a SECOND entity row is minted even when the
+      preset names no identifier — "the antenna" with no id is a purely typed mention,
+      exactly like an unidentified targeted entity.
+    - ``mentioned`` — a second row only when the record names the holder.
+    - ``unknown`` / no link — NULL. Minting a placeholder here would manufacture a presence
+      claim the source never made (the Waze case).
+    ``concerns`` is not carried to the bearer: it attributes the exhibit to a party, which is
+    about the targeted entity.
+    """
+    if entity_link == V.EntityLink.SUBJECT.value:
+        return entity_id, None
+    bearer_identifier = _text(flat.get(_BEARER_ENTITY_NAME))
+    mints = (entity_link == V.EntityLink.PARTY.value
+             or (entity_link == V.EntityLink.MENTIONED.value and bearer_identifier is not None))
+    if not mints:
+        return None, None
+    bearer_identifier_type = (_norm(flat.get(_BEARER_IDENTIFIER_TYPE_NAME))
+                              or V.IdentifierType.NONE.value)
+    bearer_entity_type = (_norm(flat.get(_BEARER_ENTITY_TYPE_NAME))
+                          or V.EntityType.UNKNOWN.value)
+    bearer_entity_id = ids.new_id()
+    store.write_entity(V.Entity(
+        entity_id=bearer_entity_id,
+        identifier=None,
+        raw_identifier=bearer_identifier,
+        identifier_type=str(bearer_identifier_type),
+        type=str(bearer_entity_type),
+        concerns=None,
+        concerns_origin=None,
+        concerns_uid=None,
+    ))
+    return bearer_entity_id, ids.EntityProjection(
+        None, str(bearer_identifier_type), str(bearer_entity_type))
 
 
 def _emit_observation(
@@ -646,25 +677,20 @@ def _emit_observation(
     raw_record_id: str,
     preset_key: str,
     preset_row_id: str,
-    output_ordinal: int,
     fingerprint_sha256: str | None,
     line_no: int,
-    activity_id: str | None,
-    activity_projection: ids.ActivityProjection | None,
-    entity_origin: V.Origin,
     operator_concerns: bool,
     source_record_uid: str | None,
+    recovery: tuple[Any, Any],
 ) -> None:
     """Write one observation and its owned corners, then the observation row itself
     (parent-before-child order).
 
-    HOW: the corner ids all derive from the observation natural key
-    ``(raw_record_id ⟂ preset key ⟂ output_ordinal)`` — the preset key is IN the corner
-    keys (unlike the worked-example demo, which had one preset per source) so two presets reading
-    one record can never collide on a corner PK. Both digests come from ``core.ids``
-    over the exact rows written below — never a local recipe.
+    HOW: every id written here is a fresh uuid4 (``ids.new_id``, decision 50), so two
+    presets reading one record — and two templates of one preset — can never collide on a
+    corner PK, without needing a discriminator in the key. Both digests come from
+    ``core.ids`` over the exact rows written below — never a local recipe.
     """
-    natural_key = (raw_record_id, preset_key, output_ordinal)
 
     # --- entity (identifier + concerns_uid left NULL for the entity normaliser) ---
     raw_identifier = _text(flat.get(_ENTITY_NAME))
@@ -675,9 +701,7 @@ def _emit_observation(
         concerns_origin = None
     else:
         concerns_origin = V.Origin.OPERATOR_PARAM if operator_concerns else V.Origin.PRESET_MAPPED
-    # The role tag is the LAST part of the natural key: an observation owns two entity rows
-    # (targeted + bearer) and without it both would derive the same uuid5 and collide.
-    entity_id = ids.entity_id((*natural_key, _TARGETED_ROLE))
+    entity_id = ids.new_id()
     store.write_entity(V.Entity(
         entity_id=entity_id,
         identifier=None,                 # the entity normaliser fills identifier +
@@ -689,33 +713,9 @@ def _emit_observation(
         concerns_uid=None,
     ))
 
-    # --- the position bearer (a SECOND entity row) ---
-    # Written iff the entity link needs one (EntityLink.needs_bearer, i.e. not `self`). An
-    # unmapped bearer identifier is legitimate — "the antenna" with no id is a purely typed
-    # mention, exactly like an unidentified targeted entity — so the row is minted on the
-    # LINK, never on whether the preset happened to name the bearer. `concerns` is not
-    # carried: it attributes the exhibit to a party, which is about the targeted entity.
+    # --- the position bearer (decision 55) ---
     entity_link = _norm(flat.get(_ENTITY_LINK_NAME))
-    bearer_entity_id: str | None = None
-    bearer_projection: ids.EntityProjection | None = None
-    if entity_link is not None and entity_link != V.EntityLink.SELF.value:
-        bearer_identifier_type = (_norm(flat.get(_BEARER_IDENTIFIER_TYPE_NAME))
-                                  or V.IdentifierType.NONE.value)
-        bearer_entity_type = (_norm(flat.get(_BEARER_ENTITY_TYPE_NAME))
-                              or V.EntityType.UNKNOWN.value)
-        bearer_entity_id = ids.entity_id((*natural_key, _BEARER_ROLE))
-        store.write_entity(V.Entity(
-            entity_id=bearer_entity_id,
-            identifier=None,
-            raw_identifier=_text(flat.get(_BEARER_ENTITY_NAME)),
-            identifier_type=str(bearer_identifier_type),
-            type=str(bearer_entity_type),
-            concerns=None,
-            concerns_origin=None,
-            concerns_uid=None,
-        ))
-        bearer_projection = ids.EntityProjection(
-            None, str(bearer_identifier_type), str(bearer_entity_type))
+    bearer_entity_id, bearer_projection = _bearer_for(store, flat, entity_link, entity_id)
 
     # --- spatial expression + components ---
     # No component values → no spatial corner: an observation without a place yields empty
@@ -726,16 +726,35 @@ def _emit_observation(
         spatial_source = _text(flat.get(_SPATIAL_SOURCE_NAME))
         referential = _spatial_referential(
             flat, [part for part, _, _, _ in components], report.warnings)
-        spatial_expression_id = ids.spatial_expression_id(natural_key)
+        spatial_expression_id = ids.new_id()
+        # The type the preset STATED — never derived. A preset that maps a place but names
+        # no type leaves it UNKNOWN and warns: no mechanism serves `unknown`, so the place
+        # cannot reach WGS84, and that must be surfaced rather than guessed at.
+        position_type = _norm(flat.get(POSITION_TYPE_NAME))
+        if position_type is None:
+            position_type = V.PositionType.UNKNOWN.value
+            report.warnings.append(
+                f"spatial components are mapped but the preset states no "
+                f"{POSITION_TYPE_NAME}; the place resolves to "
+                f"'{V.PositionType.UNKNOWN.value}' and no method can integrate it — map "
+                f"{POSITION_TYPE_NAME} (e.g. const(coordinate))")
+        # The referential belongs to the two self-contained-transformation types ONLY: a
+        # CRS for a coordinate, a grid system for a grid reference. A lookup type reaches
+        # WGS84 through external data and has nothing to be expressed in, so its
+        # referential is dropped to NULL rather than kept as a value that would read as a
+        # real claim about a datum it does not have.
+        if not V.PositionType(position_type).takes_referential:
+            referential = None
         store.write_spatial_expression(V.SpatialExpression(
             spatial_expression_id=spatial_expression_id,
             referential=referential,
+            position_type=position_type,
             spatial_source=spatial_source,
         ))
         component_projections: list[ids.SpatialComponentProjection] = []
         for ordinal, (part, source_field, raw_value, unit) in enumerate(components):
             store.write_spatial_component(V.SpatialComponent(
-                spatial_component_id=ids.spatial_component_id(spatial_expression_id, ordinal),
+                spatial_component_id=ids.new_id(),
                 spatial_expression_id=spatial_expression_id,
                 ordinal=ordinal,
                 part=part,
@@ -788,7 +807,7 @@ def _emit_observation(
         kind = time_spec.kind    # "instant" | "interval" — the TemporalKind tokens
         referential = _text(flat.get(TEMPORAL_REFERENTIAL_NAME)) or _temporal_referential(time_spec, report.warnings)
         temporal_source = _text(flat.get(_TEMPORAL_SOURCE_NAME))
-        temporal_expression_id = ids.temporal_expression_id(natural_key)
+        temporal_expression_id = ids.new_id()
         store.write_temporal_expression(V.TemporalExpression(
             temporal_expression_id=temporal_expression_id,
             kind=kind,
@@ -805,7 +824,7 @@ def _emit_observation(
         # Source-stated per-bound accuracy: an OPTIONAL verbatim component per side (parallel
         # to the _date/_time split parts), carrying no offset/role/source_field — the raw µs
         # text is the evidence, parsed at L2. Only present when the preset mapped it, so an
-        # accuracy-free expression gains no component and its claim_digest is unchanged.
+        # accuracy-free expression gains no component and its spatiotemporal_entity_hash is unchanged.
         have_side = {_LOWER_SIDE_NAME: have_lower, _UPPER_SIDE_NAME: have_upper}
         for side, field_name in ((_LOWER_SIDE_NAME, TIME_ACCURACY_US_LOWER_NAME),
                                  (_UPPER_SIDE_NAME, TIME_ACCURACY_US_UPPER_NAME)):
@@ -813,7 +832,7 @@ def _emit_observation(
             # Gate on THIS side's bound existing, not on len(bounds): an accuracy whose bound
             # is absent (a malformed interval, or an instant's upper) is written for neither
             # side — it is a value L2 could never read, so emitting it would only move the
-            # claim_digest for no observable claim.
+            # spatiotemporal_entity_hash for no observable claim.
             if accuracy_raw is None or not have_side[side]:
                 continue
             accuracy_part = side + _ACCURACY_PART_SUFFIX
@@ -823,61 +842,51 @@ def _emit_observation(
             ordinal += 1
         temporal_projection = ids.TemporalProjection(kind, referential, tuple(bound_projections))
 
-    # --- the observation (links + digests via core/ids — never a local recipe) ---
-    links = ids.ObservationLinks(
-        activity_role=_norm(flat.get(ACTIVITY_ROLE_NAME)),
-        entity_link=entity_link,
-        spatial_link=_norm(flat.get(_SPATIAL_LINK_NAME)),
-        occupancy=_norm(flat.get(_OCCUPANCY_NAME)),
-        attestation=_norm(flat.get(_ATTESTATION_NAME)),
-    )
-    deleted = _norm(flat.get(_DELETED_NAME))
-    multiplicity_value = _norm(flat.get(MULTIPLICITY_NAME))
-    # NULL means 1. The sentinel (text) cannot live in an INTEGER column, so a
-    # multiplicity that produced nothing is NULL — the "=1" default, nothing invented.
-    multiplicity = None
-    if multiplicity_value is not None and multiplicity_value is not NA_SENTINEL:
-        multiplicity = int(multiplicity_value)
+    # --- the observation (digests via core/ids — never a local recipe) ---
+    spatial_link = _norm(flat.get(_SPATIAL_LINK_NAME))
+    if spatial_expression_id is None and spatial_link is not None:
+        # No geometry, so there is no position whose use could be described; the schema
+        # CHECK would reject the row, so it is dropped here with a warning instead.
+        report.warnings.append(
+            f"spatial_link '{spatial_link}' stated on an observation with no position; "
+            f"dropped (decision 55: no geometry => no spatial link)")
+        spatial_link = None
+    temporal_link = _norm(flat.get(_TEMPORAL_LINK_NAME))
+    if temporal_link is not None and time_spec.kind == V.TemporalKind.INSTANT.value:
+        # On an instant box and diamond coincide: write the ONE canonical member, so a fact
+        # has exactly one encoding whatever the preset author wrote.
+        temporal_link = V.TemporalLink(temporal_link).canonical_on_instant.value
+    recovery_state, recovery_source = recovery
 
     l1 = ids.l1_projection(
         entity=ids.EntityProjection(None, str(identifier_type), str(entity_type)),
         bearer=bearer_projection,
         spatial=spatial_projection,
         temporal=temporal_projection,
-        links=links,
-        deleted=deleted,
-        multiplicity=multiplicity,
-        activity=activity_projection,
     )
-    content_hash, claim_digest = ids.digests(
+    observation_content_hash, spatiotemporal_entity_hash = ids.digests(
         fingerprint_sha256=fingerprint_sha256,
         preset_key=preset_key,
         line_no=line_no,
-        output_ordinal=output_ordinal,
         l1=l1,
     )
 
     store.write_observation(V.Observation(
-        observation_id=ids.observation_id(raw_record_id, preset_key, output_ordinal),
+        observation_id=ids.new_id(),
         raw_record_id=raw_record_id,
         preset_id=preset_row_id,
-        output_ordinal=output_ordinal,
         entity_id=entity_id,
-        content_hash=content_hash,
-        claim_digest=claim_digest,
+        observation_content_hash=observation_content_hash,
+        spatiotemporal_entity_hash=spatiotemporal_entity_hash,
         bearer_entity_id=bearer_entity_id,
-        entity_origin=entity_origin,
-        activity_id=activity_id,
+        # activity_id stays NULL: the table exists but nothing writes it (decision 51).
         spatial_expression_id=spatial_expression_id,
         temporal_expression_id=temporal_expression_id,
-        activity_role=links.activity_role,
-        entity_link=links.entity_link,
-        spatial_link=links.spatial_link,
-        occupancy=links.occupancy,
-        attestation=links.attestation,
-        recorded_at=_text(flat.get(_RECORDED_AT_NAME)),
-        deleted=deleted,
-        multiplicity=multiplicity,
+        entity_link=entity_link,
+        spatial_link=spatial_link,
+        temporal_link=temporal_link,
+        recovery_state=recovery_state,
+        recovery_source=recovery_source,
         source_label=_text(flat.get(_SOURCE_LABEL_NAME)),
         input_record_id=_text(flat.get(_INPUT_RECORD_ID_NAME)),
         # Resolved ONCE per source record (not per template) and repeated on every observation

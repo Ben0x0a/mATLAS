@@ -103,7 +103,7 @@ def _infos(path: Path, names: list[str]) -> dict[str, zipfile.ZipInfo]:
         return {n: zf.getinfo(n) for n in names}
 
 
-def test_fingerprint_zip_records_structure_and_content_hash(tmp_path: Path) -> None:
+def test_fingerprint_zip_records_structure_and_observation_content_hash(tmp_path: Path) -> None:
     content = b"hello" * 100
     z = _make_zip(tmp_path / "a.zip", {"db.sqlite": content, "db.sqlite-wal": b"wal" * 50})
     fp = fingerprint_zip(z, _infos(z, ["db.sqlite"]))

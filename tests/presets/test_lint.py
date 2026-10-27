@@ -23,7 +23,7 @@ common: {entity: const(device), input_record_id: field(Loc), raw_source_path: fi
 observations:
   - position: {latitude: field(Lat), longitude: field(Lon), spatial_referential: const(epsg:4326)}
     time: {instant: field(TS), epoch: unix_s}
-    links: {entity: self, spatial: at, temporal: once}
+    links: {entity: subject, spatial: measured, temporal: at_least_once}
 """
 
 
@@ -54,6 +54,24 @@ def test_rowid_as_uid_warns() -> None:
     assert "rowid-as-uid" in _codes(lint_spec(_spec(text)), WARNING)
 
 
+def test_positionless_template_needs_no_spatial_link_and_must_not_carry_one() -> None:
+    """Decision 55: no geometry, no position whose use a spatial link could describe."""
+    no_position = _CLEAN.replace(
+        "  - position: {latitude: field(Lat), longitude: field(Lon), spatial_referential: const(epsg:4326)}\n",
+        "  - position:\n")
+    without_link = no_position.replace(
+        "{entity: subject, spatial: measured, temporal: at_least_once}",
+        "{entity: subject, temporal: at_least_once}")
+    assert _codes(lint_spec(_spec(without_link)), WARNING) == set()
+    assert "spatial-link-without-position" in _codes(lint_spec(_spec(no_position)), WARNING)
+
+
+def test_bearer_fields_under_subject_or_unknown_warn() -> None:
+    text = _CLEAN.replace("raw_source_path: field(Source)}",
+                          "raw_source_path: field(Source), bearer_entity_type: const(poi)}")
+    assert "bearer-without-party" in _codes(lint_spec(_spec(text)), WARNING)
+
+
 def test_half_coordinate_warns() -> None:
     text = _CLEAN.replace("latitude: field(Lat), longitude: field(Lon)",
                           "latitude: field(Lat)")
@@ -61,7 +79,7 @@ def test_half_coordinate_warns() -> None:
 
 
 def test_missing_link_warns() -> None:
-    text = _CLEAN.replace(", temporal: once}", "}")
+    text = _CLEAN.replace(", temporal: at_least_once}", "}")
     assert "missing-link" in _codes(lint_spec(_spec(text)), WARNING)
 
 
@@ -173,9 +191,6 @@ def test_misplaced_model_field_names_the_common_block(tmp_path: Path) -> None:
     finding = _finding(_CLEAN + "input_record_id: field(Row)\n", tmp_path, "misplaced-top-level")
     assert finding.severity == ERROR
     assert "common:" in finding.suggestion and "input_record_id: field(Row)" in finding.suggestion
-    # A context.<key> is assignable too, and lands in the same place.
-    ctx = _finding(_CLEAN + "context.antenna: field(Cell)\n", tmp_path, "misplaced-top-level")
-    assert "context.antenna" in ctx.suggestion
 
 
 def test_unknown_top_level_key_suggests_the_closest_admitted_one(tmp_path: Path) -> None:
@@ -187,10 +202,10 @@ def test_conditional_under_links_is_reported_with_the_rewrite(tmp_path: Path) ->
     """``links:`` takes bare enum tokens; a conditional there is a load error whose message
     does not say where the value belongs instead."""
     text = _CLEAN.replace(
-        "temporal: once}",
-        "temporal: if field(Dur) == 0 then const(once) else const(sporadic)}")
+        "temporal: at_least_once}",
+        "temporal: if field(Dur) == 0 then const(at_least_once) else const(throughout)}")
     finding = _finding(text, tmp_path, "conditional-in-links")
-    assert "occupancy:" in finding.suggestion
+    assert "temporal_link:" in finding.suggestion
     assert "position:" in finding.suggestion
 
 
@@ -217,23 +232,6 @@ def test_unrecognised_free_text_vocabulary_warns_with_the_nearest_member() -> No
     # A recognised member is silent.
     ok = _CLEAN.replace("entity: const(device)", "entity: const(x), entity_type: const(device)")
     assert "free-text-vocab" not in _codes(lint_spec(_spec(ok)))
-
-
-def test_coordinates_without_a_referential_warn() -> None:
-    text = _CLEAN.replace(", spatial_referential: const(epsg:4326)", "")
-    findings = [f for f in lint_spec(_spec(text)) if f.code == "coords-no-referential"]
-    assert findings and findings[0].suggestion == "spatial_referential: const(epsg:4326)"
-
-
-def test_context_without_activity_kind_warns() -> None:
-    """context.<key> lives on the activity, and activity_kind is what creates it — without
-    it the mapped context is resolved and then discarded."""
-    text = _CLEAN.replace("entity: const(device)", "entity: const(device), context.antenna: field(Loc)")
-    findings = [f for f in lint_spec(_spec(text)) if f.code == "context-without-activity"]
-    assert findings and "activity_kind" in findings[0].suggestion
-    with_kind = text.replace("context.antenna: field(Loc)",
-                             "context.antenna: field(Loc), activity_kind: const(observation)")
-    assert "context-without-activity" not in _codes(lint_spec(_spec(with_kind)))
 
 
 def test_fixed_offset_zone_advises_naming_the_iana_zone() -> None:

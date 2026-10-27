@@ -33,6 +33,9 @@ from model_atlas.core import vocabularies as V
 from model_atlas.core.store import RunStore
 from model_atlas.integrate.spatial import integrate_spatial
 
+# The engine raises until decision 55's presence predicate exists; these tests run it.
+_ENGINE_DISABLED = pytest.mark.skip(reason="concomitance is disabled until its presence predicate is redesigned (decision 55)")
+
 KNOWN = (46.2030, 6.1430)
 BASE_US = 1_773_453_600_000_000
 M_PER_DEG_LAT = math.pi * EARTH_RADIUS_M / 180.0
@@ -42,44 +45,41 @@ def _north_of(metres: float) -> tuple[float, float]:
     return (KNOWN[0] + metres / M_PER_DEG_LAT, KNOWN[1])
 
 
-def _add_point(store: RunStore, line_no: int, source_id: str, preset_id: str,
+def _add_point(store: RunStore, line_no: int, source_file_id: str, preset_id: str,
                preset_key: str, latitude: float, longitude: float,
                lower_us: int, upper_us: int, *, identifier: str) -> str:
-    record_id = ids.raw_record_id(source_id, line_no)
+    record_id = ids.new_id()
     store.write_raw_record(V.RawRecord(
-        raw_record_id=record_id, source_id=source_id, line_no=line_no, raw_json="{}"))
+        raw_record_id=record_id, source_file_id=source_file_id, line_no=line_no, raw_json="{}"))
     natural_key = (record_id, 0)
-    entity_id = ids.entity_id(natural_key)
+    entity_id = ids.new_id()
     store.write_entity(V.Entity(
         entity_id=entity_id, identifier=identifier, raw_identifier=identifier,
         identifier_type="msisdn", type="device"))
-    sx_id = ids.spatial_expression_id(natural_key)
+    sx_id = ids.new_id()
     store.write_spatial_expression(V.SpatialExpression(
-        spatial_expression_id=sx_id, referential="epsg:4326"))
+        spatial_expression_id=sx_id,
+        position_type=V.PositionType.COORDINATE, referential="epsg:4326"))
     for ordinal, (part, raw) in enumerate((
             ("latitude", str(latitude)), ("longitude", str(longitude)))):
         store.write_spatial_component(V.SpatialComponent(
-            spatial_component_id=ids.spatial_component_id(sx_id, ordinal),
+            spatial_component_id=ids.new_id(),
             spatial_expression_id=sx_id, ordinal=ordinal, part=part, raw_value=raw))
-    tx_id = ids.temporal_expression_id(natural_key)
+    tx_id = ids.new_id()
     store.write_temporal_expression(V.TemporalExpression(
         temporal_expression_id=tx_id, kind="interval"))
     store.write_timespan_integration(V.TimespanIntegration(
-        timespan_integration_id=ids.timespan_integration_id(tx_id, "fixture/1.0"),
+        timespan_integration_id=ids.new_id(),
         temporal_expression_id=tx_id, method="fixture/1.0",
         lower_unix_utc_us=lower_us, upper_unix_utc_us=upper_us,
-        lower_datetime_iso=dt.datetime.fromtimestamp(
-            lower_us / 1_000_000, tz=dt.timezone.utc).isoformat(),
-        upper_datetime_iso=dt.datetime.fromtimestamp(
-            upper_us / 1_000_000, tz=dt.timezone.utc).isoformat()))
-    observation_id = ids.observation_id(record_id, preset_key, 0)
+        offset_to_local_hours_lower=0.0, offset_to_local_hours_upper=0.0))
+    observation_id = ids.new_id()
     store.write_observation(V.Observation(
-        observation_id=observation_id, raw_record_id=record_id, preset_id=preset_id,
-        output_ordinal=0, entity_id=entity_id,
-        content_hash=f"ch-{line_no}", claim_digest=f"cd-{line_no}",
+        observation_id=observation_id, raw_record_id=record_id, preset_id=preset_id, entity_id=entity_id,
+        observation_content_hash=f"ch-{line_no}", spatiotemporal_entity_hash=f"cd-{line_no}",
         spatial_expression_id=sx_id, temporal_expression_id=tx_id,
-        activity_role="unknown", spatial_link="at",
-        entity_link="self", occupancy="once",
+        spatial_link="measured", bearer_entity_id=entity_id,
+        entity_link="subject", temporal_link="at_least_once",
         source_label=f"src-{line_no}"))
     return observation_id
 
@@ -91,16 +91,16 @@ def _build_case(path: Path) -> tuple[str, str]:
         store.write_case_metadata(V.CaseMetadata(case_id=case_id, case_number="T101a"))
         run_id = ids.run_id()
         store.write_run(V.Run(run_id=run_id, case_id=case_id))
-        source_id = ids.source_id("/case/t101a.csv", None, None)
-        store.write_source(V.Source(source_id=source_id, run_id=run_id,
+        source_file_id = ids.new_id()
+        store.write_source_file(V.SourceFile(source_file_id=source_file_id, run_id=run_id,
                                     input_file_path="/case/t101a.csv"))
         preset_key = "t101a"
         preset_id = ids.preset_id(preset_key, "1")
         store.write_preset(V.Preset(preset_id=preset_id, key=preset_key, name=None,
                                     version="1", definition_digest="sha256-fixture"))
-        a = _add_point(store, 1, source_id, preset_id, preset_key, *KNOWN,
+        a = _add_point(store, 1, source_file_id, preset_id, preset_key, *KNOWN,
                       BASE_US, BASE_US + 5 * 60_000_000, identifier="+41790000001")
-        b = _add_point(store, 2, source_id, preset_id, preset_key, *_north_of(10.0),
+        b = _add_point(store, 2, source_file_id, preset_id, preset_key, *_north_of(10.0),
                       BASE_US + 2 * 60_000_000, BASE_US + 6 * 60_000_000,
                       identifier="+41790000002")
         integrate_spatial(store)
@@ -128,6 +128,7 @@ def _request(tmp_path: Path, db_path: Path, **overrides: object) -> Concomitance
 # Each of these was refused by a capability guard before the T102 engine landed. The
 # guards are gone, so the observation is now that the run COMPLETES and writes a file.
 
+@_ENGINE_DISABLED
 def test_two_cases_now_run(tmp_path: Path) -> None:
     """A second case is compared for real — and the same-identity exclusion is LIFTED
     across cases, so the same device in both is reported rather than dropped."""
@@ -144,6 +145,7 @@ def test_two_cases_now_run(tmp_path: Path) -> None:
     assert request.output_path.is_file()
 
 
+@_ENGINE_DISABLED
 def test_the_same_case_named_twice_is_still_one_case(tmp_path: Path) -> None:
     """case_2 pointing at case_1's file is ONE case, so the same-identity exclusion
     must still apply — otherwise every observation would pair with itself."""
@@ -154,6 +156,7 @@ def test_the_same_case_named_twice_is_still_one_case(tmp_path: Path) -> None:
     assert both.match_count == single.match_count == 1
 
 
+@_ENGINE_DISABLED
 def test_asymmetric_window_now_runs(tmp_path: Path) -> None:
     db_path = tmp_path / "case.matlas.sqlite"
     _build_case(db_path)
@@ -165,6 +168,7 @@ def test_asymmetric_window_now_runs(tmp_path: Path) -> None:
     assert request.output_path.is_file()
 
 
+@_ENGINE_DISABLED
 def test_use_accuracy_now_runs(tmp_path: Path) -> None:
     db_path = tmp_path / "case.matlas.sqlite"
     _build_case(db_path)
@@ -172,6 +176,7 @@ def test_use_accuracy_now_runs(tmp_path: Path) -> None:
     assert result.match_count == 1
 
 
+@_ENGINE_DISABLED
 def test_different_groups_now_run(tmp_path: Path) -> None:
     """Two INDEPENDENT groups — the capability the whole rewrite exists for."""
     db_path = tmp_path / "case.matlas.sqlite"
@@ -191,6 +196,7 @@ def test_different_groups_now_run(tmp_path: Path) -> None:
     assert row[8] == a and row[18] == b
 
 
+@_ENGINE_DISABLED
 def test_cross_kind_any_now_runs(tmp_path: Path) -> None:
     """``ANY`` spanning several kinds — structurally inexpressible for the old engine."""
     db_path = tmp_path / "case.matlas.sqlite"
@@ -218,6 +224,7 @@ def test_no_capability_guard_remains(tmp_path: Path) -> None:
 
 # --- the supported shape ----------------------------------------------------------------
 
+@_ENGINE_DISABLED
 def test_plain_shape_runs_for_real_with_progress_and_enriched_rows(tmp_path: Path) -> None:
     db_path = tmp_path / "case.matlas.sqlite"
     a, b = _build_case(db_path)
@@ -256,6 +263,7 @@ def test_plain_shape_runs_for_real_with_progress_and_enriched_rows(tmp_path: Pat
     assert row[9] and row[19]          # g1_source / g2_source (traceability)
 
 
+@_ENGINE_DISABLED
 def test_identical_groups_warning_is_surfaced_but_the_run_proceeds(tmp_path: Path) -> None:
     db_path = tmp_path / "case.matlas.sqlite"
     _build_case(db_path)
@@ -275,6 +283,7 @@ def test_invalid_request_raises_value_error(tmp_path: Path) -> None:
         run_concomitance(request)
 
 
+@_ENGINE_DISABLED
 def test_cancellation_stops_early_keeps_partial_file(tmp_path: Path) -> None:
     db_path = tmp_path / "case.matlas.sqlite"
     _build_case(db_path)
