@@ -5,6 +5,16 @@ Common technical questions and fixes. For how a run works end to end, see
 
 ## Running
 
+### The `presets/` folder is empty
+
+The repository was cloned without its submodule. Fetch the pinned presets:
+
+```bash
+git submodule update --init
+```
+
+To move to the newest presets instead of the tested pin: `git submodule update --remote presets`.
+
 ### A source was found but no preset matched it
 
 Run with `--log-level DEBUG` to see why each preset was accepted or rejected. The usual causes:
@@ -19,7 +29,7 @@ Run with `--log-level DEBUG` to see why each preset was accepted or rejected. Th
 Lint the presets before trusting them:
 
 ```bash
-python utils/lint_presets.py ../presets/mATLAS-presets
+python utils/lint_presets.py presets/mATLAS-presets
 ```
 
 ### "… is not a mATLAS run database (… user_version=4; expected … / 5)"

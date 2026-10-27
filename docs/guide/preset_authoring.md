@@ -209,7 +209,7 @@ observations:
       temporal: at_least_once
 ```
 
-This is based on the mATLAS-presets `ios/ios_routined_cached_locations.yaml` (its
+This is based on the mATLAS-presets `primary/iOS/ios_routined_cached_locations.yaml` (its
 `expected_fields` inventory is trimmed here for brevity).
 
 ## 4. Worked example — CSV tool export (secondary source)
@@ -286,7 +286,7 @@ observations:
       temporal: at_least_once
 ```
 
-This is based on the mATLAS-presets `axiom/ios_cached_locations.yaml` (its
+This is based on the mATLAS-presets `secondary/AXIOM/ios_cached_locations.yaml` (its
 `expected_fields` inventory is trimmed here for brevity). Note the field names with
 spaces are quoted (`'field("Item ID")'`), and the glob `* (dd.MM.yyyy)` matches the header
 whatever timezone it carries.
@@ -316,7 +316,7 @@ observations:
       temporal: throughout
 ```
 
-Adapted from the mATLAS-presets `ios/ios_routined_significant_visits.yaml`.
+Adapted from the mATLAS-presets `primary/iOS/ios_routined_significant_visits.yaml`.
 
 ## 5b. Worked example — start + duration (a CDR)
 
@@ -556,7 +556,7 @@ iterating:
 ```bash
 python matlas.py process \
   --input ./evidence/Cache.sqlite \
-  --presets ../presets/mATLAS-presets/ios/ios_routined_cached_locations.yaml \
+  --presets presets/mATLAS-presets/primary/iOS/ios_routined_cached_locations.yaml \
   --output ./out/routined.csv \
   --concerns "Case Subject"
 ```
@@ -570,7 +570,7 @@ frontier) and any surfaced assumptions (a missing referential, an assumed zone).
 Before relying on a preset, lint it for errors, likely mistakes and best-practice nudges:
 
 ```bash
-python utils/lint_presets.py ../presets/mATLAS-presets/ios/ios_routined_cached_locations.yaml --advice
+python utils/lint_presets.py presets/mATLAS-presets/primary/iOS/ios_routined_cached_locations.yaml --advice
 ```
 
 It reports ERRORs (won't load), WARNINGs (e.g. a half-coordinate, a missing link, a rowid

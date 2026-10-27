@@ -1,0 +1,3 @@
+[submodule "presets"]
+	path = presets
+	url = https://github.com/Ben0x0a/mATLAS-presets.git

@@ -9,14 +9,13 @@ database.
 ## Requirements
 
 - Python 3.11 to 3.14
-- Git, to fetch the app and its preset library ([mATLAS-presets](https://github.com/Ben0x0a/mATLAS-presets),
-  a separate repository so presets can be updated without an app release)
+- Git — the preset library ([mATLAS-presets](https://github.com/Ben0x0a/mATLAS-presets)) is
+  a separate repository, included here as the `presets/` submodule
 
 ## Installation
 
 ```bash
-git clone https://github.com/Ben0x0a/mATLAS.git
-git clone https://github.com/Ben0x0a/mATLAS-presets.git presets
+git clone --recurse-submodules https://github.com/Ben0x0a/mATLAS.git
 cd mATLAS
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
@@ -28,7 +27,7 @@ python -m pip install .            # add '.[gui]' for the graphical interface
 ```bash
 python matlas.py process \
   --input ./evidence \
-  --presets ../presets/mATLAS-presets \
+  --presets presets/mATLAS-presets \
   --output ./out \
   --name operation-falcon \
   --concerns "Case Subject"

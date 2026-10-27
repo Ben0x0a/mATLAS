@@ -23,11 +23,11 @@ a preset maps; the preset value is the default used only when the argument is ab
 
 ```bash
 python matlas.py process --help
-python matlas.py process --input ./evidence --presets ../presets/mATLAS-presets --output ./out --concerns Subject --export kml --export geojson
-python matlas.py process --input ./evidence --presets ../presets/mATLAS-presets --output ./out --concerns Subject --traceability-format prov
-python matlas.py process --input ./evidence --presets ../presets/mATLAS-presets --output ./out --concerns Subject --no-source-columns
+python matlas.py process --input ./evidence --presets presets/mATLAS-presets --output ./out --concerns Subject --export kml --export geojson
+python matlas.py process --input ./evidence --presets presets/mATLAS-presets --output ./out --concerns Subject --traceability-format prov
+python matlas.py process --input ./evidence --presets presets/mATLAS-presets --output ./out --concerns Subject --no-source-columns
 python matlas.py process --input ./evidence --profile ./profiles/ios-locations.mATLAS-profile --output ./out --concerns Subject
-python matlas.py --log-level DEBUG process --input ./evidence --presets ../presets/mATLAS-presets --output ./out --concerns Subject
+python matlas.py --log-level DEBUG process --input ./evidence --presets presets/mATLAS-presets --output ./out --concerns Subject
 ```
 
 `--export NAME` (repeatable) writes an additional projection alongside the CSV — one file per
@@ -68,9 +68,19 @@ call the same package API as the CLI.
 ## Presets
 
 Presets are YAML files loaded recursively from the folder passed with `--presets`, or loaded
-directly when `--presets` points to one YAML file. `--presets` has no default in the CLI — the
-GUI defaults to `<current folder>/presets/mATLAS-presets`, matching the sibling-clone layout of
-the installation. A preset has:
+directly when `--presets` points to one YAML file. The library is the
+[mATLAS-presets](https://github.com/Ben0x0a/mATLAS-presets) repository, included as the
+`presets/` git submodule: each mATLAS commit pins the presets commit it was tested with, so a
+given mATLAS version always comes with the same presets. `--presets` has no default in the
+CLI (pass `presets/mATLAS-presets`); the GUI defaults to `<current folder>/presets/mATLAS-presets`,
+which is the submodule when launched from the mATLAS folder.
+
+```bash
+git submodule update --init            # fetch the pinned presets (if cloned without them)
+git submodule update --remote presets  # move to the newest presets, off the tested pin
+```
+
+A preset has:
 
 - a `preset` header (id, name, os/tool, version, os_version, tier);
 - an `input_selector` identifying the source (CSV, Excel, SQLite or XML, direct or inside a ZIP);
@@ -88,7 +98,7 @@ a preset's output in a real case, check its `preset.version`/`os_version`, confi
 export's columns still match its `expected_fields`, and lint it:
 
 ```bash
-python utils/lint_presets.py ../presets/mATLAS-presets
+python utils/lint_presets.py presets/mATLAS-presets
 ```
 
 ## Configuration (`matlas_config.toml`)

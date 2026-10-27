@@ -3,10 +3,6 @@ out/
 crash_reports/
 # Local mATLAS config (copy from matlas_config.toml.example); only the example is tracked.
 matlas_config.toml
-# Presets (mATLAS-presets) and the AXIOM preset generator live in their own repo,
-# cloned/placed here as a sibling checkout. See presets/README.md once cloned.
-presets/
-
 # Python-generated files
 __pycache__/
 *.py[oc]
