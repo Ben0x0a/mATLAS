@@ -157,6 +157,8 @@ class MainController(QObject):
         self._shutdown_done = False
         self._current_phase = ""
         self._anim_dots = 0
+        # Output folder of the dump in flight, read by _on_dump_done on the GUI thread.
+        self._pending_dump_dir: Path | None = None
 
         self._bind_widgets()
         self._configure_ui_defaults()
@@ -997,13 +999,16 @@ class MainController(QObject):
             from ufdr_parser.dump import run_dump
             return run_dump(source_path, output_path)
 
-        self._runner.run(
-            task,
-            lambda summary: self._on_dump_done(summary, output_path),
-            self._on_process_failed,
-        )
+        # A bound method of this QObject, NOT a lambda: PySide6 runs a plain callable connected
+        # to the worker's signal on the WORKER thread, so a lambda here touched the widgets and
+        # stopped the status timer off the GUI thread ("Timers cannot be stopped from another
+        # thread") — undefined behaviour in Qt. A bound slot is queued onto the GUI thread.
+        self._pending_dump_dir = output_path
+        self._runner.run(task, self._on_dump_done, self._on_process_failed)
 
-    def _on_dump_done(self, summary: "DumpSummary", out_dir: Path) -> None:
+    @Slot(object)
+    def _on_dump_done(self, summary: "DumpSummary") -> None:
+        out_dir = self._pending_dump_dir
         self._set_running(False)
         self._last_output_folder = out_dir
         self.open_output_folder_button.setEnabled(True)

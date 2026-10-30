@@ -206,6 +206,7 @@ def run_parse_by_type(
             report_path = input_path
             kind = compression
 
+        log.info("Indexing the report's model blocks (one read of the whole report)")
         with open_seekable(report_path, kind) as stream:
             index = index_model_types(stream)
         blocks = [b for b in index.blocks if models is None or b.model_type in models]

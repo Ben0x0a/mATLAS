@@ -133,11 +133,13 @@ def _skip_to_decoded_data(stream: BinaryIO) -> BinaryIO:
     the marker-onward bytes ahead of the rest of stream. Sharing the finder with the scanner
     means a literal ``<decodedData`` inside skipped taggedFiles CDATA cannot mis-anchor here.
     """
-    tail, _offset = find_decoded_data(stream)
+    log.info("Skipping the report's file list (taggedFiles) to the decoded models")
+    tail, offset = find_decoded_data(stream)
     if not tail:
         # No decodedData (e.g. an empty/odd report): yield a valid, empty document.
-        log.warning("no <decodedData> section found; nothing to parse")
+        log.warning(f"no <decodedData> section found in {offset:,} byte(s); nothing to parse")
         return ChainedReader(_SYNTHETIC_ROOT + b"</project>", stream)
+    log.info(f"Found the decoded models (<decodedData>) at byte {offset:,}; parsing them")
     return ChainedReader(_SYNTHETIC_ROOT + tail, stream)
 
 

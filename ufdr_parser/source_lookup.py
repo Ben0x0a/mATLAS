@@ -28,6 +28,7 @@ primary-key lookup for the serial flush, the parallel workers and the Cellebrite
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 
@@ -42,6 +43,8 @@ from ufdr_parser.const import (
     TAG_EXTRA_INFO,
     TAG_NODE_INFO,
 )
+
+log = logging.getLogger(__name__)
 
 # ``<extraInfo type=..>`` kinds: a decoded model's source, or a file node's own location.
 EXTRA_INFO_MODEL_KIND = "model"
@@ -191,22 +194,39 @@ class SourceIndex:
     def _resolve_node_refs(self) -> None:
         """Copy path/name/size from the referenced file node onto each by-reference model.
 
-        HOW: each pass joins every still-unresolved model (no path, a ``node_ref``) to the node
-        it references, copies that node's path/name/size and advances ``node_ref`` to the
-        node's own reference; a model whose node carried a path is then resolved (its
-        ``node_ref`` becomes None). Passes repeat until none changes a row, at most
+        HOW: each pass takes every still-unresolved model (no path, a ``node_ref`` naming a known
+        node), copies that node's path/name/size and advances ``node_ref`` to the node's own
+        reference; a model whose node carried a path is then resolved (its ``node_ref`` becomes
+        None). Every SET expression reads the row as it was before the update, so the four
+        lookups see the same node. Passes repeat until none changes a row, at most
         ``_MAX_NODE_HOPS`` times. The model keeps its OWN table_name/offset: those locate the
         record inside the file, whereas the node's are always blank/0.
+        WHY correlated primary-key lookups rather than ``UPDATE ... FROM node_source``: a join
+        leaves the join ORDER to SQLite's query planner, and the order that scans node_source
+        first and then searches model_source by its unindexed ``node_ref`` is quadratic —
+        ~520k x 340k comparisons on a 2.7 GB report, hours of CPU with no log line and no error.
+        Which order is picked depends on the SQLite version bundled with Python, so a run could
+        stall on one machine and finish on another. Each subquery here is a lookup on
+        node_source's primary key, linear whatever the planner, and works on any SQLite (UPDATE
+        ... FROM needs 3.33+).
         WHY bounded: an id that references itself (or a longer cycle) would otherwise loop for
         ever; after the bound such a model simply keeps a blank path, as before this fix.
         """
-        for _hop in range(_MAX_NODE_HOPS):
+        pending = self._conn.execute(
+            "SELECT COUNT(*) FROM model_source WHERE path IS NULL AND node_ref IS NOT NULL"
+        ).fetchone()[0]
+        if not pending:
+            return
+        log.info(f"Resolving {pending} source reference(s) to file nodes")
+        node = "FROM node_source AS n WHERE n.id = model_source.node_ref"
+        for hop in range(1, _MAX_NODE_HOPS + 1):
             cursor = self._conn.execute(
-                "UPDATE model_source SET path = n.path, name = n.name, size = n.size, "
-                "node_ref = n.node_ref "
-                "FROM node_source AS n "
-                "WHERE model_source.path IS NULL AND model_source.node_ref = n.id"
+                f"UPDATE model_source SET path = (SELECT n.path {node}), "
+                f"name = (SELECT n.name {node}), size = (SELECT n.size {node}), "
+                f"node_ref = (SELECT n.node_ref {node}) "
+                "WHERE path IS NULL AND node_ref IN (SELECT id FROM node_source)"
             )
+            log.debug("source references: hop %d updated %d row(s)", hop, cursor.rowcount)
             if cursor.rowcount == 0:
                 return
 

@@ -20,10 +20,11 @@ import logging
 import shutil
 import sqlite3
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ufdr_parser.archive import open_report, report_trace
+from ufdr_parser.archive import open_report, report_size, report_trace
 from ufdr_parser.models import FlatRecord
 from ufdr_parser.reader import iter_items
 from ufdr_parser.report_info import write_report_info
@@ -31,6 +32,28 @@ from ufdr_parser.source_lookup import EXTRA_INFO_MODEL_KIND, SourceEntry, Source
 from ufdr_parser.writer import CsvSink, group_filenames
 
 log = logging.getLogger(__name__)
+
+# A progress line is logged at most this often during the parse (and checked every
+# _PROGRESS_CHECK_EVERY items, so the clock is not read per record). WHY: the parse of a large
+# report is the longest phase and was silent from its first log line to the CSV writes, so a
+# slow run was indistinguishable from a frozen one; a periodic line shows it is moving and how
+# far (bytes read vs the report size).
+_PROGRESS_INTERVAL_S = 10.0
+_PROGRESS_CHECK_EVERY = 2000
+_MB = 1024 * 1024
+
+
+class _CountingReader:
+    """A read()-only pass-through that counts the bytes read from the report stream."""
+
+    def __init__(self, stream) -> None:
+        self._stream = stream
+        self.bytes_read = 0
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._stream.read(size)
+        self.bytes_read += len(data)
+        return data
 
 
 @dataclass
@@ -168,19 +191,32 @@ def _run_serial(
     try:
         sink = CsvSink(conn)
         source = SourceIndex(conn)
-        with open_report(input_path) as stream:
-            for item in iter_items(stream):
+        total = report_size(input_path)
+        started = last_logged = time.monotonic()
+        with open_report(input_path) as raw_stream:
+            stream = _CountingReader(raw_stream)
+            for count, item in enumerate(iter_items(stream), start=1):
                 if isinstance(item, FlatRecord):
-                    if models is not None and item.top_type not in models:
-                        continue
-                    sink.add(item)
-                    _track(summary, item)
-                    summary.record_count += 1
+                    if models is None or item.top_type in models:
+                        sink.add(item)
+                        _track(summary, item)
+                        summary.record_count += 1
                 elif isinstance(item, SourceEntry):
                     source.add(item)
                     if item.kind == EXTRA_INFO_MODEL_KIND:
                         summary.source_count += 1
+                if count % _PROGRESS_CHECK_EVERY == 0 and time.monotonic() - last_logged >= _PROGRESS_INTERVAL_S:
+                    last_logged = time.monotonic()
+                    log.info(
+                        f"Parsing: {summary.record_count} record(s), {summary.source_count} source "
+                        f"entr(ies); {stream.bytes_read / _MB:,.0f} of {total / _MB:,.0f} MB read"
+                    )
+        log.info(
+            f"Parsed {summary.record_count} record(s) and {summary.source_count} source entr(ies) "
+            f"in {time.monotonic() - started:,.0f} s"
+        )
         source.finalise()
+        log.info("Writing the CSV files")
         summary.files = sink.flush(out_dir, base, source, trace, workers=workers)
         return summary
     finally:
