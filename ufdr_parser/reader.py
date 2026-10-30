@@ -119,7 +119,7 @@ class BlockRangeReader:
 
 def iter_block_models(stream: BinaryIO) -> "Iterator[FlatRecord]":
     """Yield FlatRecords for the models in one wrapped modelType block stream."""
-    context = etree.iterparse(stream, events=("end",), recover=True, huge_tree=True)
+    context = etree.iterparse(stream, events=("end",), tag=TAG_MODEL, recover=True, huge_tree=True)
     for _event, elem in context:
         if elem.tag == TAG_MODEL:
             in_chain, record = _model_record(elem)
@@ -230,7 +230,12 @@ def iter_items(stream: BinaryIO) -> Iterator[Item]:
     extraInfo end events are seen.
     """
     decoded = _skip_to_decoded_data(stream)
-    context = etree.iterparse(decoded, events=("end",), recover=True, huge_tree=True)
+    # Only model and extraInfo end tags are acted on; filtering them in lxml (C) spares a Python
+    # loop turn for every other element (each field and value), ~15% of a dump. The other
+    # elements are still built, inside the models they belong to.
+    context = etree.iterparse(
+        decoded, events=("end",), tag=(TAG_MODEL, TAG_EXTRA_INFO), recover=True, huge_tree=True
+    )
     for _event, elem in context:
         tag = elem.tag
         if tag == TAG_MODEL:
