@@ -1,9 +1,10 @@
 """Application settings loaded from an optional ``matlas_config.toml`` in the CWD.
 
-Defines:    the typed Settings tree (timezone / logging / discovery / output) and
-            load_settings() / get_settings() — preferences that change rarely, not per run.
-Used by:    the launcher (logging), the pipeline (discovery depths + local timezone), and
-            the transform layer (via BuildEnv.local_zone).
+Defines:    the typed Settings tree (timezone / logging / discovery / output / diagnostics /
+            export / ufdr_dump) and load_settings() / get_settings() — preferences that change
+            rarely, not per run.
+Used by:    the launcher (logging), the pipeline (discovery depths + local timezone), the
+            transform layer (via BuildEnv.local_zone), and the GUI's UFDR dump (worker counts).
 Depends on: stdlib only (tomllib, zoneinfo).
 
 Design:
@@ -42,6 +43,7 @@ _SCHEMA: dict[str, set[str]] = {
         "max_head", "max_depth", "max_frame_bytes", "capture_env",
     },
     "export": {"plugins_dir"},
+    "ufdr_dump": {"parse_workers", "write_workers"},
 }
 
 # Variable-name tokens whose value is redacted (case-insensitive substring) in a crash
@@ -109,6 +111,16 @@ class ExportSettings:
 
 
 @dataclass(frozen=True)
+class UfdrDumpSettings:
+    # Worker processes the GUI's "Dump full UFDR" mode uses (the ufdr-parser CLI takes its own
+    # --parse-workers / --workers). parse_workers > 1 parses the report one model type per
+    # process, which also keeps the heavy work out of the GUI process; write_workers > 1 fans
+    # the CSV writing out. 1 = in-process, as before.
+    parse_workers: int = 5
+    write_workers: int = 1
+
+
+@dataclass(frozen=True)
 class Settings:
     timezone: TimezoneSettings = field(default_factory=TimezoneSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
@@ -116,6 +128,7 @@ class Settings:
     output: OutputSettings = field(default_factory=OutputSettings)
     diagnostics: DiagnosticsSettings = field(default_factory=DiagnosticsSettings)
     export: ExportSettings = field(default_factory=ExportSettings)
+    ufdr_dump: UfdrDumpSettings = field(default_factory=UfdrDumpSettings)
     source_path: Path | None = None     # where it was loaded from; None => built-in defaults
 
     def to_traceability(self) -> dict:
@@ -129,6 +142,8 @@ class Settings:
             "diagnostics_enabled": self.diagnostics.enabled,
             "crash_dir": self.diagnostics.crash_dir,
             "export_plugins_dir": self.export.plugins_dir,
+            "ufdr_dump_parse_workers": self.ufdr_dump.parse_workers,
+            "ufdr_dump_write_workers": self.ufdr_dump.write_workers,
         }
 
 
@@ -204,6 +219,18 @@ def _load_diagnostics(raw: dict) -> DiagnosticsSettings:
     )
 
 
+def _require_workers(raw: dict, key: str, default: int) -> int:
+    """``raw[key]`` as a worker count >= 1 (or ``default``); reject anything else.
+
+    WHY strict: ``int("auto")`` or a 0 would otherwise surface only mid-dump, as a crash or
+    an empty process pool, long after the typo was made.
+    """
+    value = raw.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{CONFIG_FILENAME}: [ufdr_dump].{key} must be an integer >= 1, got {value!r}")
+    return value
+
+
 def load_settings(path: Path | None = None) -> Settings:
     """Load settings from ``path`` (or ``./matlas_config.toml``). Missing -> defaults."""
     config_path = Path(path) if path is not None else Path.cwd() / CONFIG_FILENAME
@@ -222,6 +249,7 @@ def load_settings(path: Path | None = None) -> Settings:
     out = raw.get("output", {})
     dg = raw.get("diagnostics", {})
     ex = raw.get("export", {})
+    ud = raw.get("ufdr_dump", {})
     settings = Settings(
         timezone=TimezoneSettings(local_zone=_validate_zone(tz.get("local_zone"))),
         logging=LoggingSettings(
@@ -235,6 +263,10 @@ def load_settings(path: Path | None = None) -> Settings:
         output=OutputSettings(source_column_prefix=str(out.get("source_column_prefix", "orig_"))),
         diagnostics=_load_diagnostics(dg),
         export=ExportSettings(plugins_dir=str(ex.get("plugins_dir", "matlas_exports"))),
+        ufdr_dump=UfdrDumpSettings(
+            parse_workers=_require_workers(ud, "parse_workers", UfdrDumpSettings.parse_workers),
+            write_workers=_require_workers(ud, "write_workers", UfdrDumpSettings.write_workers),
+        ),
         source_path=config_path,
     )
     log.info("Loaded settings from %s (local_zone=%s)", config_path, settings.timezone.local_zone)

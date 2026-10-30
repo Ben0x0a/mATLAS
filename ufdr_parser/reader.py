@@ -3,7 +3,7 @@
 Defines:    iter_items — a single-pass lxml iterparse generator that yields FlatRecord
             objects (from <decodedData>) and SourceEntry objects (from <extraInfos>).
 Used by:    dump (the orchestrator).
-Depends on: const, models (flatten_model), source_lookup (parse_extra_info), lxml.
+Depends on: const, models (build_record), source_lookup (parse_extra_info), lxml.
 
 WHY iterparse + purge: report.xml is up to 32 GB; a full DOM is impossible. We parse
 incrementally and free every finished subtree (clear + drop preceding siblings) so memory
@@ -29,13 +29,17 @@ from typing import BinaryIO, Iterator
 from lxml import etree
 
 from ufdr_parser.const import (
+    LEVEL_SUBSUB,
     LEVEL_TOP,
+    LOCAL_MODEL,
+    LOCAL_MODEL_FIELD,
     LOCAL_MODEL_TYPE,
+    LOCAL_MULTI_MODEL_FIELD,
     NS,
     TAG_EXTRA_INFO,
     TAG_MODEL,
 )
-from ufdr_parser.models import FlatRecord, flatten_model
+from ufdr_parser.models import FlatRecord, build_record
 from ufdr_parser.scan import find_decoded_data
 from ufdr_parser.source_lookup import SourceEntry, parse_extra_info
 
@@ -114,15 +118,71 @@ class BlockRangeReader:
 
 
 def iter_block_models(stream: BinaryIO) -> "Iterator[FlatRecord]":
-    """Yield FlatRecords for the top-level models in one wrapped modelType block stream."""
+    """Yield FlatRecords for the models in one wrapped modelType block stream."""
     context = etree.iterparse(stream, events=("end",), recover=True, huge_tree=True)
     for _event, elem in context:
-        if elem.tag != TAG_MODEL:
-            continue
-        parent = elem.getparent()
-        if parent is not None and _local(parent.tag) == LOCAL_MODEL_TYPE:
-            yield from flatten_model(elem, level=LEVEL_TOP)
-            _purge(elem)
+        if elem.tag == TAG_MODEL:
+            in_chain, record = _model_record(elem)
+            if record is not None:
+                yield record
+            if in_chain:
+                _purge(elem)
+
+
+_MODEL_CONTAINERS = (LOCAL_MODEL_FIELD, LOCAL_MULTI_MODEL_FIELD)
+
+
+def _model_record(elem: "etree._Element") -> tuple[bool, FlatRecord | None]:
+    """``(in_chain, record)`` for a model at its OWN end tag.
+
+    ``in_chain`` says the model hangs off a top-level model through the decomposition chain
+    (so nothing else reads it once its record is built, and it can be freed); ``record`` is
+    None when the model is outside the chain or deeper than the decomposition goes.
+
+    HOW: walk up from the model through the ``model -> modelField|multiModelField -> model``
+    chain to the top-level model (whose parent is a ``<modelType>``); the chain length is the
+    level, the nearest model is the parent and the outermost the top. A model reached any other
+    way yields no record and is NOT freed (it stays inside its ancestor, read by nothing, and
+    is freed with it, as before); one deeper than LEVEL_SUBSUB is freed without a record —
+    exactly the models the recursive ``models.flatten_model`` would visit, same values.
+    WHY at the model's own end tag: the alternative — flattening a top-level model's whole
+    subtree when IT ends — keeps that subtree in memory and then frees it in one ``clear()``.
+    For one huge model (a chat with 100,000 messages) lxml's clear repairs namespace references
+    node by node (moveNodeToDocument / _fixCNs) in a way that grows far faster than the
+    subtree: over ten minutes of one core inside C, holding the GIL — no progress, no error,
+    and a frozen GUI. Emitting and freeing every model as soon as it ends keeps each subtree
+    tiny. Row content and per-(level, type) order are unchanged: a nested row is now emitted
+    before its parent's, but rows are grouped by (level, type) and stay in document order.
+    """
+    ancestors: list["etree._Element"] = []  # model ancestors, nearest first
+    node = elem
+    while True:
+        container = node.getparent()
+        if container is None:
+            return False, None
+        local = _local(container.tag)
+        if local == LOCAL_MODEL_TYPE:
+            break
+        if local not in _MODEL_CONTAINERS:
+            return False, None
+        owner = container.getparent()
+        if owner is None or _local(owner.tag) != LOCAL_MODEL:
+            return False, None
+        ancestors.append(owner)
+        node = owner
+    level = len(ancestors)
+    if level > LEVEL_SUBSUB:
+        return True, None  # parity with the three-level decomposition: deeper models are omitted
+    if level == LEVEL_TOP:
+        return True, build_record(elem, level=LEVEL_TOP)
+    top = ancestors[-1]
+    return True, build_record(
+        elem,
+        level=level,
+        parent_id=ancestors[0].get("id"),
+        top_type=top.get("type") or "",
+        top_id=top.get("id"),
+    )
 
 
 def _skip_to_decoded_data(stream: BinaryIO) -> BinaryIO:
@@ -174,11 +234,11 @@ def iter_items(stream: BinaryIO) -> Iterator[Item]:
     for _event, elem in context:
         tag = elem.tag
         if tag == TAG_MODEL:
-            parent = elem.getparent()
-            # Only flatten top-level models; nested models are handled within the
-            # parent's subtree, so their (earlier) end events are ignored here.
-            if parent is not None and _local(parent.tag) == LOCAL_MODEL_TYPE:
-                yield from flatten_model(elem, level=LEVEL_TOP)
+            # Every model is emitted (and freed) at its own end tag; see _model_record.
+            in_chain, record = _model_record(elem)
+            if record is not None:
+                yield record
+            if in_chain:
                 _purge(elem)
         elif tag == TAG_EXTRA_INFO:
             entry = parse_extra_info(elem)

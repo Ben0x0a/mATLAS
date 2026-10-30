@@ -1,6 +1,7 @@
 """Flatten one decoded ``<model>`` element into level-tagged records.
 
-Defines:    FlatRecord (one emitted row) and flatten_model (recursive level logic).
+Defines:    FlatRecord (one emitted row), build_record (one model's own row) and
+            flatten_model (recursive level logic over a whole subtree).
 Used by:    reader (per top-level model) and the tests.
 Depends on: const (tag names + levels), lxml element API.
 
@@ -97,6 +98,40 @@ def _timestamp_offset(field_elem: "etree._Element") -> tuple[bool, str | None]:
     return True, (MULTI_VALUE_SEPARATOR.join(offsets) if any(offsets) else None)
 
 
+def build_record(
+    elem: "etree._Element",
+    *,
+    level: int = LEVEL_TOP,
+    parent_id: str | None = None,
+    top_type: str | None = None,
+    top_id: str | None = None,
+) -> FlatRecord:
+    """The record for ``elem`` alone: its own direct ``<field>`` children, nothing nested."""
+    model_type = elem.get("type") or ""
+    model_id = elem.get("id")
+    fields: dict[str, str | None] = {}
+    for child in elem:
+        if _local(child.tag) == "field":
+            name = child.get("name")
+            if name is not None:
+                fields[name] = _field_value(child)
+                is_timestamp, offset = _timestamp_offset(child)
+                if is_timestamp:
+                    # The column exists for every time field, blank when no offset is stated.
+                    fields[f"{name}{TIMESTAMP_OFFSET_SUFFIX}"] = offset
+    return FlatRecord(
+        level=level,
+        model_type=model_type,
+        # At the top level the model IS its own tree root; children inherit the same top id
+        # so every nested row can resolve the source keyed under the top-level model.
+        top_type=top_type if top_type is not None else model_type,
+        top_id=top_id if top_id is not None else model_id,
+        model_id=model_id,
+        parent_id=parent_id,
+        fields=fields,
+    )
+
+
 def flatten_model(
     elem: "etree._Element",
     *,
@@ -105,40 +140,23 @@ def flatten_model(
     top_type: str | None = None,
     top_id: str | None = None,
 ) -> Iterator[FlatRecord]:
-    """Yield the record for ``elem`` then, depth-first, its child/grandchild models."""
-    model_type = elem.get("type") or ""
-    model_id = elem.get("id")
-    effective_top = top_type if top_type is not None else model_type
-    # At the top level the model IS its own tree root; children inherit the same top id so
-    # every nested row can resolve the source keyed under the top-level model.
-    effective_top_id = top_id if top_id is not None else model_id
+    """Yield the record for ``elem`` then, depth-first, its child/grandchild models.
 
-    fields: dict[str, str | None] = {}
-    child_models: list["etree._Element"] = []
-    for child in elem:
-        local = _local(child.tag)
-        if local == "field":
-            name = child.get("name")
-            if name is not None:
-                fields[name] = _field_value(child)
-                is_timestamp, offset = _timestamp_offset(child)
-                if is_timestamp:
-                    # The column exists for every time field, blank when no offset is stated.
-                    fields[f"{name}{TIMESTAMP_OFFSET_SUFFIX}"] = offset
-        elif local in (LOCAL_MODEL_FIELD, LOCAL_MULTI_MODEL_FIELD):
-            child_models.extend(
-                sub for sub in child if _local(sub.tag) == LOCAL_MODEL
-            )
-
-    yield FlatRecord(
-        level=level,
-        model_type=model_type,
-        top_type=effective_top,
-        top_id=effective_top_id,
-        model_id=model_id,
-        parent_id=parent_id,
-        fields=fields,
-    )
+    Works on a COMPLETE subtree. The streaming reader does not use it (it builds each record
+    with ``build_record`` at the model's own end tag, see reader.iter_items); it is kept as
+    the reference definition of the decomposition the reader must reproduce.
+    """
+    record = build_record(elem, level=level, parent_id=parent_id, top_type=top_type, top_id=top_id)
+    yield record
+    model_id = record.model_id
+    effective_top, effective_top_id = record.top_type, record.top_id
+    child_models = [
+        sub
+        for child in elem
+        if _local(child.tag) in (LOCAL_MODEL_FIELD, LOCAL_MULTI_MODEL_FIELD)
+        for sub in child
+        if _local(sub.tag) == LOCAL_MODEL
+    ]
 
     # Recurse only down to the grandchild level (parity with the legacy three-level
     # decomposition); deeper nesting is left on the parent's row by omission.

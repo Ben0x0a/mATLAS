@@ -59,6 +59,7 @@ from gui.widgets.checkable_menu import CheckableMenu
 from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
 from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler, remove_gui_log_handler
+from model_atlas.app.config import get_settings
 from model_atlas.app.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
 from model_atlas.export.registry import available_exporters, load_builtin_exporters
 from model_atlas.ingest.writer import is_matlas_run_db
@@ -997,7 +998,14 @@ class MainController(QObject):
             # Lazy import: the UFDR parser and its streaming readers load only when a dump is
             # actually run, keeping normal GUI start-up light (the codebase's ufdr convention).
             from ufdr_parser.dump import run_dump
-            return run_dump(source_path, output_path)
+
+            workers = get_settings().ufdr_dump
+            return run_dump(
+                source_path,
+                output_path,
+                parse_workers=workers.parse_workers,
+                workers=workers.write_workers,
+            )
 
         # A bound method of this QObject, NOT a lambda: PySide6 runs a plain callable connected
         # to the worker's signal on the WORKER thread, so a lambda here touched the widgets and

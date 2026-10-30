@@ -55,3 +55,11 @@ max_head        = 3                # DataFrame/Series head rows captured (never 
 max_depth       = 3                # recursion depth before a value degrades to a shallow repr
 max_frame_bytes = 65536            # per-frame locals byte budget; further locals are dropped past it
 capture_env     = false            # include os.environ (redacted) — off by default (holds secrets)
+
+[ufdr_dump]
+# Worker processes for the GUI's "Dump full UFDR" mode (the ufdr-parser CLI has its own
+# --parse-workers / --workers options). parse_workers > 1 parses the report one model type
+# per process — faster on many cores, and the heavy work stays out of the GUI process. A
+# compressed (DEFLATE) .ufdr is first extracted once to a temporary report.xml for this.
+parse_workers = 5
+write_workers = 1
