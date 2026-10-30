@@ -463,7 +463,8 @@ IDENTIFIERS = SheetDoc(
 _CDR_BLANK = "Not available from a Cellebrite report; left blank (legacy CDR layout)."
 CDR_IMPORTER = SheetDoc(
     "CDRImporter",
-    "One sender -> recipient pair: a communication with N recipients gives N rows (one row, B blank, when it has none).",
+    "One communication (call, email, instant message or chat message): one row per event, "
+    "whatever its number of recipients.",
     (
         _tool("A_MSISDN", "Sender identifier(s); the sender's name when the report gives no identifier.", field="sender_keys", fixed_name=True),
         _tool("A_IMEI", _CDR_BLANK, fixed_name=True),
@@ -473,7 +474,10 @@ CDR_IMPORTER = SheetDoc(
         _tool("Type2", "Call direction, as stated by the report (blank for messages).", field="direction", fixed_name=True),
         _tool("DateTime", "TimeStamp verbatim from the report.", field="timestamp", fixed_name=True),
         _tool("Duration", "Call duration, as stated by the report.", field="duration", fixed_name=True),
-        _tool("B_MSISDN", "ONE recipient identifier (stated or inferred, see B_basis); its name when it has no identifier.", fixed_name=True),
+        _tool("B_MSISDN", "Recipient identifier(s) (stated or inferred, see B_basis), several joined with "
+              f"'{MULTI_VALUE_SEPARATOR}'; a recipient's name when it has no identifier. For a group "
+              "chat message: the group — the chat's Id field, else its name, else its record id.",
+              fixed_name=True),
         _tool("B_IMEI", _CDR_BLANK, fixed_name=True),
         _tool("B_IMSI", _CDR_BLANK, fixed_name=True),
         _tool("B_IP", _CDR_BLANK, fixed_name=True),
@@ -491,12 +495,17 @@ CDR_IMPORTER = SheetDoc(
         _tool("end_Cell-ID", _CDR_BLANK, fixed_name=True),
         _tool("end_CellBeam", _CDR_BLANK, fixed_name=True),
         _tool("DateTime offset", _OFFSET_MEANING.replace("TimeStamp", "DateTime"), field="timestamp_offset"),
-        _tool("B_basis", "Where B_MSISDN comes from: same values as To basis.", field="to_basis"),
+        _tool("B_basis", "Where B_MSISDN comes from: same values as To basis; for a group message, also "
+              "'group chat (N recipients, listed on the Messages sheet)'."),
         Column("Source", "The communication's Source field, verbatim.", field="source"),
         *PROVENANCE_COLUMNS,
     ),
     (
         "The same communications as the Communications sheet, in the legacy CDR import layout.",
+        "One row per event: unlike the legacy tool (which repeated a call per sender x recipient "
+        "pair), several recipients share one row. A chat message with more than one recipient (a "
+        "group message) has the group as B_MSISDN; the members are in the To cell of the Messages "
+        "sheet.",
         "Identifiers are verbatim: unlike the legacy tool, the leading + is kept and blank A/B "
         "numbers are NOT filled with a target id.",
         "The columns after end_CellBeam (offset, basis, provenance) can be ignored by the importer.",

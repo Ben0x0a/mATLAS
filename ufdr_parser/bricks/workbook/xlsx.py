@@ -20,7 +20,9 @@ and reported on the About sheet.
 """
 from __future__ import annotations
 
+import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -29,6 +31,14 @@ from openpyxl.cell import WriteOnlyCell
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
+
+log = logging.getLogger(__name__)
+
+# A progress line per sheet at most this often, checking the clock every _PROGRESS_CHECK_EVERY
+# rows. WHY: a sheet of millions of rows takes minutes and logged nothing until done, so the
+# workbook phase looked frozen.
+_PROGRESS_INTERVAL_S = 10.0
+_PROGRESS_CHECK_EVERY = 5000
 
 # Excel's hard limits (Excel specifications and limits; .xlsx format).
 EXCEL_MAX_ROWS = 1_048_576
@@ -104,6 +114,7 @@ class SheetWriter:
     _sheet: object = None
     _rows_in_sheet: int = 0
     _widths: list[int] = field(default_factory=list)  # mutable default — one list per writer
+    _last_logged: float = field(default_factory=time.monotonic)
 
     def _new_sheet(self) -> None:
         self._finish_sheet()
@@ -142,6 +153,9 @@ class SheetWriter:
         self._sheet.append([text_cell(self._sheet, value, self.stats) for value in values])
         self._rows_in_sheet += 1
         self.row_count += 1
+        if self.row_count % _PROGRESS_CHECK_EVERY == 0 and time.monotonic() - self._last_logged >= _PROGRESS_INTERVAL_S:
+            self._last_logged = time.monotonic()
+            log.info(f"Writing workbook sheet {self.name}: {self.row_count} row(s) so far")
 
     def close(self) -> None:
         if self._sheet is None:

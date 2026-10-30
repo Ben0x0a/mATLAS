@@ -99,6 +99,7 @@ def build_workbook(output: DumpOutput) -> Path:
         _write_about(about, output, written, stats)
 
         partial = target.with_name(f".{target.name}.partial")
+        log.info(f"Saving the workbook ({sum(w.row_count for _s, w in written)} row(s)) to {target}")
         workbook.save(partial)
         os.replace(partial, target)
         return target

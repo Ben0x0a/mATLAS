@@ -299,15 +299,16 @@ def test_calls_emails_and_unified(workbook: Path) -> None:
     ]
 
 
-def test_cdr_one_row_per_recipient(workbook: Path) -> None:
+def test_cdr_one_row_per_event(workbook: Path) -> None:
     rows = _sheet(workbook, "CDRImporter")
-    by_record: dict[str, list] = {}
-    for row in rows:
-        by_record.setdefault(row["Record uuid"], []).append(row)
-    assert [r["B_MSISDN"] for r in by_record["m1"]] == ["+41790000002"]
-    assert by_record["m1"][0]["B_basis"] == "inferred from chat participants"
-    assert [r["B_MSISDN"] for r in by_record["m3"]] == [None]
-    assert by_record["call1"][0]["Type2"] == "Outgoing"
+    ids = [row["Record uuid"] for row in rows]
+    assert len(ids) == len(set(ids)) == len(_sheet(workbook, "Communications"))  # one row per event
+    by_record = {row["Record uuid"]: row for row in rows}
+    assert by_record["m1"]["B_MSISDN"] == "+41790000002"
+    assert by_record["m1"]["B_basis"] == "inferred from chat participants"
+    assert by_record["m3"]["B_MSISDN"] is None and by_record["m3"]["B_basis"] == "not stated"
+    assert by_record["call1"]["Type2"] == "Outgoing"
+    assert by_record["mail1"]["B_MSISDN"] == "b@x.ch"  # Cc is not a recipient in B
 
 
 def test_identifiers_contacts_locations(workbook: Path) -> None:
@@ -454,3 +455,32 @@ def test_locations_all_position_types(workbook: Path) -> None:
     assert by_id["s1"]["Value"] == "lake geneva" and by_id["s1"]["Latitude"] is None
     # An unconfigured type is listed only for its records that carry a coordinate.
     assert "sm2" not in by_id
+
+
+def test_cdr_group_message_is_one_row(tmp_path: Path) -> None:
+    """A chat message with several recipients gives ONE CDR row naming the group, not one per
+    member (per-member rows multiplied group messages by the group size)."""
+    members = "".join(_party(f"gp{i}", f"+4179000010{i}", "General") for i in range(4))
+    group = f"""<?xml version="1.0" encoding="utf-8"?>
+<project xmlns="{NS}"><decodedData><modelType type="Chat">
+  <model type="Chat" id="g1">
+    <field name="Id" type="String"><value type="String"><![CDATA[120363@g.us]]></value></field>
+    <field name="Name" type="String"><value type="String"><![CDATA[Team]]></value></field>
+    <multiModelField name="Participants" type="Party">{members}</multiModelField>
+    <multiModelField name="Messages" type="InstantMessage">
+      {_message("gm1", "2025-02-01T10:00:00.000+00:00", "inferred", _party("gs1", "+41790000100", "From"))}
+      {_message("gm2", "2025-02-01T10:01:00.000+00:00", "stated", _party("gs2", "+41790000101", "From") + _party("gt1", "+41790000102", "To") + _party("gt2", "+41790000103", "To"))}
+    </multiModelField>
+  </model>
+</modelType></decodedData><extraInfos /></project>
+"""
+    path = tmp_path / "group.xml"
+    path.write_text(group, encoding="utf-8")
+    run_dump(path, tmp_path / "out")
+    rows = _sheet(tmp_path / "out" / "group_combined.xlsx", "CDRImporter")
+    assert [(r["Record uuid"], r["B_MSISDN"]) for r in rows] == [("gm1", "120363@g.us"), ("gm2", "120363@g.us")]
+    assert rows[0]["B_basis"].startswith("inferred from chat participants; group chat (3 recipients")
+    assert rows[1]["B_basis"].startswith("stated; group chat (2 recipients")
+    # The members themselves stay on the Messages sheet.
+    message = next(r for r in _sheet(tmp_path / "out" / "group_combined.xlsx", "Messages") if r["Record uuid"] == "gm1")
+    assert message["To"].count("+4179000010") == 3

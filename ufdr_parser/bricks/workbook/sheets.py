@@ -30,6 +30,7 @@ from ufdr_parser.bricks.workbook.comms import (
     CATEGORY_INSTANT_MESSAGE,
     CHAT_TYPE_NAME,
     COMM_SOURCES,
+    TIME_ORDER_SQL,
     TIMESTAMP_FIELD_NAME,
 )
 from ufdr_parser.bricks.workbook.config import (
@@ -153,7 +154,7 @@ def _raw_row(conn: sqlite3.Connection, table_name: str, seq: int) -> dict[str, o
 
 # ------------------------------------------------------------------ communication sheets
 
-_TIME_ORDER = "timestamp IS NULL, timestamp, seq"
+_TIME_ORDER = TIME_ORDER_SQL
 # Raw fields a curated column already shows (raw field, comm field), not repeated in the block.
 _SHOWN_RAW = (
     (TIMESTAMP_FIELD_NAME, "timestamp"),
@@ -197,9 +198,11 @@ def _comm_sheet(ctx: Context, doc: SheetDoc, categories: tuple[str, ...], order_
     placeholders = ", ".join("?" for _ in present)
 
     def rows() -> Iterator[list[object]]:
+        # The per-chat window (Messages' grouping) sorts a copy of every row, so it is only
+        # computed for the sheet that orders by it; the others read the time index directly.
+        window = ", MIN(seq) OVER (PARTITION BY chat_id) AS chat_order" if "chat_order" in order_sql else ""
         cursor = conn.cursor().execute(
-            "SELECT *, MIN(seq) OVER (PARTITION BY chat_id) AS chat_order FROM comm "
-            f"WHERE category IN ({placeholders}) ORDER BY {order_sql}",
+            f"SELECT *{window} FROM comm WHERE category IN ({placeholders}) ORDER BY {order_sql}",
             present,
         )
         for comm in _dict_rows(cursor):
@@ -251,13 +254,12 @@ def cdr_importer(ctx: Context) -> Sheet | None:
 
     def rows() -> Iterator[list[object]]:
         cursor = conn.cursor().execute(
-            "SELECT c.*, r.key AS b_key FROM comm AS c "
-            "LEFT JOIN recipient AS r ON r.comm_seq = c.seq "
-            "ORDER BY c.timestamp IS NULL, c.timestamp, c.seq, r.rowid"
+            f"SELECT * FROM comm ORDER BY {TIME_ORDER_SQL}"
         )
         for comm in _dict_rows(cursor):
             values = {name: comm[comm_field] for name, comm_field in fields}
-            values["B_MSISDN"] = comm["b_key"]
+            values["B_MSISDN"] = comm["cdr_b"]
+            values["B_basis"] = comm["cdr_b_basis"]
             values["Comment"] = comm["body"] or comm["subject"]
             values.update(_provenance(comm["record_id"], comm))
             yield _align(header, values)

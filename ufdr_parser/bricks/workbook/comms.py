@@ -1,4 +1,4 @@
-"""Resolve every communication once into a staged ``comm`` table (plus its ``recipient`` rows).
+"""Resolve every communication once into a staged ``comm`` table.
 
 Defines:    the communication categories, COMM_FIELDS, CommSource (where one category's records
             live) and build_comm_tables.
@@ -46,7 +46,16 @@ CATEGORY_INSTANT_MESSAGE = "Instant message"
 CATEGORY_CHAT_MESSAGE = "Chat message"
 
 CHAT_TYPE_NAME = "Chat"
+# The chat's own identifier field (e.g. a WhatsApp group id), used as the CDR "B" of a group.
+CHAT_ID_FIELD_NAME = "Id"
 TIMESTAMP_FIELD_NAME = "TimeStamp"
+# The one time order of the comm table, shared by its index and the sheets reading it.
+TIME_ORDER_SQL = "timestamp IS NULL, timestamp, seq"
+# CDR B_basis of a group message (its B_MSISDN is the group). WHY the group rather than every
+# member: one CDR row per member multiplied a group's messages by its size (2,000 messages in a
+# 200-member group = 398,000 rows); real reports reached tens of millions of rows, hours of
+# writing and a temporary sort that filled the disk.
+GROUP_BASIS = "{basis}; group chat ({count} recipients, listed on the Messages sheet)"
 
 # Resolved per-communication fields, in ``comm`` column order (after seq / table / row_seq).
 COMM_FIELDS = (
@@ -73,6 +82,8 @@ COMM_FIELDS = (
     "others",
     "participants",
     "attachments",
+    "cdr_b",
+    "cdr_b_basis",
 ) + SOURCE_COLUMNS + TRACE_COLUMNS
 
 
@@ -104,6 +115,7 @@ def _base_select(source: CommSource, table: Table, chat: Table | None) -> str:
         chat.col("Name", "c") if is_chat else "NULL",
         chat.col("ChatType", "c") if is_chat else "NULL",
         chat.col("Source", "c") if is_chat else "NULL",
+        chat.col(CHAT_ID_FIELD_NAME, "c") if is_chat else "NULL",
         table.col(TIMESTAMP_FIELD_NAME, "m"),
         table.col(TIMESTAMP_FIELD_NAME + TIMESTAMP_OFFSET_SUFFIX, "m"),
         table.col("Source", "m"),  # verbatim: no fallback to SourceApplication or the chat
@@ -123,15 +135,12 @@ def _base_select(source: CommSource, table: Table, chat: Table | None) -> str:
 
 
 def build_comm_tables(staging: Staging, links: Links) -> dict[str, list[str]]:
-    """Create and fill ``comm`` and ``recipient``; return {category: [csv file names used]}."""
+    """Create and fill ``comm``; return {category: [csv file names used]}."""
     conn = staging.conn
     conn.execute(
         "CREATE TABLE comm (seq INTEGER PRIMARY KEY, raw_table TEXT, row_seq INTEGER, "
         + ", ".join(f"{quote(name)} TEXT" for name in COMM_FIELDS)
         + ")"
-    )
-    conn.execute(
-        "CREATE TABLE recipient (comm_seq INTEGER, identifier TEXT, key TEXT, label TEXT, basis TEXT)"
     )
     insert = (
         f"INSERT INTO comm (raw_table, row_seq, {', '.join(quote(n) for n in COMM_FIELDS)}) "
@@ -159,9 +168,16 @@ def build_comm_tables(staging: Staging, links: Links) -> dict[str, list[str]]:
                     participants_cache = (chat_id, links.parties(chat_id))
                 participants = participants_cache[1]
             view = resolve_parties(links.parties(record_id), participants)
-            (chat_name, chat_type, chat_source, timestamp, offset, app, direction, status,
-             subject, body, duration, *trace) = rest
-            cursor = conn.execute(
+            (chat_name, chat_type, chat_source, chat_key, timestamp, offset, app, direction,
+             status, subject, body, duration, *trace) = rest
+            if source.category == CATEGORY_CHAT_MESSAGE and len(view.recipients) > 1:
+                # A group message: its CDR recipient is the GROUP, not a list of every member
+                # (the members stay in the To cell of the Messages / Communications sheets).
+                cdr_b = chat_key or chat_name or chat_id
+                cdr_b_basis = GROUP_BASIS.format(basis=view.to_basis, count=len(view.recipients))
+            else:
+                cdr_b, cdr_b_basis = join_keys(view.recipients), view.to_basis
+            conn.execute(
                 insert,
                 (
                     table.name,
@@ -189,16 +205,13 @@ def build_comm_tables(staging: Staging, links: Links) -> dict[str, list[str]]:
                     join_others(view.others),
                     join_labels(view.participants),
                     links.attachments(record_id),
+                    cdr_b,
+                    cdr_b_basis,
                     *trace,
                 ),
             )
-            conn.executemany(
-                "INSERT INTO recipient VALUES (?, ?, ?, ?, ?)",
-                [
-                    (cursor.lastrowid, party.identifier, party.key(), party.label(), view.to_basis)
-                    for party in view.recipients
-                ],
-            )
     conn.execute("CREATE INDEX ix_comm_record ON comm(record_id)")
-    conn.execute("CREATE INDEX ix_recipient_comm ON recipient(comm_seq)")
+    # Serves the time-ordered reads (Communications, Calls, Emails, CDRImporter) from the index
+    # instead of a temporary sort holding a copy of every row (bodies included).
+    conn.execute(f"CREATE INDEX ix_comm_time ON comm({TIME_ORDER_SQL})")
     return used
