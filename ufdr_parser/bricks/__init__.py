@@ -12,6 +12,7 @@ from ufdr_parser.bricks.base import (
     DumpOutput,
     registered_bricks,
     run_bricks,
+    validate_bricks,
 )
 
-__all__ = ["BrickResult", "DumpOutput", "registered_bricks", "run_bricks"]
+__all__ = ["BrickResult", "DumpOutput", "registered_bricks", "run_bricks", "validate_bricks"]

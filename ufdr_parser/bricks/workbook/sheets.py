@@ -17,7 +17,6 @@ inference, both described on the Documentation sheet.
 from __future__ import annotations
 
 import csv
-import re
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,18 +27,11 @@ from ufdr_parser.bricks.workbook.comms import (
     CATEGORY_CHAT_MESSAGE,
     CATEGORY_EMAIL,
     CATEGORY_INSTANT_MESSAGE,
-    CHAT_TYPE_NAME,
     COMM_SOURCES,
     TIME_ORDER_SQL,
     TIMESTAMP_FIELD_NAME,
 )
-from ufdr_parser.bricks.workbook.config import (
-    CONTACT_APP_COLUMNS,
-    CONTACT_EMAIL_COLNAME,
-    CONTACT_OTHER_IDS_COLNAME,
-    CONTACT_PHONE_COLNAME,
-    LOCATION_RECORD_TYPES,
-)
+from ufdr_parser.bricks.workbook.config import WorkbookConfig, load_workbook_config
 from ufdr_parser.bricks.workbook.documentation import (
     ADDRESS_PREFIX,
     BLOCK_ADDRESS,
@@ -50,7 +42,6 @@ from ufdr_parser.bricks.workbook.documentation import (
     CALLS,
     CDR_IMPORTER,
     COMMUNICATIONS,
-    CONTACT_CHILD_COLUMNS,
     CONTACTS,
     COORDINATE_PREFIX,
     EMAILS,
@@ -64,10 +55,11 @@ from ufdr_parser.bricks.workbook.documentation import (
     SheetDoc,
     expand_header,
 )
-from ufdr_parser.bricks.workbook.links import PARTY_TYPE_NAME, ROLE_FROM, ROLE_TO, Links
+from ufdr_parser.bricks.workbook.links import PARTY_TYPE_NAME, Links
 from ufdr_parser.bricks.workbook.staging import Staging, Table, quote
 from ufdr_parser.const import (
     COL_MAIN_UUID,
+    COL_SOURCE_PATH,
     COL_SUB_UUID,
     COL_UUID,
     LEVEL_FILE_PREFIX,
@@ -110,6 +102,8 @@ class Context:
     comm_files: dict[str, list[str]] = field(default_factory=dict)  # mutable default — per instance
     # The dump's report header CSV (see ufdr_parser.report_info); None if not written.
     report_info_path: Path | None = None
+    # The active ufdr_config.toml (sheets, contact children, location types, identifier sources).
+    config: WorkbookConfig = field(default_factory=lambda: load_workbook_config())
 
 
 # --------------------------------------------------------------------------- shared helpers
@@ -268,103 +262,68 @@ def cdr_importer(ctx: Context) -> Sheet | None:
     return Sheet(CDR_IMPORTER, header, display, files + _party_files(ctx), rows())
 
 
-# ------------------------------------------------------------------ identifiers (legacy)
+# ------------------------------------------------------------------ identifiers
+
+_BATCH = 5000
 
 
 def identifiers(ctx: Context) -> Sheet | None:
+    """Every identifier read from the configured sources, counted per (kind, source file, CSV).
+
+    HOW: for each ``[[identifiers]]`` source, every dumped group of its model (whatever the
+    nesting level) is read for the configured field (records failing ``only`` are skipped) and
+    staged as (identifier, kind, source_path, CSV); the sheet is that table grouped and
+    counted. Values are verbatim: no normalisation, so two spellings of a number stay two rows.
+    """
     conn = ctx.staging.conn
-    if not conn.execute("SELECT 1 FROM party LIMIT 1").fetchone():
-        return None
-    # Kind of record each party hangs off: a communication (from comm), a chat (participant),
-    # or any other top-level type the dump saw with Party children (Notification, ...).
-    conn.execute("CREATE TABLE parent_kind (id TEXT PRIMARY KEY, kind TEXT, app TEXT, ts TEXT)")
-    conn.execute(
-        "INSERT OR IGNORE INTO parent_kind SELECT record_id, category, source, timestamp FROM comm"
-    )
-    other_types = sorted({top for child, top in ctx.relations if child == PARTY_TYPE_NAME})
-    for model_type in [CHAT_TYPE_NAME] + [t for t in other_types if t != CHAT_TYPE_NAME]:
-        table = ctx.staging.table(LEVEL_TOP, model_type)
-        if table is None:
-            continue
-        kind = "Chat (participant)" if model_type == CHAT_TYPE_NAME else model_type
-        conn.execute(
-            f"INSERT OR IGNORE INTO parent_kind SELECT {quote(COL_UUID)}, ?, "
-            f"{table.col('Source')}, {table.col(TIMESTAMP_FIELD_NAME)} FROM {table.name}",
-            (kind,),
-        )
     header, display, _renames = expand_header(IDENTIFIERS, {})
+    conn.execute("CREATE TABLE ident (identifier TEXT, kind TEXT, source_file TEXT, csv TEXT)")
+    used: list[str] = []
+    for source in ctx.config.identifiers:
+        for level, model_type in ctx.staging.groups():
+            if model_type != source.model:
+                continue
+            table = ctx.staging.table(level, model_type)
+            if table is None or not table.has(source.field):
+                continue
+            csv_name = ctx.staging.csv_name(level, model_type)
+            used.append(csv_name)
+            # A filter field the CSV lacks reads as NULL, so ``only`` then rejects the record.
+            fields = list(dict.fromkeys([source.field, *source.only, *([source.kind_field] if source.kind_field else [])]))
+            select = ", ".join(table.col(name) for name in fields + [COL_SOURCE_PATH])
+            batch: list[tuple] = []
+            cursor = conn.cursor().execute(
+                f"SELECT {select} FROM {table.name} WHERE {quote(source.field)} IS NOT NULL ORDER BY seq"
+            )
+            for row in cursor:
+                record = dict(zip(fields, row[:-1]))
+                if source.accepts(record):
+                    batch.append((record[source.field], source.kind_of(record), row[-1], csv_name))
+                if len(batch) >= _BATCH:
+                    conn.executemany("INSERT INTO ident VALUES (?, ?, ?, ?)", batch)
+                    batch.clear()
+            conn.executemany("INSERT INTO ident VALUES (?, ?, ?, ?)", batch)
 
     def rows() -> Iterator[list[object]]:
         cursor = conn.cursor().execute(
-            "SELECT p.c0, p.c1, p.c2, p.c3, k.kind, k.app, k.ts FROM party AS p "
-            "LEFT JOIN parent_kind AS k ON k.id = p.parent_id "
-            "WHERE p.c0 IS NOT NULL ORDER BY p.c0, p.seq"
+            "SELECT identifier, kind, source_file, csv, COUNT(*) FROM ident "
+            "GROUP BY identifier, kind, source_file, csv ORDER BY identifier, kind, source_file, csv"
         )
-        current: str | None = None
-        acc: dict = {}
-        for ident, name, role, owner, kind, app, ts in cursor:
-            if ident != current:
-                if current is not None:
-                    yield _align(header, _identifier_row(current, acc))
-                current, acc = ident, {"names": {}, "owner": False, "n": 0, "roles": {}, "kinds": {}, "apps": {}, "ts": []}
-            acc["n"] += 1
-            if name:
-                acc["names"].setdefault(name, None)
-            acc["owner"] |= (owner or "").lower() == "true"
-            acc["roles"][role or "no role"] = acc["roles"].get(role or "no role", 0) + 1
-            acc["kinds"][kind or "other"] = acc["kinds"].get(kind or "other", 0) + 1
-            if app:
-                acc["apps"].setdefault(app, None)
-            if ts:
-                acc["ts"].append(ts)
-        if current is not None:
-            yield _align(header, _identifier_row(current, acc))
+        for identifier, kind, source_file, csv_name, count in cursor:
+            yield _align(header, {
+                "Identifier": identifier,
+                "Kind": kind,
+                "Source file": source_file,
+                "CSV file": csv_name,
+                "Occurrences": str(count),
+            })
 
-    return Sheet(IDENTIFIERS, header, display, _party_files(ctx), rows())
-
-
-def _counts(counter: dict[str, int]) -> str | None:
-    return MULTI_VALUE_SEPARATOR.join(f"{key} x{value}" for key, value in sorted(counter.items())) or None
-
-
-def _identifier_row(identifier: str, acc: dict) -> dict[str, object]:
-    roles = acc["roles"]
-    others = {role: count for role, count in roles.items() if role not in (ROLE_FROM, ROLE_TO)}
-    return {
-        "Identifier": identifier,
-        "Names": MULTI_VALUE_SEPARATOR.join(acc["names"]) or None,
-        "Flagged as phone owner": "yes" if acc["owner"] else None,
-        "Occurrences": str(acc["n"]),
-        "As sender": str(roles.get(ROLE_FROM, 0)),
-        "As recipient": str(roles.get(ROLE_TO, 0)),
-        "Other roles": _counts(others),
-        "Seen in": _counts(acc["kinds"]),
-        "Sources": MULTI_VALUE_SEPARATOR.join(acc["apps"]) or None,
-        "First seen": min(acc["ts"]) if acc["ts"] else None,
-        "Last seen": max(acc["ts"]) if acc["ts"] else None,
-    }
+    return Sheet(IDENTIFIERS, header, display, list(dict.fromkeys(used)), rows())
 
 
 # ------------------------------------------------------------------ contacts & locations
 
-_ADDRESS_PARTS = ("Street1", "Street2", "HouseNumber", "PostalCode", "City", "State", "Country", "Neighborhood")
-
-
-def describe_child(model_type: str, row: dict[str, object]) -> str | None:
-    """One child model as text: ``Category: Value``, an address line, ``Key: Value``..."""
-    if model_type == "StreetAddress":
-        parts = [str(row[p]) for p in _ADDRESS_PARTS if row.get(p)]
-        return ", ".join(parts) or None
-    if model_type == "KeyValueModel" and row.get("Key"):
-        return f"{row['Key']}: {row.get('Value') or ''}"
-    if row.get("Value"):
-        return f"{row['Category']}: {row['Value']}" if row.get("Category") else str(row["Value"])
-    pairs = [
-        f"{key}={value}"
-        for key, value in row.items()
-        if value and key not in _META_COLUMNS and key != "seq"
-    ]
-    return ", ".join(pairs) or None
+_CONTACT_TYPE_NAME = "Contact"
 
 
 def _children(conn: sqlite3.Connection, table: Table, parent_id: object) -> list[dict[str, object]]:
@@ -374,92 +333,63 @@ def _children(conn: sqlite3.Connection, table: Table, parent_id: object) -> list
     return list(_dict_rows(cursor))
 
 
-def _joined_children(conn: sqlite3.Connection, model_type: str, table: Table | None, parent_id: object) -> str | None:
-    if table is None:
-        return None
-    texts = [t for t in (describe_child(model_type, r) for r in _children(conn, table, parent_id)) if t]
-    return MULTI_VALUE_SEPARATOR.join(texts) or None
-
-
-# Contact child types that carry identifiers, spread over the identifier columns.
-_PHONE_TYPE_NAME = "PhoneNumber"
-_EMAIL_TYPE_NAME = "EmailAddress"
-_USER_ID_TYPE_NAME = "UserID"
-_IDENTIFIER_TYPES = (_PHONE_TYPE_NAME, _EMAIL_TYPE_NAME, _USER_ID_TYPE_NAME)
-_APP_PATTERNS = tuple(
-    (header, re.compile(rf"\b(?:{pattern})\b", re.IGNORECASE)) for header, pattern in CONTACT_APP_COLUMNS
-)
-
-
-def classify_identifier(category: object, contact_source: object) -> str:
-    """The Contacts column a UserID entry belongs to (see workbook.config).
-
-    HOW: the first application whose pattern matches the entry's Category wins; failing that,
-    the first matching the contact's Source; otherwise the Other identifiers column. WHY the
-    Category first: a contact merged from several apps can hold e.g. an "Instagram Id" under a
-    Source that names another app, and the entry's own label is the more specific statement.
-    """
-    for text in (category, contact_source):
-        if not text:
-            continue
-        for header, pattern in _APP_PATTERNS:
-            if pattern.search(str(text)):
-                return header
-    return CONTACT_OTHER_IDS_COLNAME
+def _has_direct_children(ctx: Context, child: Table, parent: Table) -> bool:
+    """Whether some row of the level-1 ``child`` group hangs directly off a ``parent`` record."""
+    return ctx.staging.conn.execute(
+        f"SELECT 1 FROM {child.name} AS c JOIN {parent.name} AS p "
+        f"ON p.{quote(COL_UUID)} = c.{quote(COL_MAIN_UUID)} LIMIT 1"
+    ).fetchone() is not None
 
 
 def contacts(ctx: Context) -> Sheet | None:
+    """One row per contact: its own fields, then each child model's fields flattened verbatim.
+
+    HOW: for every child model type of Contact (or those listed in [contacts].child_models),
+    each of its fields becomes a "<Model>.<field>" column; a contact with several entries of
+    that model gets them joined with MULTI_VALUE_SEPARATOR, keeping each entry's position
+    (an empty value stays an empty slot), so the n-th value of every column of that model
+    belongs to the same entry. WHY no classification: the sheet shows the report's structure;
+    reading it needs no knowledge of rules applied here.
+    """
     conn = ctx.staging.conn
-    contact = ctx.staging.table(LEVEL_TOP, "Contact")
+    contact = ctx.staging.table(LEVEL_TOP, _CONTACT_TYPE_NAME)
     if contact is None:
         return None
-    id_tables = {t: ctx.staging.table(LEVEL_SUB, t) for t in _IDENTIFIER_TYPES}
-    fixed = {t: ctx.staging.table(LEVEL_SUB, t) for t, _header in CONTACT_CHILD_COLUMNS}
-    fixed_headers = dict(CONTACT_CHILD_COLUMNS)
-    # Any other child type the dump saw under Contact gets a column named after it.
-    extra = [
-        (child, table)
-        for child, top in sorted(ctx.relations)
-        if top == "Contact"
-        and child not in _IDENTIFIER_TYPES
-        and child not in fixed_headers
-        and (table := ctx.staging.table(LEVEL_SUB, child)) is not None
+    candidates = ctx.config.contact_child_models or tuple(
+        sorted({child for child, top in ctx.relations if top == _CONTACT_TYPE_NAME})
+    )
+    children = [
+        (model_type, table)
+        for model_type in candidates
+        if (table := ctx.staging.table(LEVEL_SUB, model_type)) is not None and _has_direct_children(ctx, table, contact)
     ]
+    child_fields = {model_type: _own_columns([table], set()) for model_type, table in children}
     own = _own_columns([contact], set())
-    header, display, renames = expand_header(CONTACTS, {BLOCK_OWN: own, BLOCK_CHILDREN: [c for c, _t in extra]})
-    id_headers = [CONTACT_PHONE_COLNAME, CONTACT_EMAIL_COLNAME] + [h for h, _p in CONTACT_APP_COLUMNS] + [
-        CONTACT_OTHER_IDS_COLNAME
-    ]
+    header, display, renames = expand_header(
+        CONTACTS,
+        {
+            BLOCK_OWN: own,
+            BLOCK_CHILDREN: [f"{model_type}.{name}" for model_type, _t in children for name in child_fields[model_type]],
+        },
+    )
 
     def rows() -> Iterator[list[object]]:
         for record in _dict_rows(conn.cursor().execute(f"SELECT * FROM {contact.name} ORDER BY seq")):
             parent = record[COL_UUID]
-            buckets: dict[str, list[str]] = {name: [] for name in id_headers}
-            for model_type, table in id_tables.items():
-                if table is None:
-                    continue
-                for child in _children(conn, table, parent):
-                    text = describe_child(model_type, child)
-                    if not text:
-                        continue
-                    if model_type == _PHONE_TYPE_NAME:
-                        column = CONTACT_PHONE_COLNAME
-                    elif model_type == _EMAIL_TYPE_NAME:
-                        column = CONTACT_EMAIL_COLNAME
-                    else:
-                        column = classify_identifier(child.get("Category"), record.get("Source"))
-                    buckets[column].append(text)
             values = _own_values(record, own, renames)
-            values.update({name: MULTI_VALUE_SEPARATOR.join(texts) or None for name, texts in buckets.items()})
-            for model_type, table in fixed.items():
-                values[fixed_headers[model_type]] = _joined_children(conn, model_type, table, parent)
-            for model_type, table in extra:
-                values[renames.get(model_type, model_type)] = _joined_children(conn, model_type, table, parent)
+            for model_type, table in children:
+                entries = _children(conn, table, parent)
+                for name in child_fields[model_type]:
+                    column = f"{model_type}.{name}"
+                    if any(entry.get(name) for entry in entries):
+                        values[renames.get(column, column)] = MULTI_VALUE_SEPARATOR.join(
+                            str(entry.get(name) or "") for entry in entries
+                        )
             values.update(_provenance(parent, record))
             yield _align(header, values)
 
-    files = [ctx.staging.csv_name(LEVEL_TOP, "Contact")] + [
-        ctx.staging.csv_name(LEVEL_SUB, t) for t in list(id_tables) + list(fixed) + [c for c, _t in extra]
+    files = [ctx.staging.csv_name(LEVEL_TOP, _CONTACT_TYPE_NAME)] + [
+        ctx.staging.csv_name(LEVEL_SUB, model_type) for model_type, _t in children
     ]
     return Sheet(CONTACTS, header, display, [f for f in files if f], rows())
 
@@ -503,8 +433,9 @@ def locations(ctx: Context) -> Sheet | None:
     conn = ctx.staging.conn
     coords = {level: ctx.staging.table(level, _COORDINATE_TYPE_NAME) for level in (LEVEL_SUB, LEVEL_SUB + 1)}
     addresses = {level: ctx.staging.table(level, _ADDRESS_TYPE_NAME) for level in (LEVEL_SUB, LEVEL_SUB + 1)}
-    types = list(LOCATION_RECORD_TYPES) + [
-        t for t in _types_with_direct_coordinates(ctx, coords[LEVEL_SUB]) if t not in LOCATION_RECORD_TYPES
+    record_types = ctx.config.location_record_types
+    types = list(record_types) + [
+        t for t in _types_with_direct_coordinates(ctx, coords[LEVEL_SUB]) if t not in record_types
     ]
     tables = {t: table for t in types if (table := ctx.staging.table(LEVEL_TOP, t)) is not None}
     if not tables:
@@ -571,7 +502,7 @@ def locations(ctx: Context) -> Sheet | None:
                     # SocialMediaActivity) contributes just those records; configured types are
                     # listed whole.
                     yield from build(model_type, record, record_id, LEVEL_SUB, {},
-                                     require_coordinate=model_type not in LOCATION_RECORD_TYPES)
+                                     require_coordinate=model_type not in record_types)
                     continue
                 journey_values = {f"{JOURNEY_PREFIX}{c}": record.get(c) for c in journey_fields}
                 journey_points = _children(conn, points, record_id) if points is not None else []
@@ -632,14 +563,14 @@ def source_device(ctx: Context) -> Sheet | None:
 
 
 # Workbook order, matching documentation.SHEET_DOCS (About and Documentation come first).
-SHEET_BUILDERS: tuple[Callable[[Context], Sheet | None], ...] = (
-    source_device,
-    communications,
-    messages,
-    calls,
-    emails,
-    contacts,
-    locations,
-    identifiers,
-    cdr_importer,
-)
+SHEET_BUILDERS: dict[str, Callable[[Context], Sheet | None]] = {
+    SOURCE_DEVICE.name: source_device,
+    COMMUNICATIONS.name: communications,
+    CONTACTS.name: contacts,
+    IDENTIFIERS.name: identifiers,
+    MESSAGES.name: messages,
+    CALLS.name: calls,
+    EMAILS.name: emails,
+    LOCATIONS.name: locations,
+    CDR_IMPORTER.name: cdr_importer,
+}

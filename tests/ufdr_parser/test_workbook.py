@@ -244,9 +244,26 @@ def report(tmp_path: Path) -> Path:
     return path
 
 
+# Every available sheet, so one fixture exercises all builders; the default config writes
+# only Source device / Communications / Contacts / Identifiers (see test_default_sheets).
+ALL_SHEETS = ["Source device", "Communications", "Contacts", "Identifiers", "Messages", "Calls",
+              "Emails", "Locations", "CDRImporter"]
+
+
+def _config(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "ufdr_config.toml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 @pytest.fixture
-def workbook(report: Path, tmp_path: Path) -> Path:
-    summary = run_dump(report, tmp_path / "out")
+def all_sheets(tmp_path: Path) -> Path:
+    return _config(tmp_path, f"[workbook]\nsheets = {ALL_SHEETS!r}\n".replace("'", '"'))
+
+
+@pytest.fixture
+def workbook(report: Path, tmp_path: Path, all_sheets: Path) -> Path:
+    summary = run_dump(report, tmp_path / "out", brick_config=all_sheets)
     assert [(b.name, b.status) for b in summary.bricks] == [("workbook", "ok")]
     path = tmp_path / "out" / "wb_Report_combined.xlsx"
     assert summary.bricks[0].files == [path]
@@ -254,10 +271,14 @@ def workbook(report: Path, tmp_path: Path) -> Path:
 
 
 def test_sheets_in_order(workbook: Path) -> None:
-    assert load_workbook(workbook, read_only=True).sheetnames == [
-        "About", "Documentation", "Source device", "Communications", "Messages", "Calls",
-        "Emails", "Contacts", "Locations", "Identifiers", "CDRImporter",
-    ]
+    assert load_workbook(workbook, read_only=True).sheetnames == ["About", "Documentation"] + ALL_SHEETS
+
+
+def test_default_sheets(report: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)  # no ./ufdr_config.toml here: the built-in default applies
+    run_dump(report, tmp_path / "out")
+    book = load_workbook(tmp_path / "out" / "wb_Report_combined.xlsx", read_only=True)
+    assert book.sheetnames == ["About", "Documentation", "Source device", "Communications", "Contacts", "Identifiers"]
 
 
 def test_messages_grouped_by_chat_sorted_by_time_with_to_basis(workbook: Path) -> None:
@@ -294,9 +315,12 @@ def test_calls_emails_and_unified(workbook: Path) -> None:
     assert email["Attachments"] == "plan.pdf (files/plan.pdf)"
     assert email["TimeStamp.offset"] is None  # no offset determinable: blank, no default
     unified = _sheet(workbook, "Communications")
-    assert [r["Category"] for r in unified] == [
+    assert [r["com_type"] for r in unified] == [
         "Chat message", "Chat message", "Chat message", "Instant message", "Call", "Email",
     ]
+    # Every type's other fields follow the shared columns, verbatim; blank where absent.
+    by_id = {r["Record uuid"]: r for r in unified}
+    assert by_id["call1"]["Direction"] == "Outgoing" and by_id["mail1"]["Subject"] == "Réunion"
 
 
 def test_cdr_one_row_per_event(workbook: Path) -> None:
@@ -311,14 +335,19 @@ def test_cdr_one_row_per_event(workbook: Path) -> None:
     assert by_record["mail1"]["B_MSISDN"] == "b@x.ch"  # Cc is not a recipient in B
 
 
-def test_identifiers_contacts_locations(workbook: Path) -> None:
-    ids = {r["Identifier"]: r for r in _sheet(workbook, "Identifiers")}
-    alice = ids["+41790000001"]
-    assert alice["Flagged as phone owner"] == "yes"
-    assert alice["As sender"] == "2" and alice["As recipient"] == "1"
-    assert "Chat (participant) x1" in alice["Seen in"]
-    contact = _sheet(workbook, "Contacts")[0]
-    assert contact["Phone numbers"] == "Mobile: +41790000002"
+def test_identifiers_sheet(workbook: Path) -> None:
+    rows = _sheet(workbook, "Identifiers")
+    assert set(rows[0]) == {"Identifier", "Kind", "Source file", "CSV file", "Occurrences"}
+    by_key = {(r["Identifier"], r["Kind"], r["CSV file"]): r for r in rows}
+    alice_chat = by_key[("+41790000001", "Party.Identifier", "wb_Report_SSMParty.csv")]
+    assert alice_chat["Source file"] == "FFS.zip/msgstore.db" and alice_chat["Occurrences"] == "2"
+    assert by_key[("+41790000002", "PhoneNumber.Value", "wb_Report_SMPhoneNumber.csv")]["Occurrences"] == "1"
+    # Device information: Kind is the record's own label; only the configured names are kept.
+    assert ("353872860051601", "IMEI", "wb_Report_DeviceInfoEntry.csv") in by_key
+    assert rows == sorted(rows, key=lambda r: (r["Identifier"], r["Kind"], r["Source file"] or "", r["CSV file"]))
+
+
+def test_locations_sheet(workbook: Path) -> None:
     location = next(r for r in _sheet(workbook, "Locations") if r["Record uuid"] == "loc1")
     assert (location["Latitude"], location["Longitude"], location["TimeStamp.offset"]) == ("46.5", "6.6", "+00:00")
 
@@ -332,10 +361,10 @@ def test_about_documents_every_sheet(workbook: Path) -> None:
     assert any(row[:3] == ("Calls", "[report] Direction", "report") for row in documentation)
 
 
-def test_parallel_parse_gives_same_workbook(report: Path, tmp_path: Path, workbook: Path) -> None:
-    run_dump(report, tmp_path / "par", parse_workers=2)
+def test_parallel_parse_gives_same_workbook(report: Path, tmp_path: Path, workbook: Path, all_sheets: Path) -> None:
+    run_dump(report, tmp_path / "par", parse_workers=2, brick_config=all_sheets)
     parallel = tmp_path / "par" / "wb_Report_combined.xlsx"
-    for name in ("Messages", "Communications", "CDRImporter", "Identifiers"):
+    for name in ("Messages", "Communications", "CDRImporter", "Identifiers", "Contacts"):
         assert _sheet(parallel, name) == _sheet(workbook, name)
 
 
@@ -360,12 +389,12 @@ def test_failing_brick_does_not_fail_dump(report: Path, tmp_path: Path, monkeypa
     assert summary.files  # the CSVs stand
 
 
-def test_excel_limits(report: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_excel_limits(report: Path, tmp_path: Path, all_sheets: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(xlsx, "EXCEL_MAX_ROWS", 3)  # header + 2 rows per sheet part
     monkeypatch.setattr(xlsx, "EXCEL_MAX_CELL_CHARS", 160)
     path = tmp_path / "limits.xml"
     path.write_text(REPORT.replace("SMS seul", "x" * 500), encoding="utf-8")
-    run_dump(path, tmp_path / "out")
+    run_dump(path, tmp_path / "out", brick_config=all_sheets)
     book = load_workbook(tmp_path / "out" / "limits_combined.xlsx", read_only=True)
     assert "Messages (2)" in book.sheetnames
     rows = _sheet(tmp_path / "out" / "limits_combined.xlsx", "Messages (2)")
@@ -381,33 +410,17 @@ def test_control_characters_are_escaped_not_dropped() -> None:
     assert cell.value == "a[U+000B]b" and stats.escaped_characters == 1
 
 
-def test_contact_identifier_columns(workbook: Path) -> None:
+def test_contacts_flattened_as_in_the_model(workbook: Path) -> None:
     bob, other = _sheet(workbook, "Contacts")
-    # Category names the app first; else the contact's Source (WhatsApp) claims the entry.
-    assert bob["WhatsApp"] == "WhatsApp User Id: 41790000002@s.whatsapp.net; Push Name: Bobby"
-    assert bob["Instagram"] == "Instagram Id: bob.insta"
-    assert bob["Phone numbers"] == "Mobile: +41790000002"
-    # Every configured column exists, blank when the contact has none.
-    assert "Facebook" in bob and bob["Facebook"] is None
-    assert bob["Other identifiers"] is None
-    assert other["Other identifiers"] == "Identifier: abc-123"
-
-
-@pytest.mark.parametrize(
-    ("category", "source", "expected"),
-    [
-        ("Facebook Id", None, "Facebook"),
-        ("Username", "Facebook Messenger", "Facebook"),
-        ("User ID", "Snapchat", "Snapchat"),
-        ("Identifier", "Native Messages", "Other identifiers"),
-        ("Id", "X", "X (Twitter)"),
-        ("Index", "Xperia", "Other identifiers"),  # whole words only
-    ],
-)
-def test_classify_identifier(category: str, source: str | None, expected: str) -> None:
-    from ufdr_parser.bricks.workbook.sheets import classify_identifier
-
-    assert classify_identifier(category, source) == expected
+    assert (bob["Name"], bob["Source"]) == ("Bob", "WhatsApp")
+    assert (bob["PhoneNumber.Category"], bob["PhoneNumber.Value"]) == ("Mobile", "+41790000002")
+    # Several entries of one model: same order in every column of that model.
+    assert bob["UserID.Category"] == "WhatsApp User Id; Push Name; Instagram Id"
+    assert bob["UserID.Value"] == "41790000002@s.whatsapp.net; Bobby; bob.insta"
+    assert (other["UserID.Category"], other["UserID.Value"]) == ("Identifier", "abc-123")
+    assert other["PhoneNumber.Value"] is None
+    header = _header(workbook, "Contacts")
+    assert "[report] UserID.Value" in header and not any("WhatsApp" == _bare(c) for c in header)
 
 
 def test_column_origins(workbook: Path) -> None:
@@ -457,7 +470,7 @@ def test_locations_all_position_types(workbook: Path) -> None:
     assert "sm2" not in by_id
 
 
-def test_cdr_group_message_is_one_row(tmp_path: Path) -> None:
+def test_cdr_group_message_is_one_row(tmp_path: Path, all_sheets: Path) -> None:
     """A chat message with several recipients gives ONE CDR row naming the group, not one per
     member (per-member rows multiplied group messages by the group size)."""
     members = "".join(_party(f"gp{i}", f"+4179000010{i}", "General") for i in range(4))
@@ -476,11 +489,11 @@ def test_cdr_group_message_is_one_row(tmp_path: Path) -> None:
 """
     path = tmp_path / "group.xml"
     path.write_text(group, encoding="utf-8")
-    run_dump(path, tmp_path / "out")
+    run_dump(path, tmp_path / "out", brick_config=all_sheets)
     rows = _sheet(tmp_path / "out" / "group_combined.xlsx", "CDRImporter")
     assert [(r["Record uuid"], r["B_MSISDN"]) for r in rows] == [("gm1", "120363@g.us"), ("gm2", "120363@g.us")]
     assert rows[0]["B_basis"].startswith("inferred from chat participants; group chat (3 recipients")
     assert rows[1]["B_basis"].startswith("stated; group chat (2 recipients")
     # The members themselves stay on the Messages sheet.
-    message = next(r for r in _sheet(tmp_path / "out" / "group_combined.xlsx", "Messages") if r["Record uuid"] == "gm1")
+    message = next(r for r in _sheet(tmp_path / "out" / "group_combined.xlsx", "Communications") if r["Record uuid"] == "gm1")
     assert message["To"].count("+4179000010") == 3

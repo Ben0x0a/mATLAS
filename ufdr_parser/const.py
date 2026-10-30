@@ -85,3 +85,8 @@ SOURCE_COLUMNS = (
 COL_REPORT_FILE = "report_file"
 COL_REPORT_ENTRY = "report_entry"
 TRACE_COLUMNS = (COL_REPORT_FILE, COL_REPORT_ENTRY)
+
+# Characters a name used as a filename (a case name, the output prefix) cannot contain: a path
+# separator or a Windows-reserved character would redirect or break the file. Consumed by
+# dump.run_dump (case_name) and gui.app (New case), so both apply the same rule.
+FILENAME_FORBIDDEN_CHARACTERS = '/\\:*?"<>|'

@@ -71,6 +71,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Post-dump bricks to run on the CSVs (default: all, e.g. 'workbook' = the "
         "combined Excel workbook); 'none' writes the raw CSVs only.",
     )
+    dump_cmd.add_argument(
+        "--case",
+        default=None,
+        metavar="NAME",
+        help="Name the outputs <NAME>_... (and record the case on the workbook) instead of "
+        "naming them after the input file.",
+    )
+    dump_cmd.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="ufdr_config.toml",
+        help="Workbook configuration (sheets, hidden columns, identifier sources). Default: "
+        "./ufdr_config.toml if present, else the built-in default.",
+    )
+
+    init_cmd = sub.add_parser(
+        "init-config", help="Write the default workbook configuration, to copy and edit."
+    )
+    init_cmd.add_argument(
+        "path", type=Path, nargs="?", default=Path("ufdr_config.toml"),
+        help="Where to write it (default: ./ufdr_config.toml). An existing file is never overwritten.",
+    )
     return parser
 
 
@@ -114,6 +137,8 @@ def main(argv: list[str] | None = None) -> int:
             workers=_resolve_workers(args.workers),
             parse_workers=_resolve_workers(args.parse_workers, cap=4),
             bricks=_resolve_bricks(args.bricks),
+            brick_config=args.config,
+            case_name=args.case,
         )
         log.info(
             f"Done: {summary.record_count} record(s) across {len(summary.files)} file(s)."
@@ -125,6 +150,16 @@ def main(argv: list[str] | None = None) -> int:
         # The CSVs are complete either way; a failed brick still makes the exit status non-zero
         # so a scripted run notices the missing derived output.
         return 1 if failed else 0
+    if args.command == "init-config":
+        from ufdr_parser.bricks.workbook.config import default_config_text
+
+        if args.path.exists():
+            log.error(f"{args.path} already exists; not overwriting it")
+            return 1
+        # Plain UTF-8, NOT utf-8-sig like the CSVs: TOML forbids a BOM and tomllib rejects one.
+        args.path.write_text(default_config_text(), encoding="utf-8")
+        log.info(f"Wrote the default workbook configuration to {args.path}")
+        return 0
     return 2
 
 

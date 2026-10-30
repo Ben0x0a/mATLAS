@@ -18,6 +18,7 @@ import tempfile
 from collections.abc import Iterable
 from contextlib import ExitStack
 from dataclasses import dataclass
+from glob import escape as glob_escape
 from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -34,7 +35,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui import accessibility, header_assets, report_actions
+from gui.case_name_dialog import ask_case_name
 from gui.case_state import format_case_summary, read_case_counts
 from gui.completion import param_completions
 from gui.db_edit_controller import DbEditController
@@ -60,6 +61,7 @@ from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
 from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler, remove_gui_log_handler
 from model_atlas.app.config import get_settings
+from ufdr_parser.const import FILENAME_FORBIDDEN_CHARACTERS
 from model_atlas.app.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
 from model_atlas.export.registry import available_exporters, load_builtin_exporters
 from model_atlas.ingest.writer import is_matlas_run_db
@@ -91,7 +93,8 @@ _LOG_LINES_VISIBLE = 4
 # A case name becomes a filename (``<name>.matlas.sqlite``), so these would either redirect
 # the database out of the chosen folder or produce a name the filesystem rejects. Checked in
 # _new_case; Open case cannot hit it because the name is derived from an existing file.
-_CASE_NAME_FORBIDDEN = '/\\:*?"<>|'
+# One rule for case names, shared with the UFDR dump (which prefixes its outputs with the case).
+_CASE_NAME_FORBIDDEN = FILENAME_FORBIDDEN_CHARACTERS
 
 
 
@@ -968,9 +971,9 @@ class MainController(QObject):
 
     def _run_ufdr_dump(self) -> None:
         """Dump every Cellebrite model in the source ``.ufdr`` or report ``.xml`` to per-model
-        CSVs under the output folder. Independent of presets and the case model — it writes no
-        run DB, so it needs only a source file and an output folder (the transform fields are
-        ignored)."""
+        CSVs in the case folder, named after the case (``<case>_<Model>.csv``,
+        ``<case>_combined.xlsx``). Independent of presets and the case database — it writes no
+        run DB (the transform fields are ignored)."""
         # Lazy import, like run_dump below: keeps normal GUI start-up free of the parser.
         from ufdr_parser.archive import input_kind
 
@@ -991,6 +994,18 @@ class MainController(QObject):
             self._show_error("Open or create a case first, to set the output folder.")
             return
         output_path = self._case_output_dir.expanduser()
+        case_name = self._case_name
+        # The outputs are named after the case, so a second dump of the same case lands on the
+        # same files: say so before replacing them rather than silently mixing two reports.
+        previous = sorted(output_path.glob(f"{glob_escape(case_name)}_*.csv")) if case_name else []
+        if previous and QMessageBox.question(
+            self.window,
+            "Replace the previous dump?",
+            f"{output_path} already holds a dump of case '{case_name}' ({len(previous)} CSV "
+            "file(s)).\n\nRunning it again overwrites every file this dump writes; a file of the "
+            "previous dump that this one does not rewrite is left as it is.\n\nContinue?",
+        ) != QMessageBox.StandardButton.Yes:
+            return
 
         self._start_run()
 
@@ -1005,6 +1020,7 @@ class MainController(QObject):
                 output_path,
                 parse_workers=workers.parse_workers,
                 workers=workers.write_workers,
+                case_name=case_name,
             )
 
         # A bound method of this QObject, NOT a lambda: PySide6 runs a plain callable connected
@@ -1083,10 +1099,10 @@ class MainController(QObject):
         rather than refusing, because a run against an existing case database appends to it
         (pipeline.process create-or-append). Adopting it up front means the summary and the
         analysis tabs show the case's real contents instead of pretending it is empty."""
-        name, accepted = QInputDialog.getText(
-            self.window, "New case", "Case name:", text=self._case_name or "",
-        )
-        if not accepted:
+        # Dropping a file on the prompt names the case after it (and the folder dialog below
+        # then opens where that file is).
+        name, dropped = ask_case_name(self.window, self._case_name or "")
+        if name is None:
             return
         name = name.strip()
         if not name:
@@ -1099,10 +1115,11 @@ class MainController(QObject):
                 f"A case name cannot contain {' '.join(sorted(invalid))}"
             )
             return
-        folder = QFileDialog.getExistingDirectory(
-            self.window, "Choose the case folder",
-            str(self._case_output_dir or Path.cwd()),
-        )
+        if dropped is not None:
+            start = dropped if dropped.is_dir() else dropped.parent
+        else:
+            start = self._case_output_dir or Path.cwd()
+        folder = QFileDialog.getExistingDirectory(self.window, "Choose the case folder", str(start))
         if not folder:
             return
         self._declare_case(name, Path(folder))

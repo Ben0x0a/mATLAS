@@ -1,0 +1,74 @@
+# ufdr_config.toml — what the UFDR dump's combined workbook (<report>_combined.xlsx) contains.
+#
+# This is the built-in default. To customise it, write a copy where you run mATLAS
+#     python -m ufdr_parser init-config            (writes ./ufdr_config.toml)
+# and edit it; the CLI also accepts --config PATH. Every top-level section you keep in your
+# copy REPLACES the same section here; a section you delete falls back to this default.
+# A typo (unknown section, key or sheet name) stops the run with an error, on purpose.
+#
+# Every value in the workbook is copied verbatim from the raw CSVs written next to it; this
+# file only says which records and fields are gathered, and where. The workbook's
+# Documentation sheet describes the result.
+
+[workbook]
+# The data sheets written, in this order (About and Documentation always come first).
+# Available: "Source device", "Communications", "Contacts", "Identifiers",
+#            "Messages", "Calls", "Emails", "Locations", "CDRImporter".
+sheets = ["Source device", "Communications", "Contacts", "Identifiers"]
+
+[hide_columns]
+# Columns never written, per sheet, named WITHOUT their [report]/[tool] prefix, e.g.
+# Communications = ["To basis", "Chat uuid"]
+
+[contacts]
+# A contact's child models (phone numbers, user IDs, addresses...) are flattened into
+# "<Model>.<field>" columns, several entries joined with "; " in the same order in every
+# column of that model. List models here to keep only those; empty = every child model the
+# report gives contacts.
+child_models = []
+
+[locations]
+# Used only when the "Locations" sheet is enabled. Every record of these types is listed;
+# any other type the report gives a Coordinate is listed for its records that have one.
+record_types = ["Location", "CellTower", "WirelessNetwork", "Journey", "SearchedItem"]
+
+# --------------------------------------------------------------------------- Identifiers
+# Where identifiers are collected from. One block per source:
+#   model      = the Cellebrite model type (at any nesting level, e.g. Party in SMParty and
+#                SSMParty)
+#   field      = the field holding the identifier, copied verbatim
+#   kind       = (optional) the label in the Kind column; default "<model>.<field>"
+#   kind_field = (optional) take the Kind from this field of the record instead
+#   only       = (optional) keep a record only when a field has one of the listed values
+# A new model (e.g. "EmailAddresses") is one more block.
+
+[[identifiers]]
+model = "Party"
+field = "Identifier"
+
+[[identifiers]]
+model = "PhoneNumber"
+field = "Value"
+
+[[identifiers]]
+model = "EmailAddress"
+field = "Value"
+
+[[identifiers]]
+model = "UserID"
+field = "Value"
+
+[[identifiers]]
+model = "UserAccount"
+field = "Username"
+
+[[identifiers]]
+model = "DeviceInfoEntry"
+field = "EntryValue"
+kind_field = "EntryName"
+only = { EntryName = [
+    "IMEI", "IMEI1", "IMEI2", "IMSI", "ICCID", "MSISDN", "Last used MSISDN", "Last user ICCID",
+    "Serial", "Unique ID", "Apple ID", "Android ID", "AirDrop ID",
+    "Wi-Fi MAC address", "MAC address", "Mac Address", "Bluetooth device address",
+    "Bluetooth MAC Address",
+] }

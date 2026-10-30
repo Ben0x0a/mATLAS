@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ufdr_parser.archive import open_report, report_size, report_trace
+from ufdr_parser.const import FILENAME_FORBIDDEN_CHARACTERS
 from ufdr_parser.models import FlatRecord
 from ufdr_parser.reader import iter_items
 from ufdr_parser.report_info import write_report_info
@@ -90,6 +91,8 @@ def run_dump(
     workers: int = 1,
     parse_workers: int = 1,
     bricks: set[str] | None = None,
+    brick_config: Path | None = None,
+    case_name: str | None = None,
 ) -> DumpSummary:
     """Dump every (or a ``models``-filtered subset of) model type to CSV under ``out_dir``.
 
@@ -100,10 +103,24 @@ def run_dump(
     its child rows (Coordinate/StreetAddress) but not standalone Coordinate models.
     ``workers`` > 1 fans the CSV-writing phase out across processes; ``parse_workers`` > 1
     parses decodedData by model type across processes (a separate, heavier parallelism).
+    ``brick_config`` is the bricks' configuration file (the workbook's ufdr_config.toml); None
+    lets each brick find its own (./ufdr_config.toml, else its built-in default). It is checked
+    BEFORE parsing, so a configuration typo fails in seconds rather than after the dump.
+    ``case_name`` (the GUI's case) names every output file ``<case>_...`` instead of after the
+    input file, and is recorded on the workbook's About sheet; each CSV row still names the
+    report it came from (report_file).
     """
+    if bricks is None or bricks:
+        # Lazy: bricks pull in openpyxl, which a CSV-only caller never needs.
+        from ufdr_parser.bricks import validate_bricks
+
+        validate_bricks(bricks, brick_config)
     input_path = Path(input_path)
     out_dir = Path(out_dir)
-    base = input_path.stem
+    if case_name is not None and (not case_name.strip() or set(case_name) & set(FILENAME_FORBIDDEN_CHARACTERS)):
+        # The name becomes a filename prefix: a separator would write outside out_dir.
+        raise ValueError(f"case name {case_name!r} cannot be empty or contain any of {FILENAME_FORBIDDEN_CHARACTERS}")
+    base = case_name.strip() if case_name is not None else input_path.stem
     # Computed from the ORIGINAL input: the parallel path may read a temp extracted copy.
     trace = report_trace(input_path)
     # The report header (case, extraction, images) is not a model: dumped by its own short pass.
@@ -142,7 +159,9 @@ def run_dump(
         f"{summary.source_count} source entr(ies), {len(summary.files)} CSV file(s)"
     )
     if bricks is None or bricks:
-        summary.bricks = _run_bricks(input_path, out_dir, base, trace, summary, bricks, report_info_path)
+        summary.bricks = _run_bricks(
+            input_path, out_dir, base, trace, summary, bricks, report_info_path, brick_config, case_name
+        )
     return summary
 
 
@@ -154,6 +173,8 @@ def _run_bricks(
     summary: DumpSummary,
     names: set[str] | None,
     report_info_path: Path,
+    config_path: Path | None,
+    case_name: str | None,
 ) -> list:
     """Hand the finished CSV output to the post-dump bricks."""
     # Lazy: bricks pull in openpyxl, which a CSV-only caller never needs.
@@ -170,6 +191,8 @@ def _run_bricks(
         relations=frozenset(summary.relations),
         trace=trace,
         report_info_path=report_info_path,
+        config_path=config_path,
+        case_name=case_name,
     )
     return run_bricks(output, names)
 

@@ -43,6 +43,10 @@ class DumpOutput:
     trace: dict[str, str]
     # The report header CSV (case, extraction, images), see ufdr_parser.report_info.
     report_info_path: Path | None = None
+    # The bricks' configuration file (e.g. ufdr_config.toml); None = each brick's own lookup.
+    config_path: Path | None = None
+    # The mATLAS case the dump was run for (names the outputs); None outside a case.
+    case_name: str | None = None
 
 
 @dataclass
@@ -77,6 +81,19 @@ def register(brick: Brick) -> None:
 def registered_bricks() -> list[Brick]:
     """Every registered brick, in registration order (the order they run in)."""
     return list(_REGISTRY.values())
+
+
+def validate_bricks(names: set[str] | None, config_path: Path | None) -> None:
+    """Let each brick that will run check its configuration up front (optional ``validate``).
+
+    WHY before the dump: a configuration error found only after a long parse wastes the run.
+    """
+    for brick in registered_bricks():
+        if names is not None and brick.name not in names:
+            continue
+        validate = getattr(brick, "validate", None)
+        if validate is not None:
+            validate(config_path)
 
 
 def run_bricks(output: DumpOutput, names: set[str] | None = None) -> list[BrickResult]:

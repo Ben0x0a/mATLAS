@@ -2,7 +2,7 @@
 
 Defines:    the communication categories, COMM_FIELDS, CommSource (where one category's records
             live) and build_comm_tables.
-Used by:    workbook.sheets (Messages, Calls, Emails, Communications, CDRImporter, Identifiers).
+Used by:    workbook.sheets (Communications, Messages, Calls, Emails, CDRImporter).
 Depends on: workbook.staging, workbook.links, const (column names).
 
 WHY one shared table: five sheets show the same communications from different angles. Doing
@@ -55,7 +55,7 @@ TIME_ORDER_SQL = "timestamp IS NULL, timestamp, seq"
 # member: one CDR row per member multiplied a group's messages by its size (2,000 messages in a
 # 200-member group = 398,000 rows); real reports reached tens of millions of rows, hours of
 # writing and a temporary sort that filled the disk.
-GROUP_BASIS = "{basis}; group chat ({count} recipients, listed on the Messages sheet)"
+GROUP_BASIS = "{basis}; group chat ({count} recipients, listed in To on the Communications sheet)"
 
 # Resolved per-communication fields, in ``comm`` column order (after seq / table / row_seq).
 COMM_FIELDS = (

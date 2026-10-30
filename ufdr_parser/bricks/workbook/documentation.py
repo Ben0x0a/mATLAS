@@ -1,11 +1,10 @@
 """Static documentation of the combined workbook: every sheet, every column, the general rules.
 
-Defines:    Column, SheetDoc, expand_header, the per-sheet SheetDoc constants (SHEET_DOCS, in
-            workbook order) and GENERAL_NOTES.
+Defines:    Column, SheetDoc, expand_header, the per-sheet SheetDoc constants (SHEET_DOCS: every
+            available sheet; ufdr_config.toml picks which are written) and GENERAL_NOTES.
 Used by:    workbook.sheets (each builder takes its header from its SheetDoc) and
-            workbook.brick (writes the Documentation sheet from SHEET_DOCS).
-Depends on: const (column names), workbook.config (Contacts identifier columns), workbook.links
-            (party / To-basis vocabulary).
+            workbook.brick (writes the Documentation sheet for the configured sheets).
+Depends on: const (column names), workbook.links (party / To-basis vocabulary).
 
 WHY a separate, static description: what a sheet means does not depend on the report, so it is
 written once, identical in every workbook, while the About sheet holds only what does depend
@@ -27,12 +26,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ufdr_parser.bricks.workbook.config import (
-    CONTACT_APP_COLUMNS,
-    CONTACT_EMAIL_COLNAME,
-    CONTACT_OTHER_IDS_COLNAME,
-    CONTACT_PHONE_COLNAME,
-)
 from ufdr_parser.bricks.workbook.links import (
     OWNER_MARK,
     TO_BASIS_INFERRED,
@@ -223,6 +216,9 @@ GENERAL_NOTES = (
      "inferred), or a .offset / report_* column added by the dumper. The Origin column below "
      "says the same for each column. CDRImporter keeps the exact legacy column names its "
      "importer expects; only its extra columns are prefixed."),
+    ("Configuration", "Which sheets are written, which columns are hidden and where identifiers "
+     "are collected from is set in ufdr_config.toml (the About sheet names the file used, or "
+     "'built-in default'); 'python -m ufdr_parser init-config' writes an editable copy."),
     ("What this workbook is", "A re-arrangement of the raw per-model CSVs written next to it, "
      "joining on one row what a reader needs (who, to whom, when, what). The CSVs remain the "
      "reference: every value is copied from them unchanged, except the joins and the To "
@@ -248,9 +244,9 @@ GENERAL_NOTES = (
 
 COMMUNICATIONS = SheetDoc(
     "Communications",
-    "One call, email, instant message or chat message — every category together.",
+    "One call, email, instant message or chat message — every type together; com_type tells them apart.",
     (
-        _tool("Category", "Call, Email, Instant message or Chat message.", field="category"),
+        _tool("com_type", "Call, Email, Instant message or Chat message (the model the row comes from).", field="category"),
         *_TIME,
         Column("Source", "The record's Source field, verbatim.", field="source"),
         Column("Direction", "Call direction, as stated by the report.", field="direction"),
@@ -259,13 +255,23 @@ COMMUNICATIONS = SheetDoc(
         _tool("From identifiers", "Sender identifier(s) only, for filtering.", field="sender_ids"),
         _tool("To identifiers", "Recipient identifier(s) only, for filtering.", field="recipient_ids"),
         Column("Chat", "Name of the chat a chat message belongs to.", field="chat_name"),
+        Column("Chat type", "Chat type (e.g. OneOnOne, Group), as stated by the report.", field="chat_type"),
+        Column("Chat uuid", "Cellebrite id of the chat: filter on it to read one conversation.", field="chat_id"),
+        _tool("Chat participants", "Every party the chat itself lists, formatted 'Name <Identifier>'.", field="participants"),
         Column("Subject", "Email subject.", field="subject"),
-        Column("Body", "Message or email text.", field="body"),
+        Column("Body", "Message or email text (cut at Excel's cell limit, see Excel limits).", field="body"),
         Column("Duration", "Call duration, as stated by the report.", field="duration"),
         _ATTACHMENTS,
+        _own("call / email / message"),
         *PROVENANCE_COLUMNS,
     ),
-    (_SORT_NOTE, "Per-category fields are on the Calls / Emails / Messages sheets."),
+    (
+        _SORT_NOTE,
+        "Every other field of calls, emails and messages follows the shared columns, verbatim; "
+        "a field a type does not have is blank on its rows.",
+        "A message nested inside another message (SSMInstantMessage: quoted or forwarded) is not "
+        "listed; it remains in the raw CSV.",
+    ),
 )
 
 MESSAGES = SheetDoc(
@@ -324,45 +330,25 @@ EMAILS = SheetDoc(
     (_SORT_NOTE, "To is never inferred for an email; Cc, Bcc and other roles are in Other parties."),
 )
 
-# Contact child types with a fixed column of their own: (model type, column header).
-CONTACT_CHILD_COLUMNS = (
-    ("WebAddress", "Web addresses"),
-    ("StreetAddress", "Addresses"),
-    ("Organization", "Organizations"),
-    ("ContactPhoto", "Photos"),
-    ("ProfilePicture", "Profile pictures"),
-    ("KeyValueModel", "Additional fields"),
-)
-
 CONTACTS = SheetDoc(
     "Contacts",
-    "One contact, with its phone numbers, emails and per-application identifiers in cells.",
+    "One contact: its own fields, then its child models (phone numbers, user IDs, addresses...) "
+    "flattened as they are in the report.",
     (
         _own("Contact"),
-        _tool(CONTACT_PHONE_COLNAME, "Every phone number of the contact ('Category: Value')."),
-        _tool(CONTACT_EMAIL_COLNAME, "Every email address of the contact ('Category: Value')."),
-        *(
-            _tool(header, f"Every {header} identifier of the contact ('Category: Value'); blank when none.")
-            for header, _pattern in CONTACT_APP_COLUMNS
-        ),
-        _tool(CONTACT_OTHER_IDS_COLNAME, "Every user ID matching none of the application columns ('Category: Value')."),
-        *(
-            _tool(header, f"Every {model_type} entry of the contact.")
-            for model_type, header in CONTACT_CHILD_COLUMNS
-        ),
-        _tool(
-            "<other child types>",
-            "Any other kind of entry the contacts hold, one column per kind, named after it.",
+        Column(
+            "<ChildModel>.<field>",
+            "Every field of the contact's child models, one column per (model, field), e.g. "
+            "PhoneNumber.Category and PhoneNumber.Value. A contact with several entries of a model "
+            f"has them joined with '{MULTI_VALUE_SEPARATOR}', in the same order in every column of "
+            "that model, so the n-th Category goes with the n-th Value.",
             block=BLOCK_CHILDREN,
         ),
         *PROVENANCE_COLUMNS,
     ),
     (
-        "A user ID goes to the application named by its Category (e.g. 'Instagram Id'), else by "
-        "the contact's Source (e.g. 'Snapchat'), matching whole words; one matching no application "
-        "goes to Other identifiers. The application list is set in "
-        "ufdr_parser/bricks/workbook/config.py.",
-        "Each entry is labelled with its Category, e.g. 'WhatsApp User Id: ...; Push Name: ...'.",
+        "Which child models are flattened is set in ufdr_config.toml ([contacts].child_models; "
+        "empty = all). Nothing is classified or reformatted: values are the report's.",
     ),
 )
 
@@ -438,26 +424,21 @@ SOURCE_DEVICE = SheetDoc(
 
 IDENTIFIERS = SheetDoc(
     "Identifiers",
-    "One distinct party identifier, across every Party in the report.",
+    "One identifier as found in one source file: every identifier the report holds, from the "
+    "sources listed in ufdr_config.toml, whoever it belongs to.",
     (
-        Column("Identifier", "Party identifier (phone number, handle, email...), verbatim."),
-        _tool("Names", "Every distinct name the report gives this identifier."),
-        _tool(
-            "Flagged as phone owner",
-            "'yes' when the report flags this identifier as the phone owner (Cellebrite "
-            "IsPhoneOwner) at least once: the report's attribution, typically an account or "
-            "number used on this device, not a proof of ownership.",
-        ),
-        _tool("Occurrences", "Number of Party entries carrying this identifier."),
-        _tool("As sender", "How many of them have Role From."),
-        _tool("As recipient", "How many of them have Role To (stated only, never inferred)."),
-        _tool("Other roles", "Other roles with their counts (e.g. General = chat participant)."),
-        _tool("Seen in", "Kinds of record the identifier appears in, with counts."),
-        _tool("Sources", "Distinct Source values of those records (their Source field, verbatim)."),
-        _tool("First seen", "Earliest TimeStamp text among those records."),
-        _tool("Last seen", "Latest TimeStamp text among those records."),
+        Column("Identifier", "The identifier, verbatim (phone number, email, handle, IMEI...)."),
+        _tool("Kind", "Where it was read: '<model>.<field>' (e.g. Party.Identifier, "
+              "PhoneNumber.Value), or the record's own label for device information (e.g. IMEI)."),
+        Column("Source file", "The on-device file the identifier was decoded from (source_path)."),
+        _tool("CSV file", "The raw CSV holding the full records, next to this workbook."),
+        _tool("Occurrences", "How many records carry this identifier with this kind, source file and CSV."),
     ),
-    ("Parties with a name but no identifier are not listed (no key to group them on).",),
+    (
+        "Values are verbatim and never merged: '+41791234567' and '41791234567' are two rows. "
+        "Whether an identifier is the device's own is on the Source device sheet.",
+        "Sources are set in ufdr_config.toml ([[identifiers]] blocks): a new model is one block.",
+    ),
 )
 
 _CDR_BLANK = "Not available from a Cellebrite report; left blank (legacy CDR layout)."
@@ -496,7 +477,7 @@ CDR_IMPORTER = SheetDoc(
         _tool("end_CellBeam", _CDR_BLANK, fixed_name=True),
         _tool("DateTime offset", _OFFSET_MEANING.replace("TimeStamp", "DateTime"), field="timestamp_offset"),
         _tool("B_basis", "Where B_MSISDN comes from: same values as To basis; for a group message, also "
-              "'group chat (N recipients, listed on the Messages sheet)'."),
+              "'group chat (N recipients, listed in To on the Communications sheet)'."),
         Column("Source", "The communication's Source field, verbatim.", field="source"),
         *PROVENANCE_COLUMNS,
     ),
@@ -504,15 +485,17 @@ CDR_IMPORTER = SheetDoc(
         "The same communications as the Communications sheet, in the legacy CDR import layout.",
         "One row per event: unlike the legacy tool (which repeated a call per sender x recipient "
         "pair), several recipients share one row. A chat message with more than one recipient (a "
-        "group message) has the group as B_MSISDN; the members are in the To cell of the Messages "
-        "sheet.",
+        "group message) has the group as B_MSISDN; the members are in the To cell of the "
+        "Communications sheet.",
         "Identifiers are verbatim: unlike the legacy tool, the leading + is kept and blank A/B "
         "numbers are NOT filled with a target id.",
         "The columns after end_CellBeam (offset, basis, provenance) can be ignored by the importer.",
     ),
 )
 
-# Workbook order of the data sheets (About and Documentation come first).
+# Every sheet the workbook can write; ufdr_config.toml's [workbook].sheets picks which, and
+# in what order (About and Documentation always come first).
 SHEET_DOCS = (
-    SOURCE_DEVICE, COMMUNICATIONS, MESSAGES, CALLS, EMAILS, CONTACTS, LOCATIONS, IDENTIFIERS, CDR_IMPORTER,
+    SOURCE_DEVICE, COMMUNICATIONS, CONTACTS, IDENTIFIERS, MESSAGES, CALLS, EMAILS, LOCATIONS, CDR_IMPORTER,
 )
+SHEET_DOCS_BY_NAME = {doc.name: doc for doc in SHEET_DOCS}

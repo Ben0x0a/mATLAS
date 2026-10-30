@@ -198,7 +198,3 @@ class Links:
             name = filename or url or "(unnamed)"
             labels.append(f"{name} ({extracted})" if extracted else name)
         return MULTI_VALUE_SEPARATOR.join(labels) if labels else None
-
-    def all_parties(self) -> "sqlite3.Cursor":
-        """Every party row as (parent_id, identifier, name, role, is_owner), in order."""
-        return self._conn.execute("SELECT parent_id, c0, c1, c2, c3 FROM party ORDER BY seq")
