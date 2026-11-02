@@ -26,6 +26,16 @@ log = logging.getLogger(__name__)
 
 BRICK_STATUS_OK = "ok"
 BRICK_STATUS_FAILED = "failed"
+BRICK_STATUS_CHECKS_FAILED = "checks failed"
+
+
+class BrickChecksFailed(Exception):
+    """A brick wrote its output but found data problems: the files exist, the errors stand."""
+
+    def __init__(self, files: list[Path], problems: list[str]) -> None:
+        super().__init__("; ".join(problems))
+        self.files = files
+        self.problems = problems
 
 
 @dataclass(frozen=True)
@@ -47,6 +57,9 @@ class DumpOutput:
     config_path: Path | None = None
     # The mATLAS case the dump was run for (names the outputs); None outside a case.
     case_name: str | None = None
+    # What the dump itself could not place (errors) or knowingly leaves out (see integrity).
+    findings: tuple[str, ...] = ()
+    omissions: tuple[str, ...] = ()
 
 
 @dataclass
@@ -105,6 +118,11 @@ def run_bricks(output: DumpOutput, names: set[str] | None = None) -> list[BrickR
         log.info(f"Running brick '{brick.name}': {brick.description}")
         try:
             files = brick.run(output)
+        except BrickChecksFailed as failed:
+            for problem in failed.problems:
+                log.error(f"Brick '{brick.name}': {problem}")
+            results.append(BrickResult(brick.name, BRICK_STATUS_CHECKS_FAILED, files=failed.files, error=str(failed)))
+            continue
         except Exception as exc:  # noqa: BLE001 - see module docstring: the CSVs stand regardless
             log.exception(f"Brick '{brick.name}' failed; the raw CSVs are unaffected")
             results.append(BrickResult(brick.name, BRICK_STATUS_FAILED, error=f"{type(exc).__name__}: {exc}"))

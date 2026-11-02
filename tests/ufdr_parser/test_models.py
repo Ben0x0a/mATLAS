@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 
+from ufdr_parser.const import PARENT_FIELD_COLNAME, level_file_prefix
 from ufdr_parser.models import FlatRecord
 from ufdr_parser.reader import iter_items
 from ufdr_parser.source_lookup import SourceEntry
@@ -75,13 +76,16 @@ def test_multi_value_field_joins_all_values() -> None:
     assert chat.fields["Participants"] == "alice; bob; carol"
 
 
-# A top-level model nesting three levels deep (the grandchild's child is past the
-# decomposition) plus a model hanging off a non-model container, which is not part of it.
 _NESTED_XML = """<?xml version="1.0" encoding="utf-8"?>
 <project xmlns="http://pa.cellebrite.com/report/2.0"><decodedData>
 <modelType type="Chat">
-  <model type="Chat" id="c1">
+  <model type="Chat" id="c1" deleted_state="Intact" iscarved="False">
     <field name="Name" type="String"><value type="String"><![CDATA[Famille]]></value></field>
+    <field name="Label" type="String"><value type="String">first</value></field>
+    <field name="Label" type="String"><value type="String">second</value></field>
+    <multiField name="Tags" type="String"><value type="String">a</value><value type="String">b</value></multiField>
+    <field name="When" type="TimeStamp"><value type="TimeStamp" format="ISO" formattedTimestamp="1 Jan">2020-01-01T00:00:00+02:00</value></field>
+    <jumptargets targetType="File"><targetid>t1</targetid><targetid>t2</targetid></jumptargets>
     <multiModelField name="Messages" type="InstantMessage">
       <model type="InstantMessage" id="m1">
         <field name="Body" type="String"><value type="String"><![CDATA[salut]]></value></field>
@@ -89,43 +93,43 @@ _NESTED_XML = """<?xml version="1.0" encoding="utf-8"?>
           <model type="Party" id="p1">
             <field name="Identifier" type="String"><value type="String"><![CDATA[+41]]></value></field>
             <modelField name="Deeper" type="Note">
-              <model type="Note" id="too-deep"><field name="X" type="String"><value type="String">x</value></field></model>
+              <model type="Note" id="deep"><field name="X" type="String"><value type="String">x</value></field></model>
             </modelField>
           </model>
         </multiModelField>
       </model>
-      <model type="InstantMessage" id="m2">
-        <field name="Body" type="String"><value type="String"><![CDATA[ça va]]></value></field>
-      </model>
     </multiModelField>
-    <jumptargets><model type="Odd" id="outside-chain" /></jumptargets>
-  </model>
-  <model type="Chat" id="c2">
-    <field name="Name" type="String"><value type="String"><![CDATA[Seul]]></value></field>
+    <RelatedModels><model type="Location" id="rel" /></RelatedModels>
+    <somethingNew><model type="Odd" id="odd" /></somethingNew>
   </model>
 </modelType>
 </decodedData></project>
 """
 
 
-def test_streaming_reader_matches_recursive_decomposition() -> None:
-    """The reader emits each model at its own end tag; it must produce exactly the records
-    the recursive reference decomposition (flatten_model over the whole tree) produces."""
-    from lxml import etree
+def _nested() -> dict[str, FlatRecord]:
+    records = (i for i in iter_items(io.BytesIO(_NESTED_XML.encode())) if isinstance(i, FlatRecord))
+    return {record.model_id: record for record in records}
 
-    from ufdr_parser.models import flatten_model
 
-    streamed = [i for i in iter_items(io.BytesIO(_NESTED_XML.encode())) if isinstance(i, FlatRecord)]
-    root = etree.fromstring(_NESTED_XML.encode())
-    reference = [
-        record
-        for model_type in root.iter("{http://pa.cellebrite.com/report/2.0}modelType")
-        for model in model_type
-        for record in flatten_model(model)
-    ]
-    key = lambda r: (r.level, r.model_type, r.model_id)  # noqa: E731
-    assert sorted(streamed, key=key) == sorted(reference, key=key)
-    ids = {r.model_id for r in streamed}
-    assert "too-deep" not in ids and "outside-chain" not in ids
-    party = next(r for r in streamed if r.model_id == "p1")
-    assert (party.level, party.parent_id, party.top_id, party.top_type) == (2, "m1", "c1", "Chat")
+def test_every_model_becomes_a_record_wherever_it_sits() -> None:
+    records = _nested()
+    assert set(records) == {"c1", "m1", "p1", "deep", "rel", "odd"}
+    deep = records["deep"]
+    assert (deep.level, deep.parent_id, deep.top_id, deep.top_type) == (3, "p1", "c1", "Chat")
+    assert deep.fields[PARENT_FIELD_COLNAME] == "Deeper"
+    assert (records["rel"].level, records["rel"].fields[PARENT_FIELD_COLNAME]) == (1, "RelatedModels")
+    assert (records["odd"].level, records["odd"].fields[PARENT_FIELD_COLNAME]) == (1, "somethingNew")
+    assert level_file_prefix(deep.level) == "SSSM"
+
+
+def test_every_attribute_and_child_becomes_a_column() -> None:
+    fields = _nested()["c1"].fields
+    assert (fields["deleted_state"], fields["iscarved"]) == ("Intact", "False")
+    assert (fields["Label"], fields["Label#2"]) == ("first", "second")
+    assert fields["Tags"] == "a; b"
+    assert fields["When"] == "2020-01-01T00:00:00+02:00"
+    assert (fields["When.format"], fields["When.formattedTimestamp"]) == ("ISO", "1 Jan")
+    assert fields["When.offset"] == "+02:00"
+    assert (fields["jumptargets"], fields["jumptargets.targetType"]) == ("t1; t2", "File")
+    assert PARENT_FIELD_COLNAME not in fields or not fields[PARENT_FIELD_COLNAME]

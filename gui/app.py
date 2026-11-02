@@ -1041,8 +1041,9 @@ class MainController(QObject):
             f"source(s) to {len(summary.files)} CSV file(s)"
         )
         failed = [brick for brick in summary.bricks if brick.error]
-        if failed:
-            status += f"; {len(failed)} post-dump step(s) failed (see log)"
+        if failed or summary.findings:
+            # First, not last: the status label elides what does not fit.
+            status = f"DATA MAY BE MISSING. {status}"
         self._set_status(status)
         log.info(status)
         for name, rows in summary.files.items():
@@ -1052,6 +1053,13 @@ class MainController(QObject):
                 log.error(f"  {brick.name} failed: {brick.error}")
             for path in brick.files:
                 log.info(f"  {brick.name}: {path.name}")
+        # Never just a log line: the analyst must see that the output may be incomplete. Brick
+        # checks already include the dump's findings; without a workbook, show those directly.
+        problems = [brick.error for brick in failed] or summary.findings
+        if problems:
+            self._show_error(
+                "The dump finished, but data may be missing from its output:\n\n" + "\n\n".join(problems)
+            )
 
     # --- active case (the top-level context across the three tabs) ------------
 

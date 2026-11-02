@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass
 
 from lxml import etree
@@ -40,8 +41,6 @@ from ufdr_parser.const import (
     COL_SOURCE_PATH,
     COL_SOURCE_SIZE,
     COL_SOURCE_TABLE,
-    TAG_EXTRA_INFO,
-    TAG_NODE_INFO,
 )
 
 log = logging.getLogger(__name__)
@@ -97,7 +96,7 @@ def parse_extra_info(elem: "etree._Element") -> SourceEntry | None:
     entry_id = elem.get("id")
     if not entry_id:
         return None
-    node = elem.find(f".//{TAG_NODE_INFO}")
+    node = elem.find(".//{*}nodeInfo")
     if node is None:
         if kind == EXTRA_INFO_NODE_KIND:
             return None
@@ -114,15 +113,16 @@ def parse_extra_info(elem: "etree._Element") -> SourceEntry | None:
     )
 
 
-def index_source_stream(stream, conn: sqlite3.Connection) -> int:
+def index_source_stream(stream, conn: sqlite3.Connection, sections: "Counter | None" = None) -> int:
     """Build the ``model_source`` map from a stream wrapping the ``<extraInfos>`` region.
 
     Streams extraInfo end events (freeing each), so it is flat-RAM for the trailing block of
     a 32 GB report. Returns the number of MODEL source entries indexed (file node entries
-    only serve to resolve references, so they are not counted).
+    only serve to resolve references, so they are not counted). ``sections`` receives what the
+    report's other sections after ``<extraInfos>`` hold, for the omissions report.
     """
     index = SourceIndex(conn)
-    context = etree.iterparse(stream, events=("end",), tag=TAG_EXTRA_INFO, recover=True, huge_tree=True)
+    context = etree.iterparse(stream, events=("end",), tag="{*}extraInfo", recover=True, huge_tree=True)
     count = 0
     for _event, elem in context:
         entry = parse_extra_info(elem)
@@ -134,6 +134,11 @@ def index_source_stream(stream, conn: sqlite3.Connection) -> int:
         while elem.getprevious() is not None:
             del elem.getparent()[0]
     index.finalise()
+    if sections is not None:
+        for section in context.root if context.root is not None else ():
+            local = section.tag.rpartition("}")[2] if isinstance(section.tag, str) else ""
+            if local and local != "extraInfos" and len(section):
+                sections[local] += len(section)
     return count
 
 

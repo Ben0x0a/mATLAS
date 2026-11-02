@@ -1,4 +1,4 @@
-"""Load the workbook configuration (``ufdr_config.toml``): which sheets, columns and sources.
+"""Load the workbook configuration (``ufdr_config.toml``): how the fixed sheets are filled.
 
 Defines:    IdentifierSource, WorkbookConfig, CONFIG_FILENAME, default_config_text() and
             load_workbook_config().
@@ -12,8 +12,10 @@ WHERE the configuration comes from, first match wins:
 3. the built-in default shipped in this package (``default_ufdr_config.toml``).
 A user file need not be complete: every top-level section it contains REPLACES the default's,
 the others fall back to the default. WHY section-level rather than key-level merging: a
-section is one coherent choice (a list of sheets, a list of identifier sources); merging two
-lists element-wise would silently keep defaults the operator meant to remove.
+section is one coherent choice (a list of location types, a list of identifier sources); merging
+two lists element-wise would silently keep defaults the operator meant to remove.
+
+WHAT it cannot do: add or remove a sheet. The workbook's sheets are fixed (sheets.SHEET_BUILDERS).
 
 WHY strict validation: an unknown section, key or sheet name is a typo, and a typo silently
 ignored means a workbook missing what the operator asked for. It is reported before the dump
@@ -31,10 +33,10 @@ _DEFAULT_RESOURCE = "default_ufdr_config.toml"
 
 # Allowed keys per section ("identifiers" is an array of tables, validated per entry).
 _SECTION_KEYS: dict[str, set[str] | None] = {
-    "workbook": {"sheets"},
+    "workbook": {"hide_field_suffixes"},
     "hide_columns": None,  # free keys: sheet names, checked against the sheet registry
-    "contacts": {"child_models"},
     "locations": {"record_types"},
+    "checks": {"not_communications"},
     "identifiers": None,
 }
 _IDENTIFIER_KEYS = {"model", "field", "kind", "kind_field", "only"}
@@ -63,11 +65,13 @@ class IdentifierSource:
 
 @dataclass(frozen=True)
 class WorkbookConfig:
-    sheets: tuple[str, ...]
     hide_columns: dict[str, frozenset[str]]
-    contact_child_models: tuple[str, ...]
     location_record_types: tuple[str, ...]
     identifiers: tuple[IdentifierSource, ...]
+    # Column-name endings kept in the CSVs but not written to the workbook.
+    hide_field_suffixes: tuple[str, ...] = ()
+    # Models with parties and a body/duration that are known not to be communications.
+    not_communications: tuple[str, ...] = ()
     # Where it was loaded from, for the About sheet.
     source: str = "built-in default"
 
@@ -122,13 +126,13 @@ def _parse(raw: dict, source: str) -> WorkbookConfig:
     if not isinstance(identifiers_raw, list):
         raise ValueError(f"{CONFIG_FILENAME}: identifiers must be [[identifiers]] blocks")
     return WorkbookConfig(
-        sheets=_string_list(raw["workbook"]["sheets"], "[workbook].sheets"),
         hide_columns={
             sheet: frozenset(_string_list(columns, f"[hide_columns].{sheet}")) for sheet, columns in hide_raw.items()
         },
-        contact_child_models=_string_list(raw["contacts"]["child_models"], "[contacts].child_models"),
         location_record_types=_string_list(raw["locations"]["record_types"], "[locations].record_types"),
         identifiers=tuple(_identifier_source(entry, i) for i, entry in enumerate(identifiers_raw)),
+        hide_field_suffixes=_string_list(raw["workbook"].get("hide_field_suffixes", []), "[workbook].hide_field_suffixes"),
+        not_communications=_string_list(raw["checks"]["not_communications"], "[checks].not_communications"),
         source=source,
     )
 

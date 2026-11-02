@@ -29,10 +29,10 @@ from ufdr_parser.const import (
     COL_MAIN_UUID,
     COL_SUB_UUID,
     COL_UUID,
-    LEVEL_FILE_PREFIX,
     LEVEL_TOP,
     SOURCE_COLUMNS,
     TRACE_COLUMNS,
+    level_file_prefix,
 )
 from ufdr_parser.models import FlatRecord
 from ufdr_parser.source_lookup import SourceIndex
@@ -194,7 +194,7 @@ def group_filenames(
 ) -> dict[tuple[int, str], str]:
     """Assign each ``(level, model_type)`` group a UNIQUE CSV filename.
 
-    HOW: the legacy name is ``<base>_<LEVEL_FILE_PREFIX[level]><model_type>.csv``; this is kept
+    HOW: the legacy name is ``<base>_<level_file_prefix(level)><model_type>.csv``; this is kept
     when unique, but on a collision the level is spelled out (``__L<level>``) and, if that too
     is taken, a counter is appended, so two distinct groups never share a path. Keys are sorted
     first so the assignment is deterministic across serial and parallel runs.
@@ -206,7 +206,7 @@ def group_filenames(
     used: set[str] = set()
     result: dict[tuple[int, str], str] = {}
     for level, model_type in sorted(keys):
-        stem = f"{base}_{LEVEL_FILE_PREFIX[level]}{model_type}"
+        stem = f"{base}_{level_file_prefix(level)}{model_type}"
         candidate = f"{stem}.csv"
         if candidate in used:
             candidate = f"{stem}__L{level}.csv"
@@ -270,10 +270,9 @@ def write_rows(
     HOW the injected columns survive a name clash: each field value is placed under its mapped
     column (``column_map``), so a field named like an identity/source column lands on its ``#n``
     column and never overwrites the injected value; the source then traceability columns are
-    written LAST. WHY
-    ``resolve(top_id)``: ``<extraInfos>`` is keyed by TOP-LEVEL model ids, so a nested row must
-    look its source up by the id of its tree root (its own id resolves to nothing → blank
-    source), letting every child inherit its parent's source.
+    written LAST. WHY the record's own id first, then ``top_id``: ``<extraInfos>`` has entries for
+    top-level models and for many nested ones (a related record has its own source file), so a
+    nested row uses its own source when it has one and inherits its tree root's otherwise.
     """
     cursor = records_conn.execute(
         "SELECT id, parent_id, top_id, fields_json FROM records "
@@ -290,7 +289,9 @@ def write_rows(
             row[COL_MAIN_UUID] = parent_id
         for name, value in json.loads(fields_json).items():
             row[column_map.get(name, name)] = value
-        entry = resolve(top_id)
+        entry = resolve(model_id)
+        if entry is None or entry.path is None:
+            entry = resolve(top_id) or entry
         if entry is not None:
             row.update(entry.as_columns())
         row.update(trace)

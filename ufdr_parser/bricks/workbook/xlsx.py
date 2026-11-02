@@ -47,6 +47,7 @@ EXCEL_MAX_SHEET_NAME = 31
 
 _TRUNCATION_MARKER = " [... cut by Excel's {limit} character cell limit; full text ({length} characters) is in the CSV]"
 _HEADER_FONT = Font(bold=True)
+_ALERT_FONT = Font(bold=True, color="B91C1C")
 _WRAP = Alignment(wrap_text=True, vertical="top")
 # Column width bounds (characters) when sizing from the header and first rows.
 _MIN_WIDTH = 8
@@ -74,7 +75,7 @@ def _escape_illegal(text: str, stats: WriteStats) -> str:
     return ILLEGAL_CHARACTERS_RE.sub(replace, text)
 
 
-def text_cell(sheet, value: object, stats: WriteStats, *, bold: bool = False, wrap: bool = False):
+def text_cell(sheet, value: object, stats: WriteStats, *, bold: bool = False, wrap: bool = False, alert: bool = False):
     """A write-only cell holding ``value`` as TEXT (never a formula/number), within limits."""
     if value is None:
         return None
@@ -88,6 +89,8 @@ def text_cell(sheet, value: object, stats: WriteStats, *, bold: bool = False, wr
     cell.data_type = "s"
     if bold:
         cell.font = _HEADER_FONT
+    if alert:
+        cell.font = _ALERT_FONT
     if wrap:
         cell.alignment = _WRAP
     return cell

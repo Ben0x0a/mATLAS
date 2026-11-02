@@ -7,8 +7,8 @@ Used by:    workbook.sheets.
 Depends on: workbook.staging, const (column names), sqlite3.
 
 The report nests a communication's parties as child ``Party`` models (``SMParty`` under a
-Call/Email/InstantMessage/Chat, ``SSMParty`` under a chat's message), linked by ``main-uuid``.
-Every Party group is folded into one ``party`` table keyed by its parent id, so each lookup is
+Call/Email/InstantMessage/Chat, ``SSMParty`` under a chat's message, deeper under a quoted one),
+linked by ``main-uuid``. Every Party group is folded into one ``party`` table keyed by its parent id, so each lookup is
 one index probe whatever the nesting level. Attachments are folded the same way.
 
 TO INFERENCE (mirrors the legacy UFEDParser, but never silently): a chat message often states
@@ -22,7 +22,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 
-from ufdr_parser.const import COL_MAIN_UUID, LEVEL_SUB, LEVEL_SUBSUB, MULTI_VALUE_SEPARATOR
+from ufdr_parser.const import COL_MAIN_UUID, LEVEL_SUB, MULTI_VALUE_SEPARATOR
 from ufdr_parser.bricks.workbook.staging import Staging, quote
 
 PARTY_TYPE_NAME = "Party"
@@ -91,11 +91,6 @@ def join_identifiers(parties: list[Party]) -> str | None:
     return MULTI_VALUE_SEPARATOR.join(values) if values else None
 
 
-def join_keys(parties: list[Party]) -> str | None:
-    values = [key for party in parties if (key := party.key())]
-    return MULTI_VALUE_SEPARATOR.join(values) if values else None
-
-
 def join_others(parties: list[Party]) -> str | None:
     """Parties with a role other than From/To, each prefixed by its role (lossless)."""
     labels = [f"[{party.role or 'no role'}] {party.label()}" for party in parties if party.label()]
@@ -159,15 +154,15 @@ class Links:
     def _fold(
         self, staging: Staging, model_type: str, target: str, columns: tuple[str, ...]
     ) -> None:
-        """Union the level-1 and level-2 groups of ``model_type`` into one parent-keyed table."""
+        """Union every nested group of ``model_type``, at any level, into one parent-keyed table."""
         column_sql = ", ".join(f"c{i} TEXT" for i in range(len(columns)))
         self._conn.execute(
             f"CREATE TABLE {target} (seq INTEGER PRIMARY KEY, parent_id TEXT, {column_sql})"
         )
-        for level in (LEVEL_SUB, LEVEL_SUBSUB):
-            table = staging.table(level, model_type)
-            if table is None:
+        for level, group_type in staging.groups():
+            if group_type != model_type or level < LEVEL_SUB:
                 continue
+            table = staging.table(level, model_type)
             select = ", ".join(table.col(column) for column in columns)
             self._conn.execute(
                 f"INSERT INTO {target} (parent_id, "

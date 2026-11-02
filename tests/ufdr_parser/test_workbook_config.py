@@ -36,7 +36,6 @@ def test_default_is_the_shipped_file(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.chdir(tmp_path)
     config = load_workbook_config()
     assert config.source == "built-in default"
-    assert config.sheets == ("Source device", "Communications", "Contacts", "Identifiers")
     assert [s.model for s in config.identifiers][:2] == ["Party", "PhoneNumber"]
     tomllib.loads(default_config_text())  # the shipped file itself is valid TOML
 
@@ -52,31 +51,32 @@ def test_init_config_writes_the_default_and_never_overwrites(tmp_path: Path) -> 
 
 
 def test_a_section_replaces_the_default_section(tmp_path: Path) -> None:
-    path = _write(tmp_path, '[workbook]\nsheets = ["Identifiers"]\n')
+    path = _write(tmp_path, '[locations]\nrecord_types = ["Location"]\n')
     config = load_workbook_config(path)
-    assert config.sheets == ("Identifiers",)
+    assert config.location_record_types == ("Location",)
     assert len(config.identifiers) == len(load_workbook_config(_write(tmp_path, "", "empty.toml")).identifiers)
     assert config.source == str(path.resolve())
 
 
 def test_cwd_file_is_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _write(tmp_path, '[workbook]\nsheets = ["Contacts"]\n')
+    _write(tmp_path, '[locations]\nrecord_types = ["Location"]\n')
     monkeypatch.chdir(tmp_path)
-    assert load_workbook_config().sheets == ("Contacts",)
+    assert load_workbook_config().location_record_types == ("Location",)
 
 
 def test_bom_saved_file_is_accepted(tmp_path: Path) -> None:
     path = tmp_path / "ufdr_config.toml"
-    path.write_bytes(b'\xef\xbb\xbf[workbook]\nsheets = ["Contacts"]\n')  # as Windows Notepad saves it
-    assert load_workbook_config(path).sheets == ("Contacts",)
+    path.write_bytes(b'\xef\xbb\xbf[locations]\nrecord_types = ["Location"]\n')  # as Windows Notepad saves it
+    assert load_workbook_config(path).location_record_types == ("Location",)
 
 
 @pytest.mark.parametrize(
     "text",
     [
-        "[workbok]\nsheets = []\n",                                   # unknown section
-        '[workbook]\nsheet = ["Contacts"]\n',                         # unknown key
-        '[workbook]\nsheets = "Contacts"\n',                          # not a list
+        "[workbok]\nhide_field_suffixes = []\n",                      # unknown section
+        '[workbook]\nsheets = ["Communications"]\n',                  # the sheets are not configurable
+        '[contacts]\nchild_models = []\n',                            # no Contacts sheet any more
+        '[workbook]\nhide_field_suffixes = ".x"\n',                   # not a list
         '[[identifiers]]\nmodel = "Party"\n',                         # missing field
         '[[identifiers]]\nmodel = "Party"\nfield = "x"\nkinds = "y"\n',  # unknown key
     ],
@@ -87,14 +87,14 @@ def test_typos_are_errors(tmp_path: Path, text: str) -> None:
 
 
 def test_unknown_sheet_fails_before_the_dump(report: Path, tmp_path: Path) -> None:
-    config = _write(tmp_path, '[workbook]\nsheets = ["Contacts", "Contactz"]\n')
+    config = _write(tmp_path, '[hide_columns]\nContactz = ["Name"]\n')
     with pytest.raises(ValueError, match="Contactz"):
         run_dump(report, tmp_path / "out", brick_config=config)
     assert not (tmp_path / "out").exists()  # nothing parsed or written
 
 
 def test_hide_columns(report: Path, tmp_path: Path) -> None:
-    config = _write(tmp_path, '[workbook]\nsheets = ["Communications"]\n[hide_columns]\nCommunications = ["Chat uuid", "To basis"]\n')
+    config = _write(tmp_path, '[hide_columns]\nCommunications = ["Chat uuid", "To basis"]\n')
     run_dump(report, tmp_path / "out", brick_config=config)
     workbook = tmp_path / "out" / "wb_Report_combined.xlsx"
     header = [_bare(c) for c in _header(workbook, "Communications")]
@@ -104,10 +104,7 @@ def test_hide_columns(report: Path, tmp_path: Path) -> None:
 
 
 def test_new_identifier_source_is_one_block(report: Path, tmp_path: Path) -> None:
-    config = _write(tmp_path, '''[workbook]
-sheets = ["Identifiers"]
-
-[[identifiers]]
+    config = _write(tmp_path, '''[[identifiers]]
 model = "Contact"
 field = "Name"
 kind = "Contact name"
@@ -115,13 +112,6 @@ kind = "Contact name"
     run_dump(report, tmp_path / "out", brick_config=config)
     rows = _sheet(tmp_path / "out" / "wb_Report_combined.xlsx", "Identifiers")
     assert [(r["Identifier"], r["Kind"], r["CSV file"]) for r in rows] == [("Bob", "Contact name", "wb_Report_Contact.csv")]
-
-
-def test_contact_child_models_filter(report: Path, tmp_path: Path) -> None:
-    config = _write(tmp_path, '[workbook]\nsheets = ["Contacts"]\n[contacts]\nchild_models = ["PhoneNumber"]\n')
-    run_dump(report, tmp_path / "out", brick_config=config)
-    header = [_bare(c) for c in _header(tmp_path / "out" / "wb_Report_combined.xlsx", "Contacts")]
-    assert "PhoneNumber.Value" in header and not any(c.startswith("UserID.") for c in header)
 
 
 def test_case_name_names_every_output(report: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

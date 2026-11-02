@@ -158,3 +158,19 @@ def test_new_case_starts_the_folder_dialog_where_a_dropped_file_is(controller, t
     controller._new_case()
     assert seen["start"] == str(dropped.parent)
     assert controller._case_name == "iPhone_A2221"
+
+
+def test_dump_with_missing_data_shows_an_error_not_just_a_log_line(controller, tmp_path, monkeypatch) -> None:
+    from ufdr_parser.bricks.base import BrickResult
+    from ufdr_parser.dump import DumpSummary
+
+    errors: list[str] = []
+    monkeypatch.setattr(controller, "_show_error", errors.append)
+    controller._pending_dump_dir = tmp_path
+    controller._on_dump_done(DumpSummary(bricks=[BrickResult("workbook", "checks failed", error="no sender")]))
+    assert errors and "no sender" in errors[0]
+    assert controller._status_text.startswith("DATA MAY BE MISSING")  # first: the label elides the end
+
+    errors.clear()
+    controller._on_dump_done(DumpSummary(bricks=[BrickResult("workbook", "ok")]))
+    assert not errors and not controller._status_text.startswith("DATA MAY BE MISSING")

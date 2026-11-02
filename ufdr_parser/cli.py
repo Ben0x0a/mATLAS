@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from ufdr_parser.dump import run_dump
+from ufdr_parser.integrity import ReportIntegrityError
 
 log = logging.getLogger("ufdr_parser")
 
@@ -130,26 +131,30 @@ def main(argv: list[str] | None = None) -> int:
             if args.models
             else None
         )
-        summary = run_dump(
-            args.input,
-            args.output,
-            models=models,
-            workers=_resolve_workers(args.workers),
-            parse_workers=_resolve_workers(args.parse_workers, cap=4),
-            bricks=_resolve_bricks(args.bricks),
-            brick_config=args.config,
-            case_name=args.case,
-        )
+        try:
+            summary = run_dump(
+                args.input,
+                args.output,
+                models=models,
+                workers=_resolve_workers(args.workers),
+                parse_workers=_resolve_workers(args.parse_workers, cap=4),
+                bricks=_resolve_bricks(args.bricks),
+                brick_config=args.config,
+                case_name=args.case,
+            )
+        except ReportIntegrityError as error:
+            log.error(f"{args.input}: {error}")
+            return 1
         log.info(
             f"Done: {summary.record_count} record(s) across {len(summary.files)} file(s)."
         )
         _report_drift(args.baseline, summary)
         failed = [brick for brick in summary.bricks if brick.error]
         for brick in failed:
-            log.error(f"Brick '{brick.name}' failed: {brick.error}")
-        # The CSVs are complete either way; a failed brick still makes the exit status non-zero
-        # so a scripted run notices the missing derived output.
-        return 1 if failed else 0
+            log.error(f"Brick '{brick.name}': {brick.status}: {brick.error}")
+        # A failed brick or an unplaced part of the report makes the exit status non-zero, so a
+        # scripted run notices the missing output.
+        return 1 if failed or summary.findings else 0
     if args.command == "init-config":
         from ufdr_parser.bricks.workbook.config import default_config_text
 

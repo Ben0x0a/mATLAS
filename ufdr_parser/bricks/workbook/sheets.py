@@ -1,8 +1,7 @@
 """The combined sheets' rows: one builder per sheet, each laid out by its static SheetDoc.
 
-Defines:    Sheet, Context, the builders (communications, messages, calls, emails, contacts,
-            locations, identifiers, cdr_importer) listed in SHEET_BUILDERS in workbook order,
-            classify_identifier and describe_child.
+Defines:    Sheet, Context, the builders (source_device, communications, identifiers, locations)
+            listed in SHEET_BUILDERS: the workbook's data sheets, fixed, in workbook order.
 Used by:    workbook.brick (the orchestrator), which writes each Sheet.
 Depends on: workbook.documentation (each sheet's layout and meaning), workbook.staging,
             workbook.links, workbook.comms, workbook.config, const (column names).
@@ -23,11 +22,7 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from ufdr_parser.bricks.workbook.comms import (
-    CATEGORY_CALL,
-    CATEGORY_CHAT_MESSAGE,
-    CATEGORY_EMAIL,
-    CATEGORY_INSTANT_MESSAGE,
-    COMM_SOURCES,
+    comm_sources,
     TIME_ORDER_SQL,
     TIMESTAMP_FIELD_NAME,
 )
@@ -35,20 +30,14 @@ from ufdr_parser.bricks.workbook.config import WorkbookConfig, load_workbook_con
 from ufdr_parser.bricks.workbook.documentation import (
     ADDRESS_PREFIX,
     BLOCK_ADDRESS,
-    BLOCK_CHILDREN,
     BLOCK_COORDINATE,
     BLOCK_JOURNEY,
     BLOCK_OWN,
-    CALLS,
-    CDR_IMPORTER,
     COMMUNICATIONS,
-    CONTACTS,
     COORDINATE_PREFIX,
-    EMAILS,
     IDENTIFIERS,
     JOURNEY_PREFIX,
     LOCATIONS,
-    MESSAGES,
     RECORD_UUID_COLNAME,
     SOURCE_DEVICE,
     TIMESTAMP_OFFSET_COLNAME,
@@ -62,12 +51,13 @@ from ufdr_parser.const import (
     COL_SOURCE_PATH,
     COL_SUB_UUID,
     COL_UUID,
-    LEVEL_FILE_PREFIX,
     LEVEL_SUB,
     LEVEL_TOP,
     MULTI_VALUE_SEPARATOR,
+    PARENT_FIELD_COLNAME,
     SOURCE_COLUMNS,
     TRACE_COLUMNS,
+    level_file_prefix,
 )
 from ufdr_parser.report_info import (
     COL_DETAILS as REPORT_INFO_DETAILS_COLNAME,
@@ -102,7 +92,7 @@ class Context:
     comm_files: dict[str, list[str]] = field(default_factory=dict)  # mutable default — per instance
     # The dump's report header CSV (see ufdr_parser.report_info); None if not written.
     report_info_path: Path | None = None
-    # The active ufdr_config.toml (sheets, contact children, location types, identifier sources).
+    # The active ufdr_config.toml (hidden columns, location types, identifier sources).
     config: WorkbookConfig = field(default_factory=lambda: load_workbook_config())
 
 
@@ -146,9 +136,8 @@ def _raw_row(conn: sqlite3.Connection, table_name: str, seq: int) -> dict[str, o
     return dict(zip(names, row)) if row else {}
 
 
-# ------------------------------------------------------------------ communication sheets
+# ------------------------------------------------------------------ communications
 
-_TIME_ORDER = TIME_ORDER_SQL
 # Raw fields a curated column already shows (raw field, comm field), not repeated in the block.
 _SHOWN_RAW = (
     (TIMESTAMP_FIELD_NAME, "timestamp"),
@@ -165,101 +154,38 @@ _SHOWN_RAW = (
 def _party_files(ctx: Context) -> list[str]:
     return [
         name
-        for level in (LEVEL_SUB, LEVEL_SUB + 1)
-        for model_type in (PARTY_TYPE_NAME, "Attachment")
-        if (name := ctx.staging.csv_name(level, model_type))
+        for level, model_type in ctx.staging.groups()
+        if model_type in (PARTY_TYPE_NAME, "Attachment") and (name := ctx.staging.csv_name(level, model_type))
     ]
 
 
-def _comm_sheet(ctx: Context, doc: SheetDoc, categories: tuple[str, ...], order_sql: str) -> Sheet | None:
-    conn = ctx.staging.conn
-    present = [category for category in categories if category in ctx.comm_files]
-    if not present:
-        return None
-    tables = []
-    built_from: list[str] = []
-    for source in COMM_SOURCES:
-        if source.category in present:
-            table = ctx.staging.table(source.level, source.model_type)
-            if table is not None:
-                tables.append(table)
-            built_from += ctx.comm_files[source.category]
-    fed = {column.field for column in doc.static() if column.field}
-    own = _own_columns(tables, {raw for raw, comm in _SHOWN_RAW if comm in fed})
-    header, display, renames = expand_header(doc, {BLOCK_OWN: own})
-    has_own_block = any(column.block == BLOCK_OWN for column in doc.columns)
-    fields = [(column.name, column.field) for column in doc.static() if column.field]
-    placeholders = ", ".join("?" for _ in present)
-
-    def rows() -> Iterator[list[object]]:
-        # The per-chat window (Messages' grouping) sorts a copy of every row, so it is only
-        # computed for the sheet that orders by it; the others read the time index directly.
-        window = ", MIN(seq) OVER (PARTITION BY chat_id) AS chat_order" if "chat_order" in order_sql else ""
-        cursor = conn.cursor().execute(
-            f"SELECT *{window} FROM comm WHERE category IN ({placeholders}) ORDER BY {order_sql}",
-            present,
-        )
-        for comm in _dict_rows(cursor):
-            values = {name: comm[comm_field] for name, comm_field in fields}
-            values.update(_provenance(comm["record_id"], comm))
-            if has_own_block:
-                values.update(_own_values(_raw_row(conn, comm["raw_table"], comm["row_seq"]), own, renames))
-            yield _align(header, values)
-
-    files = list(dict.fromkeys(f for f in built_from + _party_files(ctx) if f))
-    return Sheet(doc, header, display, files, rows())
-
-
 def communications(ctx: Context) -> Sheet | None:
-    return _comm_sheet(
-        ctx,
-        COMMUNICATIONS,
-        (CATEGORY_CALL, CATEGORY_EMAIL, CATEGORY_INSTANT_MESSAGE, CATEGORY_CHAT_MESSAGE),
-        _TIME_ORDER,
-    )
-
-
-def messages(ctx: Context) -> Sheet | None:
-    return _comm_sheet(
-        ctx,
-        MESSAGES,
-        (CATEGORY_CHAT_MESSAGE, CATEGORY_INSTANT_MESSAGE),
-        f"category <> '{CATEGORY_CHAT_MESSAGE}', chat_order, {_TIME_ORDER}",
-    )
-
-
-def calls(ctx: Context) -> Sheet | None:
-    return _comm_sheet(ctx, CALLS, (CATEGORY_CALL,), _TIME_ORDER)
-
-
-def emails(ctx: Context) -> Sheet | None:
-    return _comm_sheet(ctx, EMAILS, (CATEGORY_EMAIL,), _TIME_ORDER)
-
-
-# ------------------------------------------------------------------ CDR importer (legacy)
-
-
-def cdr_importer(ctx: Context) -> Sheet | None:
     if not ctx.comm_files:
         return None
     conn = ctx.staging.conn
-    header, display, _renames = expand_header(CDR_IMPORTER, {})
-    fields = [(column.name, column.field) for column in CDR_IMPORTER.static() if column.field]
+    tables = []
+    built_from: list[str] = []
+    for source in comm_sources(ctx.staging):
+        table = ctx.staging.table(source.level, source.model_type)
+        if table is not None and table not in tables:
+            tables.append(table)
+    for files in ctx.comm_files.values():
+        built_from += files
+    fed = {column.field for column in COMMUNICATIONS.static() if column.field}
+    own = _own_columns(tables, {raw for raw, comm in _SHOWN_RAW if comm in fed})
+    header, display, renames = expand_header(COMMUNICATIONS, {BLOCK_OWN: own})
+    fields = [(column.name, column.field) for column in COMMUNICATIONS.static() if column.field]
 
     def rows() -> Iterator[list[object]]:
-        cursor = conn.cursor().execute(
-            f"SELECT * FROM comm ORDER BY {TIME_ORDER_SQL}"
-        )
+        cursor = conn.cursor().execute(f"SELECT * FROM comm ORDER BY {TIME_ORDER_SQL}")
         for comm in _dict_rows(cursor):
             values = {name: comm[comm_field] for name, comm_field in fields}
-            values["B_MSISDN"] = comm["cdr_b"]
-            values["B_basis"] = comm["cdr_b_basis"]
-            values["Comment"] = comm["body"] or comm["subject"]
             values.update(_provenance(comm["record_id"], comm))
+            values.update(_own_values(_raw_row(conn, comm["raw_table"], comm["row_seq"]), own, renames))
             yield _align(header, values)
 
-    files = list(dict.fromkeys(f for files in ctx.comm_files.values() for f in files))
-    return Sheet(CDR_IMPORTER, header, display, files + _party_files(ctx), rows())
+    files = list(dict.fromkeys(f for f in built_from + _party_files(ctx) if f))
+    return Sheet(COMMUNICATIONS, header, display, files, rows())
 
 
 # ------------------------------------------------------------------ identifiers
@@ -321,9 +247,7 @@ def identifiers(ctx: Context) -> Sheet | None:
     return Sheet(IDENTIFIERS, header, display, list(dict.fromkeys(used)), rows())
 
 
-# ------------------------------------------------------------------ contacts & locations
-
-_CONTACT_TYPE_NAME = "Contact"
+# ------------------------------------------------------------------ locations
 
 
 def _children(conn: sqlite3.Connection, table: Table, parent_id: object) -> list[dict[str, object]]:
@@ -333,73 +257,13 @@ def _children(conn: sqlite3.Connection, table: Table, parent_id: object) -> list
     return list(_dict_rows(cursor))
 
 
-def _has_direct_children(ctx: Context, child: Table, parent: Table) -> bool:
-    """Whether some row of the level-1 ``child`` group hangs directly off a ``parent`` record."""
-    return ctx.staging.conn.execute(
-        f"SELECT 1 FROM {child.name} AS c JOIN {parent.name} AS p "
-        f"ON p.{quote(COL_UUID)} = c.{quote(COL_MAIN_UUID)} LIMIT 1"
-    ).fetchone() is not None
-
-
-def contacts(ctx: Context) -> Sheet | None:
-    """One row per contact: its own fields, then each child model's fields flattened verbatim.
-
-    HOW: for every child model type of Contact (or those listed in [contacts].child_models),
-    each of its fields becomes a "<Model>.<field>" column; a contact with several entries of
-    that model gets them joined with MULTI_VALUE_SEPARATOR, keeping each entry's position
-    (an empty value stays an empty slot), so the n-th value of every column of that model
-    belongs to the same entry. WHY no classification: the sheet shows the report's structure;
-    reading it needs no knowledge of rules applied here.
-    """
-    conn = ctx.staging.conn
-    contact = ctx.staging.table(LEVEL_TOP, _CONTACT_TYPE_NAME)
-    if contact is None:
-        return None
-    candidates = ctx.config.contact_child_models or tuple(
-        sorted({child for child, top in ctx.relations if top == _CONTACT_TYPE_NAME})
-    )
-    children = [
-        (model_type, table)
-        for model_type in candidates
-        if (table := ctx.staging.table(LEVEL_SUB, model_type)) is not None and _has_direct_children(ctx, table, contact)
-    ]
-    child_fields = {model_type: _own_columns([table], set()) for model_type, table in children}
-    own = _own_columns([contact], set())
-    header, display, renames = expand_header(
-        CONTACTS,
-        {
-            BLOCK_OWN: own,
-            BLOCK_CHILDREN: [f"{model_type}.{name}" for model_type, _t in children for name in child_fields[model_type]],
-        },
-    )
-
-    def rows() -> Iterator[list[object]]:
-        for record in _dict_rows(conn.cursor().execute(f"SELECT * FROM {contact.name} ORDER BY seq")):
-            parent = record[COL_UUID]
-            values = _own_values(record, own, renames)
-            for model_type, table in children:
-                entries = _children(conn, table, parent)
-                for name in child_fields[model_type]:
-                    column = f"{model_type}.{name}"
-                    if any(entry.get(name) for entry in entries):
-                        values[renames.get(column, column)] = MULTI_VALUE_SEPARATOR.join(
-                            str(entry.get(name) or "") for entry in entries
-                        )
-            values.update(_provenance(parent, record))
-            yield _align(header, values)
-
-    files = [ctx.staging.csv_name(LEVEL_TOP, _CONTACT_TYPE_NAME)] + [
-        ctx.staging.csv_name(LEVEL_SUB, model_type) for model_type, _t in children
-    ]
-    return Sheet(CONTACTS, header, display, [f for f in files if f], rows())
-
-
 _COORDINATE_TYPE_NAME = "Coordinate"
 _ADDRESS_TYPE_NAME = "StreetAddress"
 _LOCATION_TYPE_NAME = "Location"
 _JOURNEY_TYPE_NAME = "Journey"
 _JOURNEY_POINT_LABEL = "Journey point"
 _LAT_LON = ("Latitude", "Longitude")
+_RELATED_CONTAINER = "RelatedModels"
 
 
 def _types_with_direct_coordinates(ctx: Context, coordinate: Table | None) -> list[str]:
@@ -423,31 +287,49 @@ def _types_with_direct_coordinates(ctx: Context, coordinate: Table | None) -> li
 
 
 def locations(ctx: Context) -> Sheet | None:
-    """Every position-bearing record, flattened verbatim, in report order (no sorting).
+    """Every position-bearing record at any depth, flattened verbatim, in report order (no sorting).
 
     The only additions are Record type and where Latitude/Longitude were copied from: the
     record's Coordinate child (one row per coordinate) or, failing that, a Latitude/Longitude
     field of the record itself. Everything else is the record's own fields, its Coordinate's
     and StreetAddress's fields, and for a journey point its journey's fields — all verbatim.
+    A nested record's coordinate is one level below it, whatever the level.
     """
     conn = ctx.staging.conn
-    coords = {level: ctx.staging.table(level, _COORDINATE_TYPE_NAME) for level in (LEVEL_SUB, LEVEL_SUB + 1)}
-    addresses = {level: ctx.staging.table(level, _ADDRESS_TYPE_NAME) for level in (LEVEL_SUB, LEVEL_SUB + 1)}
+    level_of = {
+        name: sorted(level for level, model in ctx.staging.groups() if model == name)
+        for name in (_COORDINATE_TYPE_NAME, _ADDRESS_TYPE_NAME)
+    }
     record_types = ctx.config.location_record_types
-    types = list(record_types) + [
-        t for t in _types_with_direct_coordinates(ctx, coords[LEVEL_SUB]) if t not in record_types
+    detected = _types_with_direct_coordinates(ctx, ctx.staging.table(LEVEL_SUB, _COORDINATE_TYPE_NAME))
+    # (model, level, table): the configured types at every level, others where they hold a Position.
+    sources = [
+        (model, level, table)
+        for level, model in ctx.staging.groups()
+        if model in record_types and (table := ctx.staging.table(level, model)) is not None
+    ] + [
+        (model, LEVEL_TOP, ctx.staging.table(LEVEL_TOP, model))
+        for model in detected
+        if model not in record_types
     ]
-    tables = {t: table for t in types if (table := ctx.staging.table(LEVEL_TOP, t)) is not None}
-    if not tables:
+    if not sources:
         return None
-    journey = tables.get(_JOURNEY_TYPE_NAME)
+    sources.sort(key=lambda item: (list(record_types).index(item[0]) if item[0] in record_types else len(record_types), item[1]))
+    journey = ctx.staging.table(LEVEL_TOP, _JOURNEY_TYPE_NAME) if _JOURNEY_TYPE_NAME in record_types else None
     points = ctx.staging.table(LEVEL_SUB, _LOCATION_TYPE_NAME) if journey is not None else None
+    journey_ids = (
+        {row[0] for row in conn.execute(f"SELECT {quote(COL_UUID)} FROM {journey.name}")} if journey is not None else set()
+    )
 
-    coordinate_fields = [c for c in _own_columns([t for t in coords.values() if t], set()) if c not in _LAT_LON]
-    address_fields = _own_columns([t for t in addresses.values() if t], set())
+    def tables_of(name: str) -> list[Table]:
+        return [ctx.staging.table(level, name) for level in level_of[name]]
+
+    coordinate_fields = [c for c in _own_columns(tables_of(_COORDINATE_TYPE_NAME), set()) if c not in _LAT_LON]
+    address_fields = _own_columns(tables_of(_ADDRESS_TYPE_NAME), set())
     journey_fields = _own_columns([journey], set()) if journey is not None else []
-    own_tables = [t for name, t in tables.items() if name != _JOURNEY_TYPE_NAME] + ([points] if points else [])
-    own = _own_columns(own_tables, set())
+    own = _own_columns(
+        [table for model, level, table in sources if not (model == _JOURNEY_TYPE_NAME and level == LEVEL_TOP)], set()
+    )
     header, display, renames = expand_header(
         LOCATIONS,
         {
@@ -458,19 +340,23 @@ def locations(ctx: Context) -> Sheet | None:
         },
     )
 
-    def build(record_type: str, record: dict, record_id: object, level: int, extra: dict[str, object],
+    def is_point(record: dict) -> bool:
+        """A journey's way point, listed under its journey; a RELATED location is not one."""
+        return record.get(COL_MAIN_UUID) in journey_ids and record.get(PARENT_FIELD_COLNAME) != _RELATED_CONTAINER
+
+    def build(record_type: str, record: dict, record_id: object, child_level: int, extra: dict[str, object],
               *, require_coordinate: bool = False) -> Iterator[list[object]]:
         values = _own_values(record, own, renames)
         values.update(extra)
         values["Record type"] = record_type
-        address_table = addresses[level]
+        address_table = ctx.staging.table(child_level, _ADDRESS_TYPE_NAME)
         if address_table is not None:
             found_addresses = _children(conn, address_table, record_id)
             for name in address_fields:
                 joined = MULTI_VALUE_SEPARATOR.join(str(a[name]) for a in found_addresses if a.get(name))
                 values[f"{ADDRESS_PREFIX}{name}"] = joined or None
         values.update(_provenance(record_id, record))
-        coord_table = coords[level]
+        coord_table = ctx.staging.table(child_level, _COORDINATE_TYPE_NAME)
         found = _children(conn, coord_table, record_id) if coord_table is not None else []
         if require_coordinate and not found:
             return
@@ -483,7 +369,7 @@ def locations(ctx: Context) -> Sheet | None:
             yield _align(header, row)
             return
         # Named after the raw CSV it comes from (SMCoordinate / SSMCoordinate), as the dump names it.
-        label = f"{LEVEL_FILE_PREFIX[level]}{_COORDINATE_TYPE_NAME}"
+        label = f"{level_file_prefix(child_level)}{_COORDINATE_TYPE_NAME}"
         # One row per coordinate (a Position is 1:1 in practice).
         for coord in found:
             row = dict(values)
@@ -494,28 +380,32 @@ def locations(ctx: Context) -> Sheet | None:
             yield _align(header, row)
 
     def rows() -> Iterator[list[object]]:
-        for model_type, table in tables.items():
+        for model_type, level, table in sources:
+            id_column = COL_UUID if level == LEVEL_TOP else COL_SUB_UUID
             for record in _dict_rows(conn.cursor().execute(f"SELECT * FROM {table.name} ORDER BY seq")):
-                record_id = record[COL_UUID]
-                if model_type != _JOURNEY_TYPE_NAME:
-                    # A type listed only because some of its records carry a coordinate (e.g.
-                    # SocialMediaActivity) contributes just those records; configured types are
-                    # listed whole.
-                    yield from build(model_type, record, record_id, LEVEL_SUB, {},
-                                     require_coordinate=model_type not in record_types)
+                record_id = record[id_column]
+                if model_type == _JOURNEY_TYPE_NAME and level == LEVEL_TOP:
+                    journey_values = {f"{JOURNEY_PREFIX}{c}": record.get(c) for c in journey_fields}
+                    journey_points = [
+                        point for point in (_children(conn, points, record_id) if points is not None else [])
+                        if is_point(point)
+                    ]
+                    if not journey_points:
+                        yield from build(model_type, record, record_id, level + 1, journey_values)
+                    for point in journey_points:
+                        yield from build(_JOURNEY_POINT_LABEL, point, point[COL_SUB_UUID], level + 2, journey_values)
                     continue
-                journey_values = {f"{JOURNEY_PREFIX}{c}": record.get(c) for c in journey_fields}
-                journey_points = _children(conn, points, record_id) if points is not None else []
-                if not journey_points:
-                    yield from build(model_type, record, record_id, LEVEL_SUB, journey_values)
-                    continue
-                for point in journey_points:
-                    yield from build(_JOURNEY_POINT_LABEL, point, point[COL_SUB_UUID], LEVEL_SUB + 1, journey_values)
+                if model_type == _LOCATION_TYPE_NAME and level == LEVEL_SUB and is_point(record):
+                    continue  # listed above, under its journey
+                # A type listed only because some of its records carry a coordinate (e.g.
+                # SocialMediaActivity) contributes just those records; configured types are
+                # listed whole.
+                yield from build(
+                    model_type, record, record_id, level + 1, {}, require_coordinate=model_type not in record_types
+                )
 
-    files = [ctx.staging.csv_name(LEVEL_TOP, t) for t in tables] + [
-        ctx.staging.csv_name(level, model_type)
-        for level in (LEVEL_SUB, LEVEL_SUB + 1)
-        for model_type in (_COORDINATE_TYPE_NAME, _ADDRESS_TYPE_NAME, _LOCATION_TYPE_NAME)
+    files = [ctx.staging.csv_name(level, model) for model, level, _table in sources] + [
+        ctx.staging.csv_name(level, name) for name, levels in level_of.items() for level in levels
     ]
     return Sheet(LOCATIONS, header, display, list(dict.fromkeys(f for f in files if f)), rows())
 
@@ -566,11 +456,6 @@ def source_device(ctx: Context) -> Sheet | None:
 SHEET_BUILDERS: dict[str, Callable[[Context], Sheet | None]] = {
     SOURCE_DEVICE.name: source_device,
     COMMUNICATIONS.name: communications,
-    CONTACTS.name: contacts,
     IDENTIFIERS.name: identifiers,
-    MESSAGES.name: messages,
-    CALLS.name: calls,
-    EMAILS.name: emails,
     LOCATIONS.name: locations,
-    CDR_IMPORTER.name: cdr_importer,
 }

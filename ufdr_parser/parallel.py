@@ -19,6 +19,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from functools import partial
@@ -31,6 +32,7 @@ from ufdr_parser.archive import (
     open_seekable,
     report_compression,
 )
+from ufdr_parser.integrity import ParseAudit, ends_like_a_report
 from ufdr_parser.reader import BlockRangeReader, extra_infos_stream, iter_block_models
 from ufdr_parser.scan import index_model_types
 from ufdr_parser.source_lookup import SourceIndex, index_source_stream, resolve_from_conn
@@ -110,6 +112,7 @@ class _BlockResult:
     relations: list[tuple[str, str]]
     types_by_level: dict[int, list[str]]
     record_count: int
+    audit: ParseAudit
 
 
 @dataclass
@@ -122,6 +125,8 @@ class ParallelDumpResult:
     fields_by_type: dict[tuple[int, str], set[str]] = field(default_factory=dict)
     record_count: int = 0
     source_count: int = 0
+    audit: ParseAudit = field(default_factory=ParseAudit)  # mutable default — one per result
+    complete: bool = False  # the report was read to its end
 
 
 def _spill_connect(path: str) -> sqlite3.Connection:
@@ -142,7 +147,8 @@ def _parse_block_worker(args: tuple) -> _BlockResult:
     with open_seekable(Path(path), kind) as stream:
         stream.seek(block.start)
         reader = BlockRangeReader(stream, block.end - block.start)
-        for record in iter_block_models(reader):
+        audit = ParseAudit()
+        for record in iter_block_models(reader, audit):
             sink.add(record)
             types.setdefault(record.level, set()).add(record.model_type)
             if record.level > 0:
@@ -157,22 +163,24 @@ def _parse_block_worker(args: tuple) -> _BlockResult:
         relations=list(relations),
         types_by_level={level: list(names) for level, names in types.items()},
         record_count=count,
+        audit=audit,
     )
 
 
-def _build_source_worker(args: tuple) -> tuple[str, int]:
+def _build_source_worker(args: tuple) -> tuple[str, int, Counter]:
     """Process-pool task: build the model-id -> source map from the extraInfos region."""
     path, kind, extra_start, source_db = args
     conn = _spill_connect(source_db)
+    sections: Counter = Counter()
     if extra_start is None:
         SourceIndex(conn).finalise()  # create an empty map
         conn.close()
-        return source_db, 0
+        return source_db, 0, sections
     with open_seekable(Path(path), kind) as stream:
         stream.seek(extra_start)
-        count = index_source_stream(extra_infos_stream(stream), conn)
+        count = index_source_stream(extra_infos_stream(stream), conn, sections)
     conn.close()
-    return source_db, count
+    return source_db, count, sections
 
 
 def run_parse_by_type(
@@ -183,13 +191,18 @@ def run_parse_by_type(
     models: set[str] | None,
     workers: int,
     trace: dict[str, str],
-) -> ParallelDumpResult:
+) -> ParallelDumpResult | None:
     """Parse decodedData by model type across ``workers`` processes, then merge to CSVs.
 
     Each worker owns one ``<modelType>`` block (seeking to its byte range); the trailing
     ``<extraInfos>`` source map is built concurrently. The central merge then writes one CSV
     per (level, type), unioning headers across workers and joining the source map. Output is
     identical to the serial dump (contiguous blocks preserve document order).
+
+    Returns None when the report cannot be split this way, for the caller to use the serial
+    parse, which reads every model wherever it is: no ``<modelType>`` block at all, or models the
+    blocks do not cover. WHY compare counts: this path only reads the blocks it found, so a report
+    laid out differently would otherwise quietly lose whatever lies outside them.
     """
     input_path = Path(input_path)
     out_dir = Path(out_dir)
@@ -210,6 +223,9 @@ def run_parse_by_type(
         with open_seekable(report_path, kind) as stream:
             index = index_model_types(stream)
         blocks = [b for b in index.blocks if models is None or b.model_type in models]
+        if not index.blocks:
+            log.warning("No <modelType> blocks found: using the single-stream parse")
+            return None
         log.info(f"Parsing {len(blocks)} modelType block(s) across {workers} worker(s)")
 
         source_db = str(temp / "source.sqlite")
@@ -227,10 +243,19 @@ def run_parse_by_type(
                 )
                 for i, block in enumerate(blocks)
             ]
-            _, source_count = source_future.result()
+            _, source_count, sections = source_future.result()
             results = [fut.result() for fut in block_futures]  # block (document) order
 
-        return _merge(results, source_db, out_dir, base, source_count, trace)
+        merged = _merge(results, source_db, out_dir, base, source_count, trace)
+        merged.complete = ends_like_a_report(index.tail)
+        merged.audit.unread_sections.update(sections)
+        if models is None and merged.audit.model_tags != index.model_tags:
+            log.warning(
+                f"The modelType blocks hold {merged.audit.model_tags} of the report's {index.model_tags} "
+                "model(s): using the single-stream parse"
+            )
+            return None
+        return merged
     finally:
         shutil.rmtree(temp, ignore_errors=True)
 
@@ -293,6 +318,7 @@ def _merge(
     # Aggregate the observed shape for the run summary + drift check.
     for result in results:
         out.record_count += result.record_count
+        out.audit.merge(result.audit)
         for level, names in result.types_by_level.items():
             out.types_by_level.setdefault(level, set()).update(names)
         out.relations.update(result.relations)

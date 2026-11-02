@@ -3,27 +3,27 @@
 Defines:    WorkbookBrick (registered as "workbook"), build_workbook (stage -> resolve -> write),
             and the About (report-specific) and Documentation (static) sheet writers.
 Used by:    ufdr_parser.bricks (registration), tests.
-Depends on: bricks.base (DumpOutput), workbook.config (ufdr_config.toml), workbook.staging /
-            links / comms / sheets / xlsx / documentation.
+Depends on: bricks.base (DumpOutput), workbook.config (ufdr_config.toml), workbook.checks
+            (did the report reach the sheets), workbook.staging / links / comms / sheets / xlsx /
+            documentation.
 
 Flow: the dump's CSVs are staged into a temporary SQLite database (staging), every Party and
 Attachment is folded into parent-keyed lookups (links), every communication is resolved once
 (comms), then each sheet streams its rows into the workbook (sheets -> xlsx).
 
-WHAT is written comes from ufdr_config.toml (workbook.config): the data sheets and their order,
-hidden columns, Contacts' child models, Locations' record types and the Identifiers sources.
+The sheets are fixed (sheets.SHEET_BUILDERS). HOW they are filled comes from ufdr_config.toml
+(workbook.config): hidden columns, Locations' record types and the Identifiers sources.
 
 Two sheets explain the others. Documentation describes each written sheet, each column and the
-general rules (from documentation.SHEET_DOCS, for the configured sheets and visible columns) —
+general rules (from documentation.SHEET_DOCS, for the visible columns) —
 the same for every report under one configuration. About holds only what depends on this
 report: the report file, the configuration file used, each sheet's row count, the CSVs it was
 built from and the values Excel's limits forced to adjust; it is the first sheet but written
 last, once those numbers are known. The file is written under a temporary name and renamed
 when complete, so a crash never leaves a half-written workbook that looks finished.
 
-Successor of the legacy UFEDParser ``output.xlsx`` (Locations / Communications / Identifiers /
-CDRImporter), extended with per-category sheets, explicit offsets, provenance on every row and
-a flagged — never silent — To inference.
+Successor of the legacy UFEDParser ``output.xlsx``, extended with explicit offsets, provenance on
+every row and a flagged — never silent — To inference.
 """
 from __future__ import annotations
 
@@ -36,10 +36,11 @@ from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
 
-from ufdr_parser.bricks.base import DumpOutput
+from ufdr_parser.bricks.base import BrickChecksFailed, DumpOutput
+from ufdr_parser.bricks.workbook.checks import find_mapping_problems
 from ufdr_parser.bricks.workbook.comms import build_comm_tables
 from ufdr_parser.bricks.workbook.config import WorkbookConfig, load_workbook_config
-from ufdr_parser.bricks.workbook.documentation import GENERAL_NOTES, SHEET_DOCS_BY_NAME
+from ufdr_parser.bricks.workbook.documentation import GENERAL_NOTES, SHEET_DOCS
 from ufdr_parser.bricks.workbook.links import Links
 from ufdr_parser.bricks.workbook.sheets import SHEET_BUILDERS, Context, Sheet
 from ufdr_parser.bricks.workbook.staging import Staging
@@ -72,21 +73,22 @@ def workbook_path(output: DumpOutput) -> Path:
 
 
 def check_config(config: WorkbookConfig) -> WorkbookConfig:
-    """Reject sheet names the workbook does not know (a typo would silently drop a sheet)."""
-    for where, names in (("[workbook].sheets", config.sheets), ("[hide_columns]", tuple(config.hide_columns))):
-        unknown = [name for name in names if name not in SHEET_BUILDERS]
-        if unknown:
-            raise ValueError(
-                f"ufdr_config.toml: unknown sheet(s) {unknown} in {where}; available: {list(SHEET_BUILDERS)}"
-            )
+    """Reject sheet names the workbook does not know (a typo would silently hide nothing)."""
+    unknown = [name for name in config.hide_columns if name not in SHEET_BUILDERS]
+    if unknown:
+        raise ValueError(
+            f"ufdr_config.toml: unknown sheet(s) {unknown} in [hide_columns]; available: {list(SHEET_BUILDERS)}"
+        )
     return config
 
 
-def _hide(sheet: Sheet, hidden: frozenset[str]) -> Sheet:
+def _hide(sheet: Sheet, hidden: frozenset[str], suffixes: tuple[str, ...]) -> Sheet:
     """The sheet without its hidden columns (header, display names and every row)."""
-    if not hidden:
+    keep = [
+        index for index, name in enumerate(sheet.header) if name not in hidden and not name.endswith(suffixes)
+    ]
+    if len(keep) == len(sheet.header):
         return sheet
-    keep = [index for index, name in enumerate(sheet.header) if name not in hidden]
     rows = sheet.rows
     return Sheet(
         sheet.doc,
@@ -98,7 +100,12 @@ def _hide(sheet: Sheet, hidden: frozenset[str]) -> Sheet:
 
 
 def build_workbook(output: DumpOutput) -> Path:
-    """Write ``<base>_combined.xlsx`` next to the dump's CSVs; return its path."""
+    """Write ``<base>_combined.xlsx`` next to the dump's CSVs; return its path.
+
+    Raises BrickChecksFailed AFTER saving when part of the report did not reach the sheets (see
+    checks): the workbook still holds everything else, and About opens with the problems. WHY
+    keep it: a wrong alarm must not cost the analyst the data, and a real one is no quieter.
+    """
     target = workbook_path(output)
     config = check_config(load_workbook_config(output.config_path))
     temp_dir = Path(tempfile.mkdtemp(prefix="ufdr-workbook-"))
@@ -123,23 +130,26 @@ def build_workbook(output: DumpOutput) -> Path:
         about = workbook.create_sheet(ABOUT_SHEET_NAME)  # first in order, filled last
         _write_documentation(workbook.create_sheet(DOCUMENTATION_SHEET_NAME), config, stats)
         written: list[tuple[Sheet, SheetWriter]] = []
-        for name in config.sheets:
-            sheet = SHEET_BUILDERS[name](ctx)
+        for name, builder in SHEET_BUILDERS.items():
+            sheet = builder(ctx)
             if sheet is None:
                 continue
-            sheet = _hide(sheet, config.hide_columns.get(name, frozenset()))
+            sheet = _hide(sheet, config.hide_columns.get(name, frozenset()), config.hide_field_suffixes)
             writer = SheetWriter(workbook, sheet.doc.name, sheet.display, stats)
             for row in sheet.rows:
                 writer.append(row)
             writer.close()
             written.append((sheet, writer))
             log.info(f"Workbook sheet {sheet.doc.name}: {writer.row_count} row(s)")
-        _write_about(about, output, config, written, stats)
+        problems = list(output.findings) + find_mapping_problems(ctx)
+        _write_about(about, output, config, written, stats, problems)
 
         partial = target.with_name(f".{target.name}.partial")
         log.info(f"Saving the workbook ({sum(w.row_count for _s, w in written)} row(s)) to {target}")
         workbook.save(partial)
         os.replace(partial, target)
+        if problems:
+            raise BrickChecksFailed([target], problems)
         return target
     finally:
         conn.close()
@@ -147,17 +157,28 @@ def build_workbook(output: DumpOutput) -> Path:
 
 
 def _rows_writer(sheet, stats: WriteStats):
-    def put(*values: object, bold: bool = False) -> None:
-        sheet.append([text_cell(sheet, value, stats, bold=bold, wrap=True) for value in values])
+    def put(*values: object, bold: bool = False, alert: bool = False) -> None:
+        sheet.append([text_cell(sheet, value, stats, bold=bold, wrap=True, alert=alert) for value in values])
 
     return put
 
 
 def _write_about(
-    sheet, output: DumpOutput, config: WorkbookConfig, written: list[tuple[Sheet, SheetWriter]], stats: WriteStats
+    sheet,
+    output: DumpOutput,
+    config: WorkbookConfig,
+    written: list[tuple[Sheet, SheetWriter]],
+    stats: WriteStats,
+    problems: list[str],
 ) -> None:
     """What depends on THIS report: provenance of the workbook and what each sheet holds."""
     put = _rows_writer(sheet, stats)
+    if problems:
+        # First thing on the first sheet: this workbook may be missing data.
+        put("CHECKS FAILED: data may be missing from this workbook. The raw CSVs hold what was read.", alert=True)
+        for problem in problems:
+            put("Problem", problem, alert=True)
+        put()
     put("About this workbook", bold=True)
     put("Generated by", f"{APP_NAME} {_app_version()}")
     put("Generated at (UTC)", datetime.now(timezone.utc).isoformat(timespec="seconds"))
@@ -169,12 +190,18 @@ def _write_about(
     put("How to read it", f"See the {DOCUMENTATION_SHEET_NAME} sheet: what every sheet and column means.")
     put("Cells cut at Excel's 32,767-character limit", str(stats.truncated_cells))
     put("Control characters shown as [U+XXXX]", str(stats.escaped_characters))
+    for omission in output.omissions:
+        put("Not extracted", omission)
+    used = {name for spec, _writer in written for name in spec.built_from}
+    raw_only = sorted(path.name for path in output.group_paths.values() if path.name not in used)
+    if raw_only:
+        put("In the raw CSVs only (on no sheet)", "\n".join(raw_only))
     put()
     put("Sheet", "Excel sheet(s)", "Rows", "Built from (CSV files in the raw CSV folder)", bold=True)
     for spec, writer in written:
         put(spec.doc.name, ", ".join(writer.sheet_names), str(writer.row_count), "\n".join(spec.built_from))
     built = {spec.doc.name for spec, _writer in written}
-    for name in config.sheets:
+    for name in SHEET_BUILDERS:
         if name not in built:
             put(name, "(not written)", "0", "The report holds no such records.")
     sheet.freeze_panes = "A2"
@@ -183,7 +210,7 @@ def _write_about(
 
 
 def _write_documentation(sheet, config: WorkbookConfig, stats: WriteStats) -> None:
-    """The description of the configured sheets: identical whatever the report."""
+    """The description of the sheets: identical whatever the report."""
     put = _rows_writer(sheet, stats)
     put("General rules", bold=True)
     for topic, text in GENERAL_NOTES:
@@ -191,13 +218,12 @@ def _write_documentation(sheet, config: WorkbookConfig, stats: WriteStats) -> No
     put()
     put("Sheets", bold=True)
     put("Sheet", "One row is", "Notes", bold=True)
-    docs = [SHEET_DOCS_BY_NAME[name] for name in config.sheets]
-    for doc in docs:
+    for doc in SHEET_DOCS:
         put(doc.name, doc.row_is, "\n".join(doc.notes))
     put()
     put("Columns", bold=True)
     put("Sheet", "Column", "Origin", "Meaning", bold=True)
-    for doc in docs:
+    for doc in SHEET_DOCS:
         hidden = config.hide_columns.get(doc.name, frozenset())
         for column in doc.columns:
             if column.name not in hidden:
@@ -209,7 +235,7 @@ def _write_documentation(sheet, config: WorkbookConfig, stats: WriteStats) -> No
 
 class WorkbookBrick:
     name = "workbook"
-    description = "combined Excel workbook (sheets set in ufdr_config.toml)"
+    description = "combined Excel workbook (filled as set in ufdr_config.toml)"
 
     def validate(self, config_path: Path | None) -> None:
         """Load and check ufdr_config.toml BEFORE the dump, so a typo fails in seconds."""

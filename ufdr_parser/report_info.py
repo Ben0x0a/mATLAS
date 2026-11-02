@@ -46,6 +46,8 @@ _READ_CHUNK = 64 * 1024
 _HEADER_SEARCH_CAP = 16 * 1024 * 1024
 
 Row = tuple[str, str, str | None, str | None]
+_REPORT_SECTION = "Report"
+_MODEL_COUNT_ATTRIBUTE = "ModelCount"
 
 
 def _local(tag: object) -> str:
@@ -95,7 +97,7 @@ def read_report_info(path: Path) -> list[Row]:
     root = etree.fromstring(_read_header(Path(path)), parser=etree.XMLParser(recover=True, huge_tree=True))
     if root is None:
         return []
-    rows: list[Row] = _attribute_rows("Report", root)
+    rows: list[Row] = _attribute_rows(_REPORT_SECTION, root)
     for child in root:
         tag = _local(child.tag)
         if tag == "sourceExtractions":
@@ -125,7 +127,20 @@ def read_report_info(path: Path) -> list[Row]:
     return rows
 
 
-def write_report_info(path: Path, out_dir: Path, base: str, trace: dict[str, str]) -> tuple[Path, int]:
+def declared_model_count(rows: list[Row]) -> int | None:
+    """The ModelCount the report's header declares, or None if absent or not a number.
+
+    It does not equal the records dumped (its definition is Cellebrite's: 101,799 declared for
+    93,847 top-level and 193,984 total records on one report), so it can only tell an empty
+    report from a report that was not understood.
+    """
+    for section, name, value, _details in rows:
+        if section == _REPORT_SECTION and name == _MODEL_COUNT_ATTRIBUTE:
+            return int(value) if value and value.isdigit() else None
+    return None
+
+
+def write_report_info(path: Path, out_dir: Path, base: str, trace: dict[str, str]) -> tuple[Path, list[Row]]:
     """Write ``<base>_report_info.csv`` (UTF-8 with BOM, like every dump CSV); return (path, rows)."""
     rows = read_report_info(path)
     target = Path(out_dir) / f"{base}{REPORT_INFO_SUFFIX}"
@@ -135,5 +150,5 @@ def write_report_info(path: Path, out_dir: Path, base: str, trace: dict[str, str
         for row in rows:
             writer.writerow(list(row) + [trace[column] for column in TRACE_COLUMNS])
     log.info(f"Wrote {len(rows)} report header value(s) to {target}")
-    return target, len(rows)
+    return target, rows
 

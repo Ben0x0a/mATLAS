@@ -54,8 +54,24 @@ LEVEL_TOP = 0
 LEVEL_SUB = 1
 LEVEL_SUBSUB = 2
 
-# CSV filename suffixes per level (mirrors the legacy UFEDParser naming).
-LEVEL_FILE_PREFIX = {LEVEL_TOP: "", LEVEL_SUB: "SM", LEVEL_SUBSUB: "SSM"}
+
+def level_file_prefix(level: int) -> str:
+    """CSV filename prefix of a nesting level: "", SM, SSM, SSSM... (the legacy naming, extended).
+
+    Any depth has a name: a report nesting deeper than usual must still dump completely.
+    """
+    return "" if level == LEVEL_TOP else "S" * level + "M"
+
+
+
+# Column naming the parent's element a nested model sits in (Position, Parties, RelatedModels...).
+PARENT_FIELD_COLNAME = "parent_field"
+# Elements that only hold nested models: never a column of their own, even when empty.
+MODEL_CONTAINER_TAGS = frozenset({LOCAL_MODEL_FIELD, LOCAL_MULTI_MODEL_FIELD, "RelatedModels"})
+# The attributes that identify a model; its other attributes become columns.
+MODEL_IDENTITY_ATTRIBUTES = frozenset({"id", "type"})
+# An element's own attributes naming and typing it, carrying no value of their own.
+FIELD_NAMING_ATTRIBUTES = frozenset({"name", "type"})
 
 # Identity columns written ahead of a record's own fields.
 COL_UUID = "uuid"            # top-level model id

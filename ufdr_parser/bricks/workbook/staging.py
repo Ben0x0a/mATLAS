@@ -71,6 +71,17 @@ class Staging:
         path = self._paths.get((level, model_type))
         return path.name if path is not None else None
 
+    def peek(self, level: int, model_type: str) -> tuple[tuple[str, ...], bool]:
+        """A group's columns and whether it has rows, without staging its CSV (for the checks)."""
+        path = self._paths.get((level, model_type))
+        if path is None:
+            return (), False
+        csv.field_size_limit(_CSV_FIELD_LIMIT)
+        with path.open(encoding="utf-8-sig", newline="") as fh:
+            reader = csv.reader(fh)
+            header = next(reader, [])
+            return tuple(header), next(reader, None) is not None
+
     def table(self, level: int, model_type: str) -> Table | None:
         """The staged table for a group, loading its CSV on first use; None if not dumped."""
         key = (level, model_type)

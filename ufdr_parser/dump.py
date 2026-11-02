@@ -2,8 +2,8 @@
 
 Defines:    DumpSummary (run result) and run_dump (open -> stream -> spill -> flush).
 Used by:    cli, gui.app and tests.
-Depends on: archive, reader, models, source_lookup, writer, report_info, sqlite3; bricks
-            (imported lazily, run after the CSVs are written).
+Depends on: archive, reader, models, source_lookup, writer, report_info, integrity, sqlite3;
+            bricks (imported lazily, run after the CSVs are written).
 
 The input is a .ufdr archive (report.xml streamed from inside it) or a bare report XML such
 as a Physical Analyzer "XML report" export; ``archive`` tells them apart by header. One forward
@@ -13,6 +13,10 @@ end the buffered rows are flushed to CSV with each row joined to its source and 
 the report file it came from (``report_file`` / ``report_entry``). Holding nothing per-record
 in RAM keeps the run flat for 32 GB reports. Once the CSVs are complete, the registered bricks
 (e.g. the combined workbook) build their derived artefacts from them — see ``bricks``.
+
+Before that, the parse is checked (see ``integrity``): a report that was not understood — nothing
+readable, truncated, records without values — raises ReportIntegrityError instead of producing
+an empty workbook and "ok". Models the dump could not place are reported in ``findings``.
 """
 from __future__ import annotations
 
@@ -28,7 +32,8 @@ from ufdr_parser.archive import open_report, report_size, report_trace
 from ufdr_parser.const import FILENAME_FORBIDDEN_CHARACTERS
 from ufdr_parser.models import FlatRecord
 from ufdr_parser.reader import iter_items
-from ufdr_parser.report_info import write_report_info
+from ufdr_parser.integrity import ParseAudit, audit_findings, check_parse, ends_like_a_report
+from ufdr_parser.report_info import declared_model_count, write_report_info
 from ufdr_parser.source_lookup import EXTRA_INFO_MODEL_KIND, SourceEntry, SourceIndex
 from ufdr_parser.writer import CsvSink, group_filenames
 
@@ -44,17 +49,29 @@ _PROGRESS_CHECK_EVERY = 2000
 _MB = 1024 * 1024
 
 
+_TAIL_BYTES = 64
+
+
 class _CountingReader:
-    """A read()-only pass-through that counts the bytes read from the report stream."""
+    """A read()-only pass-through counting the bytes read and keeping the last few."""
 
     def __init__(self, stream) -> None:
         self._stream = stream
         self.bytes_read = 0
+        self.tail = b""
 
     def read(self, size: int = -1) -> bytes:
         data = self._stream.read(size)
-        self.bytes_read += len(data)
+        if data:
+            self.bytes_read += len(data)
+            self.tail = (self.tail + data)[-_TAIL_BYTES:]
         return data
+
+    def seek(self, offset: int) -> None:
+        """Rewind for a whole-report parse (see reader._models_stream)."""
+        self._stream.seek(offset)
+        self.bytes_read = offset
+        self.tail = b""
 
 
 @dataclass
@@ -73,6 +90,10 @@ class DumpSummary:
     source_count: int = 0
     # One BrickResult per post-dump brick run. mutable default — one list per summary
     bricks: list = field(default_factory=list)
+    # Report structure the dump could not place: to raise as errors. mutable default — per summary
+    findings: list[str] = field(default_factory=list)
+    # Data the dump knowingly does not extract: always reported. mutable default — per summary
+    omissions: list[str] = field(default_factory=list)
 
 
 def _new_spill_db(directory: Path) -> sqlite3.Connection:
@@ -126,7 +147,9 @@ def run_dump(
     # The report header (case, extraction, images) is not a model: dumped by its own short pass.
     out_dir.mkdir(parents=True, exist_ok=True)
     report_info_path, report_info_rows = write_report_info(input_path, out_dir, base, trace)
+    audit = ParseAudit()
 
+    result = None
     if parse_workers > 1:
         # By-type parallel parse: each worker owns a modelType block, then a central merge.
         from ufdr_parser.parallel import run_parse_by_type
@@ -134,6 +157,7 @@ def run_dump(
         result = run_parse_by_type(
             input_path, out_dir, base, models=models, workers=parse_workers, trace=trace
         )
+    if result is not None:
         summary = DumpSummary(
             files=result.files,
             types_by_level=result.types_by_level,
@@ -142,8 +166,9 @@ def run_dump(
             record_count=result.record_count,
             source_count=result.source_count,
         )
+        audit, complete = result.audit, result.complete
     else:
-        summary = _run_serial(input_path, out_dir, base, trace, models=models, workers=workers)
+        summary, complete = _run_serial(input_path, out_dir, base, trace, audit, models=models, workers=workers)
 
     if summary.record_count and not summary.source_count:
         # WHY warn: blank source_* columns are otherwise indistinguishable from a parser
@@ -153,7 +178,18 @@ def run_dump(
             f"{input_path}: the report's <extraInfos> holds no model source entries; "
             "the source_* columns are blank for every row"
         )
-    summary.files[report_info_path.name] = report_info_rows
+    summary.files[report_info_path.name] = len(report_info_rows)
+    check_parse(
+        audit,
+        complete=complete,
+        declared_models=declared_model_count(report_info_rows),
+        filtered=models is not None,
+    )
+    summary.findings, summary.omissions = audit_findings(audit)
+    for finding in summary.findings:
+        log.error(finding)
+    for omission in summary.omissions:
+        log.warning(omission)
     log.info(
         f"Dump complete: {summary.record_count} record(s), "
         f"{summary.source_count} source entr(ies), {len(summary.files)} CSV file(s)"
@@ -193,6 +229,8 @@ def _run_bricks(
         report_info_path=report_info_path,
         config_path=config_path,
         case_name=case_name,
+        findings=tuple(summary.findings),
+        omissions=tuple(summary.omissions),
     )
     return run_bricks(output, names)
 
@@ -202,11 +240,14 @@ def _run_serial(
     out_dir: Path,
     base: str,
     trace: dict[str, str],
+    audit: ParseAudit,
     *,
     models: set[str] | None,
     workers: int,
-) -> DumpSummary:
-    """The single-stream parse: one pass feeding CsvSink + SourceIndex, then the flush."""
+) -> tuple[DumpSummary, bool]:
+    """The single-stream parse: one pass feeding CsvSink + SourceIndex, then the flush.
+
+    Returns the summary and whether the report was read to its end."""
     summary = DumpSummary()
 
     temp_dir = Path(tempfile.mkdtemp(prefix="ufdr-parser-"))
@@ -218,7 +259,7 @@ def _run_serial(
         started = last_logged = time.monotonic()
         with open_report(input_path) as raw_stream:
             stream = _CountingReader(raw_stream)
-            for count, item in enumerate(iter_items(stream), start=1):
+            for count, item in enumerate(iter_items(stream, audit), start=1):
                 if isinstance(item, FlatRecord):
                     if models is None or item.top_type in models:
                         sink.add(item)
@@ -241,7 +282,7 @@ def _run_serial(
         source.finalise()
         log.info("Writing the CSV files")
         summary.files = sink.flush(out_dir, base, source, trace, workers=workers)
-        return summary
+        return summary, ends_like_a_report(stream.tail)
     finally:
         conn.close()
         shutil.rmtree(temp_dir, ignore_errors=True)

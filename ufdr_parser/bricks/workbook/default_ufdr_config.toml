@@ -1,4 +1,6 @@
-# ufdr_config.toml — what the UFDR dump's combined workbook (<report>_combined.xlsx) contains.
+# ufdr_config.toml — how the sheets of the UFDR dump's combined workbook (<report>_combined.xlsx)
+# are filled. The sheets themselves are fixed: About, Documentation, Source device, Communications,
+# Identifiers, Locations.
 #
 # This is the built-in default. To customise it, write a copy where you run mATLAS
 #     python -m ufdr_parser init-config            (writes ./ufdr_config.toml)
@@ -11,26 +13,23 @@
 # Documentation sheet describes the result.
 
 [workbook]
-# The data sheets written, in this order (About and Documentation always come first).
-# Available: "Source device", "Communications", "Contacts", "Identifiers",
-#            "Messages", "Calls", "Emails", "Locations", "CDRImporter".
-sheets = ["Source device", "Communications", "Contacts", "Identifiers"]
+# The CSVs hold everything; columns whose name ends like this are left out of the workbook only,
+# to keep it readable (a time's formatted copy, a nested record's technical attributes).
+hide_field_suffixes = [".formattedTimestamp", ".parent_field", ".source_index", ".extractionId", ".isrelated"]
 
 [hide_columns]
 # Columns never written, per sheet, named WITHOUT their [report]/[tool] prefix, e.g.
 # Communications = ["To basis", "Chat uuid"]
 
-[contacts]
-# A contact's child models (phone numbers, user IDs, addresses...) are flattened into
-# "<Model>.<field>" columns, several entries joined with "; " in the same order in every
-# column of that model. List models here to keep only those; empty = every child model the
-# report gives contacts.
-child_models = []
-
 [locations]
-# Used only when the "Locations" sheet is enabled. Every record of these types is listed;
+# Every record of these types is listed;
 # any other type the report gives a Coordinate is listed for its records that have one.
 record_types = ["Location", "CellTower", "WirelessNetwork", "Journey", "SearchedItem"]
+
+[checks]
+# The workbook raises an error when a model has parties and a Body or Duration field but is not on
+# the communication sheets: it may be a renamed communication. These models are known not to be.
+not_communications = ["Notification", "SocialMediaActivity", "Voicemail"]
 
 # --------------------------------------------------------------------------- Identifiers
 # Where identifiers are collected from. One block per source:

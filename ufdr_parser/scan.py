@@ -1,10 +1,11 @@
 """Locate the decoded models in a report by byte scanning: the ``<decodedData>`` start, each
 ``<modelType>`` block's byte range, and the trailing ``<extraInfos>``.
 
-Defines:    find_decoded_data (skip the header + taggedFiles), ModelTypeBlock, DecodedIndex and
-            index_model_types (one forward scan for parallel parsing).
-Used by:    reader (skip to the models), parallel (one block per worker) and the model_atlas
-            Cellebrite XML dialect.
+Defines:    find_decoded_data (skip the header + taggedFiles), ModelTypeBlock, DecodedIndex,
+            index_model_types (one forward scan for parallel parsing) and ModelTagCounter (an
+            independent count of the models in the bytes, to reveal what the parser lost).
+Used by:    reader (skip to the models, count tags), parallel (one block per worker) and the
+            model_atlas Cellebrite XML dialect.
 Depends on: standard library only.
 
 WHY a byte scan (not a parse): only offsets are needed, so a byte walk is far cheaper than
@@ -43,10 +44,14 @@ _DECODED_OPEN = b"<decodedData"
 _DECODED_CLOSE = b"</decodedData>"
 _MODEL_TYPE_OPEN = b"<modelType"
 _EXTRA_INFOS_OPEN = b"<extraInfos"
+_MODEL_OPEN = b"<model"
+_MODEL_TAG_ENDS = frozenset({b" ", b">", b"/", b"\t", b"\n", b"\r"})
 # Bytes kept from one chunk to the next: longer than any token above, so a token starting
 # before the cut is complete in the current buffer.
 _CARRY = 64
 _TYPE_ATTR = re.compile(rb'\btype="([^"]*)"')
+# The index of a report without <decodedData> read it all but kept nothing: say so, not "truncated".
+_END_OF_STREAM = b"</project>"
 
 
 def _inside_cdata_before(data: bytes, pos: int, inside_at_start: bool) -> bool:
@@ -63,15 +68,52 @@ def _inside_cdata_before(data: bytes, pos: int, inside_at_start: bool) -> bool:
     return inside_at_start and data.find(_CDATA_CLOSE, 0, pos + len(_CDATA_CLOSE) - 1) == -1
 
 
-def find_decoded_data(stream: BinaryIO) -> tuple[bytes, int]:
+class ModelTagCounter:
+    """Counts ``<model>`` start tags outside CDATA in bytes fed in order, across any chunking.
+
+    An independent count of what the report holds: the parser (``recover=True``) discards what it
+    cannot parse without saying so, so its own count cannot reveal what it lost.
+    """
+
+    def __init__(self) -> None:
+        self.count = 0
+        self._carry = b""
+        self._inside = False  # CDATA state at the start of the carry
+
+    def _count_until(self, data: bytes, limit: int) -> None:
+        pos = data.find(_MODEL_OPEN)
+        while pos != -1 and pos < limit:
+            # Excludes <modelType and <modelField, which share the prefix.
+            if data[pos + len(_MODEL_OPEN) : pos + len(_MODEL_OPEN) + 1] in _MODEL_TAG_ENDS:
+                if not _inside_cdata_before(data, pos, self._inside):
+                    self.count += 1
+            pos = data.find(_MODEL_OPEN, pos + 1)
+
+    def feed(self, chunk: bytes) -> None:
+        data = self._carry + chunk
+        limit = max(0, len(data) - _CARRY)
+        self._count_until(data, limit)
+        self._inside = _inside_cdata_before(data, limit, self._inside)
+        self._carry = data[limit:]
+
+    def finish(self) -> int:
+        """Count what is left in the carry; call once, after the last chunk."""
+        self._count_until(self._carry, len(self._carry))
+        self._carry = b""
+        return self.count
+
+
+def find_decoded_data(stream: BinaryIO, before: "ModelTagCounter | None" = None) -> tuple[bytes, int]:
     """Read ``stream`` from its position to the real ``<decodedData`` element start.
 
     Returns ``(tail, offset)``: ``tail`` is the already-read buffer from the marker onward (the
     marker plus whatever trailing bytes arrived in the same chunk) and ``offset`` is the
     marker's absolute byte offset. When no decodedData is found, returns ``(b"", bytes_read)``.
     Shared by ``index_model_types`` here and the reader's ``_skip_to_decoded_data`` so both
-    locate the section by one definition.
+    locate the section by one definition. ``before`` is fed the bytes skipped, so a model outside
+    ``<decodedData>`` can be noticed instead of being lost with them.
     """
+    before = before if before is not None else ModelTagCounter()
     carry = b""
     base = 0  # absolute offset of carry[0]
     inside = False  # CDATA state at carry[0]
@@ -82,8 +124,10 @@ def find_decoded_data(stream: BinaryIO) -> tuple[bytes, int]:
         pos = data.find(_DECODED_OPEN)
         while pos != -1 and pos < limit:
             if not _inside_cdata_before(data, pos, inside):
+                before.feed(data[:pos])
                 return data[pos:], base + pos
             pos = data.find(_DECODED_OPEN, pos + 1)
+        before.feed(data[:limit])
         if not chunk:
             return b"", base + len(data)
         inside = _inside_cdata_before(data, limit, inside)
@@ -107,6 +151,10 @@ class DecodedIndex:
     blocks: tuple[ModelTypeBlock, ...]
     decoded_end: int
     extra_info_start: int | None
+    # The last bytes of the report, to tell a complete file from a truncated one.
+    tail: bytes = b""
+    # <model> tags in the whole report, to tell whether the blocks cover them all.
+    model_tags: int = 0
 
 
 def index_model_types(stream: BinaryIO) -> DecodedIndex:
@@ -118,10 +166,11 @@ def index_model_types(stream: BinaryIO) -> DecodedIndex:
     decoded_end: int | None = None
     extra_start: int | None = None
 
-    tail, decoded_start = find_decoded_data(stream)
+    counter = ModelTagCounter()
+    tail, decoded_start = find_decoded_data(stream, counter)
     if not tail:
         # No decodedData (empty/odd report): nothing to index.
-        return DecodedIndex(blocks=(), decoded_end=decoded_start, extra_info_start=None)
+        return DecodedIndex(blocks=(), decoded_end=decoded_start, extra_info_start=None, tail=_END_OF_STREAM)
 
     data = tail          # already holds the bytes from the <decodedData marker onward
     base = decoded_start  # absolute offset of data[0]
@@ -153,6 +202,7 @@ def index_model_types(stream: BinaryIO) -> DecodedIndex:
                     decoded_end = base + pos
             elif extra_start is None:
                 extra_start = base + pos
+        counter.feed(data[:limit])
         if not chunk:
             break
         inside = _inside_cdata_before(data, limit, inside)
@@ -165,7 +215,13 @@ def index_model_types(stream: BinaryIO) -> DecodedIndex:
         ModelTypeBlock(model_type=model_type, start=start, end=opens[i + 1][1] if i + 1 < len(opens) else decoded_end)
         for i, (model_type, start) in enumerate(opens)
     ]
-    return DecodedIndex(blocks=tuple(blocks), decoded_end=decoded_end, extra_info_start=extra_start)
+    return DecodedIndex(
+        blocks=tuple(blocks),
+        decoded_end=decoded_end,
+        extra_info_start=extra_start,
+        tail=data[-_CARRY:],
+        model_tags=counter.finish(),
+    )
 
 
 def _positions(data: bytes, marker: bytes, limit: int):
