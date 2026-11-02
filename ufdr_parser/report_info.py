@@ -27,7 +27,7 @@ from pathlib import Path
 from lxml import etree
 
 from ufdr_parser.archive import open_report
-from ufdr_parser.const import TRACE_COLUMNS
+from ufdr_parser.const import ENCODING_CHECK_NAME, ENCODING_CHECK_TEXT, TRACE_COLUMNS
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +48,8 @@ _HEADER_SEARCH_CAP = 16 * 1024 * 1024
 Row = tuple[str, str, str | None, str | None]
 _REPORT_SECTION = "Report"
 _MODEL_COUNT_ATTRIBUTE = "ModelCount"
+# The tool's own row of the CSV, not a report value: the Source device sheet leaves it out.
+TOOL_CHECK_SECTION = "mATLAS check"
 
 
 def _local(tag: object) -> str:
@@ -147,7 +149,8 @@ def write_report_info(path: Path, out_dir: Path, base: str, trace: dict[str, str
     with target.open("w", encoding="utf-8-sig", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow(REPORT_INFO_COLUMNS)
-        for row in rows:
+        check: Row = (TOOL_CHECK_SECTION, ENCODING_CHECK_NAME, ENCODING_CHECK_TEXT, None)
+        for row in [check, *rows]:
             writer.writerow(list(row) + [trace[column] for column in TRACE_COLUMNS])
     log.info(f"Wrote {len(rows)} report header value(s) to {target}")
     return target, rows

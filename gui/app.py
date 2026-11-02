@@ -12,6 +12,8 @@ Depends on: gui.worker (TaskRunner / ProgressBridge / install_gui_log_handler),
 """
 from __future__ import annotations
 
+from importlib.util import find_spec
+
 import html
 import logging
 import tempfile
@@ -977,6 +979,12 @@ class MainController(QObject):
         # Lazy import, like run_dump below: keeps normal GUI start-up free of the parser.
         from ufdr_parser.archive import input_kind
 
+        if find_spec("lxml") is None:
+            self._show_error(
+                "UFDR dump mode needs the 'ufdr' extra, which is not installed:\n\n"
+                "python -m pip install '.[ufdr]'"
+            )
+            return
         source = self.source_edit.text().strip()
         if self._reject_if_blank(source, "Choose a source .ufdr or report .xml file."):
             return

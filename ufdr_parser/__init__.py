@@ -7,6 +7,14 @@ trailing ``<extraInfos>`` block. See dump.run_dump for the entry point.
 """
 from __future__ import annotations
 
-from ufdr_parser.dump import DumpSummary, run_dump
-
 __all__ = ["DumpSummary", "run_dump"]
+
+
+def __getattr__(name: str) -> object:
+    """Load the dumper on first use. WHY: it needs lxml (the ``ufdr`` extra), while the GUI imports
+    ``ufdr_parser.const`` at start-up and must start without that extra."""
+    if name in __all__:
+        from ufdr_parser import dump
+
+        return getattr(dump, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

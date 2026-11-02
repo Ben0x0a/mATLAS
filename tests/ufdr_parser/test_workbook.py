@@ -8,13 +8,16 @@ Depends on: ufdr_parser (dump, bricks), openpyxl.
 """
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
 
 from ufdr_parser.bricks import base as bricks_base
-from ufdr_parser.bricks.workbook import xlsx
+from ufdr_parser.bricks.workbook import brick, xlsx
 from ufdr_parser.dump import run_dump
 
 NS = "http://pa.cellebrite.com/report/2.0"
@@ -308,7 +311,7 @@ def test_every_communication_type_on_one_sheet(workbook: Path) -> None:
 
 def test_identifiers_sheet(workbook: Path) -> None:
     rows = _sheet(workbook, "Identifiers")
-    assert set(rows[0]) == {"Identifier", "Kind", "Source file", "CSV file", "Occurrences"}
+    assert set(rows[0]) == {"Identifier", "Kind", "Source file", "CSV file", "Occurrences", "uuid"}
     by_key = {(r["Identifier"], r["Kind"], r["CSV file"]): r for r in rows}
     alice_chat = by_key[("+41790000001", "Party.Identifier", "wb_Report_SSMParty.csv")]
     assert alice_chat["Source file"] == "FFS.zip/msgstore.db" and alice_chat["Occurrences"] == "2"
@@ -332,11 +335,70 @@ def test_about_documents_every_sheet(workbook: Path) -> None:
     assert any(row[:3] == ("Locations", "[report] Latitude", "report") for row in documentation)
 
 
+def test_about_carries_the_checks_and_the_commit(workbook: Path, tmp_path: Path) -> None:
+    about = {row[0]: row[1] for row in load_workbook(workbook, read_only=True)["About"].iter_rows(values_only=True) if len(row) > 1}
+    # Spelled in escapes here: this must fail if the source file itself gets re-encoded.
+    expected = "\u00e9\u00e8\u00e0\u00e7\u00fc\u00f1 \u00df \u20ac \u65e5\u672c\u8a9e \u0627\u0644\u0639\u0631\u0628\u064a\u0629 \U0001F600"
+    assert about["Encoding check"] == expected
+    assert (about["Text check: formula"], about["Text check: number"]) == ("=1+1", "+41007")
+    assert about["mATLAS commit"]
+    # The CSV path too, read back as bytes; and it stays off the sheet about the device.
+    raw = (tmp_path / "out" / "wb_Report_report_info.csv").read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf") and expected.encode("utf-8") in raw
+    assert all(row["Name"] != "Encoding check" for row in _sheet(workbook, "Source device"))
+
+
+def test_every_row_has_its_own_tool_uuid(workbook: Path) -> None:
+    for name in ("Source device", "Communications", "Identifiers", "Locations"):
+        assert "[tool] uuid" in _header(workbook, name)
+        ids = [row["uuid"] for row in _sheet(workbook, name)]
+        assert all(ids) and len(ids) == len(set(ids))
+
+
+def test_explanation_sheets_column_widths(workbook: Path) -> None:
+    book = load_workbook(workbook)
+    assert [book["About"].column_dimensions[c].width for c in "ABD"] == [50, 50, 50]
+    assert [book["Documentation"].column_dimensions[c].width for c in "ABCD"] == [50, 50, 50, 50]
+
+
+@pytest.mark.parametrize("rows", [0, 3, xlsx._WIDTH_SAMPLE_ROWS, xlsx._WIDTH_SAMPLE_ROWS + 5])
+def test_data_sheet_width_follows_the_sample_and_no_row_is_lost(tmp_path: Path, rows: int) -> None:
+    book = xlsx.open_workbook()
+    writer = xlsx.SheetWriter(book, "t", ["h", "wide"], xlsx.WriteStats())
+    for index in range(rows):
+        writer.append([str(index), "x" * 30])
+    writer.close()
+    book.save(tmp_path / "t.xlsx")
+    sheet = load_workbook(tmp_path / "t.xlsx")["t"]
+    assert [row[0] for row in sheet.values] == ["h", *map(str, range(rows))]
+    assert sheet.column_dimensions["B"].width == (32 if rows else xlsx._MIN_WIDTH)
+    assert sheet.freeze_panes == "A2" and sheet.auto_filter.ref == f"A1:B{rows + 1}"
+
+
+@pytest.mark.parametrize("module", ["ufdr_parser.const", "gui.app"])
+def test_gui_starts_without_the_ufdr_extra(module: str) -> None:
+    if module == "gui.app":
+        pytest.importorskip("PySide6")
+    code = f"import sys; sys.modules['lxml'] = None; import {module}"
+    env = {**os.environ, "QT_QPA_PLATFORM": "offscreen"}
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_commit_says_when_it_cannot_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_git(*_args, **_kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(brick.subprocess, "run", no_git)
+    assert brick._git_commit().startswith("unknown")
+
+
 def test_parallel_parse_gives_same_workbook(report: Path, tmp_path: Path, workbook: Path) -> None:
     run_dump(report, tmp_path / "par", parse_workers=2)
     parallel = tmp_path / "par" / "wb_Report_combined.xlsx"
     for name in ("Source device", "Communications", "Identifiers", "Locations"):
-        assert _sheet(parallel, name) == _sheet(workbook, name)
+        strip = lambda rows: [{k: v for k, v in row.items() if k != "uuid"} for row in rows]  # noqa: E731 - random
+        assert strip(_sheet(parallel, name)) == strip(_sheet(workbook, name))
 
 
 def test_no_bricks_writes_csvs_only(report: Path, tmp_path: Path) -> None:

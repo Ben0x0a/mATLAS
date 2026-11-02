@@ -131,6 +131,8 @@ class SheetWriter:
     _sheet: object = None
     _rows_in_sheet: int = 0
     _widths: list[int] = field(default_factory=list)  # mutable default — one list per writer
+    # The current part's first rows, held back until its layout is written; None once it is.
+    _sample: list[list[object]] | None = None
     _last_logged: float = field(default_factory=time.monotonic)
 
     def _new_sheet(self) -> None:
@@ -140,22 +142,30 @@ class SheetWriter:
         self.sheet_names.append(name)
         self._sheet.freeze_panes = "A2"
         self._widths = [len(column) for column in self.header]
-        self._sheet.append([text_cell(self._sheet, column, self.stats, bold=True) for column in self.header])
+        self._sample = []
         self._rows_in_sheet = 1
 
-    def _finish_sheet(self) -> None:
-        """Size the columns and set the filter range of the current sheet part.
+    def _write_sample(self) -> None:
+        """Size the columns from the header and the sampled rows, then write them all.
 
-        Column widths come from the header and the first ``_WIDTH_SAMPLE_ROWS`` rows; a
-        write-only sheet stores its dimensions until the workbook is saved, so setting them
-        after the rows were streamed still takes effect.
+        WHY rows are held back: a write-only sheet writes its layout with its first row and
+        ignores any width set afterwards.
         """
-        if self._sheet is None:
-            return
         for index, width in enumerate(self._widths, start=1):
             self._sheet.column_dimensions[get_column_letter(index)].width = max(
                 _MIN_WIDTH, min(_MAX_WIDTH, width + 2)
             )
+        self._sheet.append([text_cell(self._sheet, column, self.stats, bold=True) for column in self.header])
+        for values in self._sample:
+            self._sheet.append([text_cell(self._sheet, value, self.stats) for value in values])
+        self._sample = None
+
+    def _finish_sheet(self) -> None:
+        """Write what the current sheet part still holds back and set its filter range."""
+        if self._sheet is None:
+            return
+        if self._sample is not None:
+            self._write_sample()
         last_column = get_column_letter(max(1, len(self.header)))
         self._sheet.auto_filter.ref = f"A1:{last_column}{self._rows_in_sheet}"
 
@@ -163,11 +173,15 @@ class SheetWriter:
         if self._sheet is None or self._rows_in_sheet >= EXCEL_MAX_ROWS:
             self._new_sheet()
         values = list(values)
-        if self._rows_in_sheet <= _WIDTH_SAMPLE_ROWS:
+        if self._sample is None:
+            self._sheet.append([text_cell(self._sheet, value, self.stats) for value in values])
+        else:
             for index, value in enumerate(values[: len(self._widths)]):
                 if value is not None:
                     self._widths[index] = max(self._widths[index], min(len(str(value)), _MAX_WIDTH))
-        self._sheet.append([text_cell(self._sheet, value, self.stats) for value in values])
+            self._sample.append(values)
+            if len(self._sample) >= _WIDTH_SAMPLE_ROWS:
+                self._write_sample()
         self._rows_in_sheet += 1
         self.row_count += 1
         if self.row_count % _PROGRESS_CHECK_EVERY == 0 and time.monotonic() - self._last_logged >= _PROGRESS_INTERVAL_S:

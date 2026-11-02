@@ -40,6 +40,7 @@ from ufdr_parser.const import (
     COL_SOURCE_PATH,
     COL_SOURCE_SIZE,
     COL_SOURCE_TABLE,
+    ENCODING_CHECK_NAME,
     MULTI_VALUE_SEPARATOR,
     TIMESTAMP_OFFSET_SUFFIX,
 )
@@ -54,6 +55,12 @@ ORIGIN_REPORT = "report"
 ORIGIN_TOOL = "tool"
 REPORT_COLUMN_PREFIX = "[report] "
 TOOL_COLUMN_PREFIX = "[tool] "
+
+# Text checks on the About sheet: a program showing or loading the workbook must keep them as typed.
+FORMULA_CHECK_NAME = "Text check: formula"
+FORMULA_CHECK_TEXT = "=1+1"
+NUMBER_CHECK_NAME = "Text check: number"
+NUMBER_CHECK_TEXT = "+41007"
 
 RECORD_UUID_COLNAME = "Record uuid"
 TIMESTAMP_COLNAME = "TimeStamp"
@@ -146,6 +153,9 @@ PROVENANCE_COLUMNS = (
     _tool(COL_REPORT_ENTRY, "The report's entry inside the .ufdr archive (blank for a bare .xml)."),
 )
 
+ROW_UUID_COLNAME = "uuid"
+_ROW_UUID = _tool(ROW_UUID_COLNAME, "Random id of this row, new at every run: only a way to count distinct rows.")
+
 _OFFSET_MEANING = (
     "UTC offset stated by TimeStamp; blank when no offset could be determined (the report gives "
     "the time without a zone). Never a default."
@@ -226,6 +236,12 @@ GENERAL_NOTES = (
      "joining on one row what a reader needs (who, to whom, when, what). The CSVs remain the "
      "reference: every value is copied from them unchanged, except the joins and the To "
      "inference described here."),
+    ("Checks on the About sheet", f"'{ENCODING_CHECK_NAME}' must read: e with acute, e with grave, a "
+     "with grave, c with cedilla, u with diaeresis, n with tilde; German sharp s; euro sign; the Japanese "
+     "and Arabic words for Japanese and Arabic; a grinning face. Otherwise the program showing it "
+     f"altered the text, here and on the other sheets (the report_info CSV holds the same line). "
+     f"'{FORMULA_CHECK_NAME}' must show {FORMULA_CHECK_TEXT} (not 2) and '{NUMBER_CHECK_NAME}' "
+     f"{NUMBER_CHECK_TEXT} (not 41007): otherwise it re-typed the values."),
     ("All cells are text", "Values are never converted: identifiers keep a leading + or 0, and "
      "text starting with = is never a formula."),
     ("Several values in one cell", f"Joined with '{MULTI_VALUE_SEPARATOR}'."),
@@ -271,6 +287,7 @@ COMMUNICATIONS = SheetDoc(
         _ATTACHMENTS,
         _own("call / email / message"),
         *PROVENANCE_COLUMNS,
+        _ROW_UUID,
     ),
     (
         _SORT_NOTE,
@@ -311,6 +328,7 @@ LOCATIONS = SheetDoc(
         ),
         _own("location / cell / Wi-Fi / journey point / search"),
         *PROVENANCE_COLUMNS,
+        _ROW_UUID,
     ),
     (
         "Rows are in report order, type by type (no sorting): Location, CellTower, "
@@ -339,6 +357,7 @@ SOURCE_DEVICE = SheetDoc(
         Column(TIMESTAMP_COLNAME, "TimeStamp of a DeviceInfoEntry, verbatim (blank for header values)."),
         _tool(TIMESTAMP_OFFSET_COLNAME, _OFFSET_MEANING),
         *PROVENANCE_COLUMNS,
+        _ROW_UUID,
     ),
     (
         "Header values come from the report_info CSV; device information from the "
@@ -360,6 +379,7 @@ IDENTIFIERS = SheetDoc(
         Column("Source file", "The on-device file the identifier was decoded from (source_path)."),
         _tool("CSV file", "The raw CSV holding the full records, next to this workbook."),
         _tool("Occurrences", "How many records carry this identifier with this kind, source file and CSV."),
+        _ROW_UUID,
     ),
     (
         "Values are verbatim and never merged: '+41791234567' and '41791234567' are two rows. "

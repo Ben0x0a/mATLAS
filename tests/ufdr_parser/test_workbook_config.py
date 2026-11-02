@@ -37,6 +37,7 @@ def test_default_is_the_shipped_file(tmp_path: Path, monkeypatch: pytest.MonkeyP
     config = load_workbook_config()
     assert config.source == "built-in default"
     assert [s.model for s in config.identifiers][:2] == ["Party", "PhoneNumber"]
+    assert config.hide_field_suffixes == () and not config.hide_columns  # nothing hidden by default
     tomllib.loads(default_config_text())  # the shipped file itself is valid TOML
 
 

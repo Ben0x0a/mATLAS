@@ -64,6 +64,7 @@ from ufdr_parser.report_info import (
     COL_NAME as REPORT_INFO_NAME_COLNAME,
     COL_SECTION as REPORT_INFO_SECTION_COLNAME,
     COL_VALUE as REPORT_INFO_VALUE_COLNAME,
+    TOOL_CHECK_SECTION,
 )
 
 _ID_COLUMNS = (COL_UUID, COL_SUB_UUID, COL_MAIN_UUID)
@@ -426,6 +427,8 @@ def source_device(ctx: Context) -> Sheet | None:
         if info_path is not None and info_path.is_file():
             with info_path.open(encoding="utf-8-sig", newline="") as fh:
                 for record in csv.DictReader(fh):
+                    if record[REPORT_INFO_SECTION_COLNAME] == TOOL_CHECK_SECTION:
+                        continue
                     values = {
                         "Section": record[REPORT_INFO_SECTION_COLNAME],
                         "Name": record[REPORT_INFO_NAME_COLNAME],

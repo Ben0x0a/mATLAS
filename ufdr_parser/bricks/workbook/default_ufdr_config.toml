@@ -13,9 +13,9 @@
 # Documentation sheet describes the result.
 
 [workbook]
-# The CSVs hold everything; columns whose name ends like this are left out of the workbook only,
-# to keep it readable (a time's formatted copy, a nested record's technical attributes).
-hide_field_suffixes = [".formattedTimestamp", ".parent_field", ".source_index", ".extractionId", ".isrelated"]
+# Columns whose name ends like this are left out of the workbook only, never of the CSVs, e.g.
+# [".formattedTimestamp", ".parent_field", ".source_index", ".extractionId", ".isrelated"]
+hide_field_suffixes = []
 
 [hide_columns]
 # Columns never written, per sheet, named WITHOUT their [report]/[tool] prefix, e.g.

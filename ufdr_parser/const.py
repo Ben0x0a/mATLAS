@@ -106,3 +106,8 @@ TRACE_COLUMNS = (COL_REPORT_FILE, COL_REPORT_ENTRY)
 # separator or a Windows-reserved character would redirect or break the file. Consumed by
 # dump.run_dump (case_name) and gui.app (New case), so both apply the same rule.
 FILENAME_FORBIDDEN_CHARACTERS = '/\\:*?"<>|'
+
+# Written by the tool (About sheet, report_info CSV) to reveal a program garbling what it shows:
+# accents, German, euro, Japanese, Arabic, an emoji (described on the Documentation sheet).
+ENCODING_CHECK_NAME = "Encoding check"
+ENCODING_CHECK_TEXT = "éèàçüñ ß € 日本語 العربية 😀"
