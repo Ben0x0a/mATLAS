@@ -374,12 +374,34 @@ def test_excel_limits(report: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert len(body) == 160 and "(500 characters)" in body
 
 
-def test_control_characters_are_escaped_not_dropped() -> None:
-    # XML 1.0 cannot carry U+000B, so it cannot come through a report; CSV text can.
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [("a\x0bb", "a[U+000B]b"), ("a\ufffeb", "a[U+FFFE]b"), ("a\uffffb", "a[U+FFFF]b"), ("a\ud83db", "a[U+D83D]b")],
+)
+def test_characters_xml_cannot_carry_are_escaped_not_dropped(tmp_path: Path, value: str, shown: str) -> None:
+    # XML 1.0 cannot carry them, so they cannot come through a report; CSV text can.
     stats = xlsx.WriteStats()
-    sheet = xlsx.open_workbook().create_sheet("t")
-    cell = xlsx.text_cell(sheet, "a\x0bb", stats)
-    assert cell.value == "a[U+000B]b" and stats.escaped_characters == 1
+    book = xlsx.open_workbook()
+    writer = xlsx.SheetWriter(book, "t", ["h"], stats)
+    writer.append([value])
+    writer.close()
+    book.save(tmp_path / "t.xlsx")  # the XML writer raises on any it is given
+    assert list(load_workbook(tmp_path / "t.xlsx")["t"].values)[1][0] == shown
+    assert stats.escaped_characters == 1
+
+
+@pytest.mark.parametrize(
+    ("value", "cut"),
+    [("\U0001F600" * 20_000, True), ("x" + "\U0001F600" * 20_000, True), ("\U0001F600" * 16_383, False), ("x" * 32_767, False)],
+    ids=["emoji over the limit", "cut lands inside a pair", "emoji at the limit", "plain at the limit"],
+)
+def test_cell_limit_counts_what_excel_counts(value: str, cut: bool) -> None:
+    stats = xlsx.WriteStats()
+    text = xlsx.text_cell(xlsx.open_workbook().create_sheet("t"), value, stats).value
+    assert stats.truncated_cells == int(cut)
+    assert len(text.encode("utf-16-le")) // 2 <= xlsx.EXCEL_MAX_CELL_CHARS
+    text.encode("utf-8")  # no half surrogate pair left behind
+    assert (text == value) is not cut
 
 
 def test_column_origins(workbook: Path) -> None:

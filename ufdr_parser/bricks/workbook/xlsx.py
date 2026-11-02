@@ -12,11 +12,12 @@ number. Two Excel limits are handled explicitly rather than by crashing or dropp
 
 - More than 1,048,576 rows: the sheet continues on ``<name> (2)``, ``<name> (3)``, ...
 - More than 32,767 characters in a cell: the text is cut and ends with an explicit marker
-  stating its full length; the full value stays in the raw CSV.
+  stating its full length; the full value stays in the raw CSV. Excel counts UTF-16 units, so
+  an emoji counts for two: counting Python characters let over-long cells through.
 
-Control characters that XML 1.0 cannot carry (and openpyxl therefore rejects) are replaced
-with a visible ``[U+XXXX]`` marker instead of being dropped. Every such adjustment is counted
-and reported on the About sheet.
+Characters that XML 1.0 cannot carry (and the XML writer therefore rejects, failing the whole
+workbook) are replaced with a visible ``[U+XXXX]`` marker instead of being dropped. Every such
+adjustment is counted and reported on the About sheet.
 """
 from __future__ import annotations
 
@@ -28,7 +29,6 @@ from typing import Iterable
 
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
-from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
@@ -45,6 +45,9 @@ EXCEL_MAX_ROWS = 1_048_576
 EXCEL_MAX_CELL_CHARS = 32_767
 EXCEL_MAX_SHEET_NAME = 31
 
+# What XML 1.0 excludes. WHY not openpyxl's ILLEGAL_CHARACTERS_RE: it omits the surrogates and
+# U+FFFE / U+FFFF, on which saving then raises.
+_ILLEGAL_XML_CHARACTERS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 _TRUNCATION_MARKER = " [... cut by Excel's {limit} character cell limit; full text ({length} characters) is in the CSV]"
 _HEADER_FONT = Font(bold=True)
 _ALERT_FONT = Font(bold=True, color="B91C1C")
@@ -72,7 +75,17 @@ def _escape_illegal(text: str, stats: WriteStats) -> str:
         stats.escaped_characters += 1
         return f"[U+{ord(match.group(0)):04X}]"
 
-    return ILLEGAL_CHARACTERS_RE.sub(replace, text)
+    return _ILLEGAL_XML_CHARACTERS.sub(replace, text)
+
+
+def _utf16_units(text: str) -> int:
+    """The length Excel's cell limit counts (surrogates were escaped, so this cannot raise)."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _cut_to_units(text: str, units: int) -> str:
+    """``text`` cut to at most ``units`` UTF-16 units, never inside a surrogate pair."""
+    return text.encode("utf-16-le")[: units * 2].decode("utf-16-le", "ignore")
 
 
 def text_cell(sheet, value: object, stats: WriteStats, *, bold: bool = False, wrap: bool = False, alert: bool = False):
@@ -80,10 +93,11 @@ def text_cell(sheet, value: object, stats: WriteStats, *, bold: bool = False, wr
     if value is None:
         return None
     text = _escape_illegal(str(value), stats)
-    if len(text) > EXCEL_MAX_CELL_CHARS:
+    # A text of limit/2 characters or fewer cannot exceed it: spares encoding nearly every cell.
+    if len(text) > EXCEL_MAX_CELL_CHARS // 2 and (length := _utf16_units(text)) > EXCEL_MAX_CELL_CHARS:
         stats.truncated_cells += 1
-        marker = _TRUNCATION_MARKER.format(limit=EXCEL_MAX_CELL_CHARS, length=len(text))
-        text = text[: EXCEL_MAX_CELL_CHARS - len(marker)] + marker
+        marker = _TRUNCATION_MARKER.format(limit=EXCEL_MAX_CELL_CHARS, length=length)
+        text = _cut_to_units(text, EXCEL_MAX_CELL_CHARS - len(marker)) + marker
     cell = WriteOnlyCell(sheet, value=text)
     # Forced after assignment: openpyxl infers "f" for a leading "=" and must not here.
     cell.data_type = "s"
