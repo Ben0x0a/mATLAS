@@ -15,6 +15,8 @@ pytest.importorskip("PySide6", reason="GUI extra not installed")
 
 from PySide6.QtCore import Qt
 
+from tests.gui.conftest import drain
+
 
 def _reset(controller) -> None:
     controller.selected_preset_list.clear()
@@ -81,3 +83,50 @@ def test_add_all_skips_presets_already_selected(controller) -> None:
     ]
     assert len(paths) == len(set(paths)) == len(controller._presets)
     _reset(controller)
+
+
+def test_missing_presets_folder_tells_how_to_fetch_the_submodule(
+        controller, app, tmp_path, monkeypatch) -> None:
+    # An install step, not a crash: a background failure would write a crash report.
+    reports = []
+    monkeypatch.setattr("gui.worker.capture_exception", lambda *a, **k: reports.append(a))
+    original = controller.presets_path_edit.text()
+    try:
+        controller.presets_path_edit.setText(str(tmp_path / "absent"))
+        controller._load_presets_async()
+        controller._runner.wait_all()
+        drain(app)
+        assert "git submodule update --init" in controller.preset_status_label.text()
+        assert str(tmp_path / "absent") in controller.preset_status_label.toolTip()
+        assert reports == []
+    finally:
+        controller.presets_path_edit.setText(original)
+        controller._load_presets_async()
+        controller._runner.wait_all()
+        drain(app)
+    assert controller.preset_status_label.toolTip() == ""
+
+
+@pytest.mark.parametrize("auto_mode", [True, False])
+def test_run_is_refused_with_the_fetch_command_when_presets_are_missing(
+        controller, tmp_path, monkeypatch, auto_mode: bool) -> None:
+    errors: list[str] = []
+    monkeypatch.setattr(controller, "_show_error", errors.append)
+    monkeypatch.setattr(controller, "_start_run", lambda: pytest.fail("the run must not start"))
+    monkeypatch.setattr(controller, "_case_output_dir", tmp_path)
+    monkeypatch.setattr(controller, "_case_name", "case")
+    original = controller.presets_path_edit.text()
+    original_mode = controller.auto_preset_check.isChecked()
+    controller.auto_preset_check.setChecked(auto_mode)
+    controller.selected_preset_list.clear()
+    controller.source_edit.setText(str(tmp_path))
+    controller.concerns_edit.setText("Subject")
+    controller.presets_path_edit.setText(str(tmp_path / "absent"))
+    try:
+        controller._run_process()
+    finally:
+        controller.presets_path_edit.setText(original)
+        controller.auto_preset_check.setChecked(original_mode)
+        controller.source_edit.clear()
+        controller.concerns_edit.clear()
+    assert len(errors) == 1 and "git submodule update --init" in errors[0]

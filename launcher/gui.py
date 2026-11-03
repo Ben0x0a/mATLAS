@@ -5,6 +5,8 @@ import sys
 import os
 import signal
 
+from launcher.install_help import missing_package_message
+
 
 def run(argv: list[str] | None = None) -> int:
     """Start the GUI event loop."""
@@ -14,11 +16,7 @@ def run(argv: list[str] | None = None) -> int:
         from PySide6.QtGui import QIcon
         from PySide6.QtWidgets import QApplication
     except ImportError as exc:
-        print(
-            "PySide6 is not installed. Install the GUI extra with: "
-            "python -m pip install '.[gui]'",
-            file=sys.stderr,
-        )
+        print(missing_package_message("PySide6"), file=sys.stderr)
         raise SystemExit(1) from exc
 
     from model_atlas.app.diagnostics import install_excepthook

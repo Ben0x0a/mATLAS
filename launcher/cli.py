@@ -44,6 +44,7 @@ from model_atlas.app.logging_setup import configure_logging
 from model_atlas.app.pipeline import process
 from model_atlas.export.registry import available_exporters, load_builtin_exporters
 from model_atlas.app.profiles import build_profile_preset_folder, load_profile
+from model_atlas.presets.spec_loader import PresetsNotFoundError
 from model_atlas.analyse.concomitance import DURATION_UNIT_NAMES, duration_from
 
 log = logging.getLogger("model_atlas.cli")
@@ -330,16 +331,21 @@ def _cmd_process(args: argparse.Namespace) -> int:
         root_prefix_depth=args.root_prefix_depth,
         exports=args.export,
     )
-    if args.profile is None:
-        if args.presets is None:
-            log.error("Missing required argument: --presets (or supply --profile instead).")
-            return 1
-        result = process(args.input, args.presets, args.output, **kwargs)
-    else:
-        with tempfile.TemporaryDirectory(prefix="matlas-profile-") as tmp:
-            profile_presets = load_profile(args.profile)
-            presets_path = build_profile_preset_folder(profile_presets, Path(tmp))
-            result = process(args.input, presets_path, args.output, **kwargs)
+    try:
+        if args.profile is None:
+            if args.presets is None:
+                log.error("Missing required argument: --presets (or supply --profile instead).")
+                return 1
+            result = process(args.input, args.presets, args.output, **kwargs)
+        else:
+            with tempfile.TemporaryDirectory(prefix="matlas-profile-") as tmp:
+                profile_presets = load_profile(args.profile)
+                presets_path = build_profile_preset_folder(profile_presets, Path(tmp))
+                result = process(args.input, presets_path, args.output, **kwargs)
+    except PresetsNotFoundError as exc:
+        # An install step, not a crash: no traceback and no crash report for it.
+        log.error(f"{exc}")
+        return 1
     log.info(f"Row counts: {result.row_counts}")
     for entry in result.matched:
         log.info(f"Matched: {entry}")

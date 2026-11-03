@@ -5,9 +5,10 @@ Common technical questions and fixes. For how a run works end to end, see
 
 ## Running
 
-### The `presets/` folder is empty
+### "Presets not found at …" or the `presets/` folder is empty
 
-The repository was cloned without its submodule. Fetch the pinned presets:
+The repository was cloned without its submodule. From the mATLAS folder, fetch the pinned
+presets:
 
 ```bash
 git submodule update --init
@@ -89,9 +90,17 @@ finding to review, never an automatic merge.
 
 ## Installation and development
 
-### The GUI does not start
+### A package is missing, or the GUI does not start
 
-Install the GUI extra: `python -m pip install '.[gui]'`.
+The error names the package and the commands to run from the mATLAS folder. The GUI needs the
+`gui` extra and the UFDR dump mode the `ufdr` extra:
+
+```bash
+uv sync --inexact --extra gui
+```
+
+or `python -m pip install '.[gui]'`. Keep `--inexact`: without it `uv sync` removes every extra
+you did not name, so installing `gui` would uninstall `ufdr`.
 
 ### Where are crash reports?
 

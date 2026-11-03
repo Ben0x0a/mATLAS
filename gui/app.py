@@ -62,13 +62,18 @@ from gui.widgets.checkable_menu import CheckableMenu
 from gui.widgets.drag_drop_line_edit import DragDropLineEdit
 from gui.theme import build_stylesheet, configure_application_font
 from gui.worker import ProgressBridge, TaskRunner, install_gui_log_handler, remove_gui_log_handler
+from launcher.install_help import install_commands
 from model_atlas.app.config import get_settings
 from ufdr_parser.const import FILENAME_FORBIDDEN_CHARACTERS
 from model_atlas.app.profiles import PROFILE_SUFFIX, build_profile_preset_folder, load_profile, save_profile
 from model_atlas.export.registry import available_exporters, load_builtin_exporters
 from model_atlas.ingest.writer import is_matlas_run_db
 from model_atlas.app.pipeline import ProcessResult, process
-from model_atlas.presets.spec_loader import load_preset_specs
+from model_atlas.presets.spec_loader import (
+    PRESETS_FETCH_COMMAND,
+    load_preset_specs,
+    missing_presets_message,
+)
 
 if TYPE_CHECKING:
     from ufdr_parser.dump import DumpSummary
@@ -134,6 +139,18 @@ def _should_show_single_preset_notice(
 class PresetItem:
     name: str
     path: Path
+
+
+def _read_presets(presets_path: Path) -> list[PresetItem] | str:
+    """The presets at ``presets_path``, or the message saying why there are none to read.
+
+    A value rather than an exception for that outcome: an unfetched library is expected on a
+    fresh clone, and every exception raised in a background task writes a crash report.
+    """
+    missing = missing_presets_message(presets_path)
+    if missing is not None:
+        return missing
+    return [PresetItem(spec.name, spec.path) for spec in load_preset_specs(presets_path)]
 
 
 class MainController(QObject):
@@ -654,11 +671,8 @@ class MainController(QObject):
         self.preset_status_label.setText("Loading presets...")
         self.preset_status_label.setAccessibleDescription("Loading presets.")
         self._runner.run(
-            lambda: [
-                PresetItem(spec.name, spec.path)
-                for spec in load_preset_specs(presets_path)
-            ],
-            self._on_presets_loaded,
+            lambda: _read_presets(presets_path),
+            self._on_presets_read,
             self._on_presets_failed,
         )
 
@@ -666,9 +680,26 @@ class MainController(QObject):
         text = self.presets_path_edit.text().strip()
         return Path(text).expanduser() if text else None
 
+    def _on_presets_read(self, result: list[PresetItem] | str) -> None:
+        if isinstance(result, str):
+            self._on_presets_missing(result)
+        else:
+            self._on_presets_loaded(result)
+
+    def _on_presets_missing(self, message: str) -> None:
+        """No library at the path: an install step, so no traceback and no crash report."""
+        self._presets = []
+        self.available_preset_list.clear()
+        self.preset_status_label.setText(f"Presets not found — run: {PRESETS_FETCH_COMMAND}")
+        self.preset_status_label.setToolTip(message)
+        self.preset_status_label.setAccessibleDescription(message)
+        self._sync_single_preset_notice()
+        log.error(message)
+
     def _on_presets_loaded(self, presets: list[PresetItem]) -> None:
         self._presets = sorted(presets, key=lambda item: item.name.casefold())
         self.preset_status_label.setText(f"{len(self._presets)} preset(s) loaded")
+        self.preset_status_label.setToolTip("")
         self.preset_status_label.setAccessibleDescription(f"{len(self._presets)} presets loaded.")
         self._render_available_presets()
         self._sync_single_preset_notice()
@@ -678,6 +709,7 @@ class MainController(QObject):
         self._presets = []
         self.available_preset_list.clear()
         self.preset_status_label.setText("Preset load failed")
+        self.preset_status_label.setToolTip("")
         self.preset_status_label.setAccessibleDescription("Preset loading failed.")
         self._sync_single_preset_notice()
         log.error(f"Preset loading failed:\n{tb}")
@@ -874,6 +906,13 @@ class MainController(QObject):
         case_name = self._case_name
         selected_mode = not self.auto_preset_check.isChecked()
         selected_paths = [Path(path) for path in self._selected_preset_paths()]
+        # A selected-mode run with files listed never reads this folder; otherwise a missing
+        # library is the real cause, and a failure inside the run would write a crash report.
+        if not (selected_mode and selected_paths):
+            missing_presets = missing_presets_message(preset_root)
+            if missing_presets is not None:
+                self._show_error(missing_presets)
+                return
         if selected_mode and not selected_paths:
             self._show_error("Selected-presets mode needs at least one preset.")
             return
@@ -981,8 +1020,8 @@ class MainController(QObject):
 
         if find_spec("lxml") is None:
             self._show_error(
-                "UFDR dump mode needs the 'ufdr' extra, which is not installed:\n\n"
-                "python -m pip install '.[ufdr]'"
+                "UFDR dump mode needs the 'ufdr' extra, which is not installed. From the "
+                f"mATLAS folder, install it with one of:\n\n{install_commands('ufdr')}"
             )
             return
         source = self.source_edit.text().strip()
